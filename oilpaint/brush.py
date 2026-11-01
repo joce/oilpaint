@@ -90,12 +90,11 @@ _KNIFE_GAP = 16.0
 _KNIFE_CARRY = 1.5
 # A knife rides no higher than this times the paint film under its blade.
 _KNIFE_FILM = 0.5
-# How readily a knife wipes up the skin of wet paint it slides over.
-_KNIFE_WIPE = 1.2
-# Thickest smear (in paint thickness units) a knife leaves of what it carries.
-_KNIFE_SMEAR = 1.2
-# How deep a knife pressed fully sinks into wet paint already on the canvas (thickness units).
-_KNIFE_SINK = 25.0
+# Radius (px) over which wet paint dragged by a blade moves together (viscosity).
+_VISCOUS = 3
+# How deep a knife sinks into wet paint already on the canvas, as a share of
+# its thickness: pressure ** _KNIFE_SINK (light touch: skims; hard: nearly all).
+_KNIFE_SINK = 1.8
 # Share of an overload squeezed out at the edges per width of travel (knife, brush).
 _SQUEEZE = {True: 0.03, False: 0.04}
 # Steepest slope (paint thickness per pixel) that fluid (body 0) and very
@@ -904,7 +903,7 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
         phi = (phi + np.pi / 2) % np.pi - np.pi / 2
 
         # --- footprint geometry on a window around the swept segment -------
-        R = rmax * reach
+        R = rmax * reach + (3.0 if rigid else 0.0)
         x0, x1 = int(np.floor(min(ax, cx) - R - 1)), int(np.ceil(max(ax, cx) + R + 1)) + 1
         y0, y1 = int(np.floor(min(ay, cy) - R - 1)), int(np.ceil(max(ay, cy) + R + 1)) + 1
         cx0, cx1, cy0, cy1 = max(x0, 0), min(x1, W), max(y0, 0), min(y1, H)
@@ -1123,9 +1122,25 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
             if old_v.max() > 0.05:
                 old_body = float((und[..., IB].sum() + np.where(canvas.top_id[sl] != stroke_id, top[..., IB], 0.0).sum())
                                  / max(float(old_v.sum()), 1e-9))
-                sink = _KNIFE_SINK * p ** 2.5 * (1.3 - 0.6 * min(old_body, 1.0))
-                held = _box_blur(_max_filter(floor + old_v, 1), 2) - sink
-                rest = np.maximum(rest, held)
+                # How far into it the blade sinks, as a share of its thickness: a light
+                # touch skims, a firm one cuts in, pressing hard goes nearly down to
+                # the canvas, however thick the paint. Stiff paint resists a little.
+                depth = float(np.clip(p ** _KNIFE_SINK * (1.15 - 0.3 * min(old_body, 1.0)), 0.0, 1.0))
+                if bt.clumps > 0:       # narrow teeth concentrate the pressure: they cut right through
+                    depth = max(depth, 0.9)
+                # A rigid blade can't follow bumps much smaller than itself: it rests
+                # on the high points under it (not on the pile it pushes ahead).
+                under_blade = (aa * np.clip(h - np.abs(rel) + 0.5, 0.0, 1.0))[wsl] > 0.5
+                if under_blade.any():
+                    # the blade bends to follow the surface over a span set by its
+                    # stiffness, resting on the high points under it
+                    span = int(np.clip(0.1 * w_typ * (0.5 + stiff_blade), 2, 10))
+                    wgt = under_blade.astype(np.float32)
+                    hi = _max_filter(floor + old_v, 1)
+                    norm = np.maximum(_box_blur(wgt, span), 1e-6)
+                    high = np.where(under_blade, _box_blur(hi * wgt, span) / norm, hi)
+                    base = np.where(under_blade, _box_blur(rest * wgt, span) / norm, rest)
+                    rest = np.maximum(rest, high - depth * np.maximum(high - base, 0.0))
             # The blade rides on the paint under it: as that runs low, it sinks
             # and the slab thins out. Nicks and grit on its edge leave fine
             # scratches along the stroke.
@@ -1147,6 +1162,12 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
             if rigid:   # nicks and flex let streaks of what the blade pushes slip under it and stay
                 k_scrape = k_scrape * (0.15 + 1.7 * hair[wsl] ** 2)
             excess *= 1.0 - np.exp(-k_scrape)
+        flowing = rigid and bt.clumps == 0 and not touchdown
+        if flowing and excess is not None:
+            # under a knife, what stands above the blade is bulldozed ahead by the
+            # flow (below); only what spills out at the sides or sticks to the
+            # blade is taken out here
+            excess *= share_pick + share_side
         if excess is not None and excess.max() > 1e-3:
             from_top = np.minimum(excess, tv)
             from_und = np.clip(excess - from_top, 0.0, uv)
@@ -1156,9 +1177,14 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
             top -= top * ft
             und -= und * fu
             moved = moved.astype(np.float64)
-            brush.tip += assign @ (share_pick * moved).reshape(npx, PACKED)
-            moved *= 1.0 - share_pick
-            if rigid and bt.clumps > 0:
+            pick = share_pick / (share_pick + share_side) if flowing else share_pick
+            brush.tip += assign @ (pick * moved).reshape(npx, PACKED)
+            moved *= 1.0 - pick
+            if flowing:
+                right = (lat_px[wsl] > 0)[..., None]
+                side_pk[1] += (moved * right).sum(axis=(0, 1))
+                side_pk[0] += (moved * ~right).sum(axis=(0, 1))
+            elif rigid and bt.clumps > 0:
                 # a comb's teeth push the paint they cut aside, into ridges between them
                 fresh = between * _smoothstep(-ds - 1.0, 0.0, along - c) * _smoothstep(1.0, -1.0, along - c - h)
                 _spread(canvas, sl, fresh[wsl], moved.sum(axis=(0, 1)), stroke_id, brush,
@@ -1171,27 +1197,16 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
                 side_pk[1] += to_side * (moved * right).sum(axis=(0, 1))
                 side_pk[0] += to_side * (moved * ~right).sum(axis=(0, 1))
                 _place(canvas, (1.0 - to_side) * moved, cx0, cy0, tx * ds, ty * ds, stroke_id)
-        if rigid and not touchdown:
-            # The blade drags the wet paint it touches: it wipes up part of the skin
-            # of paint under it (more under pressure, and in streaks: nicks in the
-            # blade) and lays it again as a thin film a little further on (step 5).
-            # The knife's own fresh slab is left alone (the blade glides on it);
-            # the layer below is only reached where the blade cuts down into it.
-            tv, uv = top[..., IV], und[..., IV]
-            other = canvas.top_id[sl] != stroke_id
-            touch = _box_blur(_smoothstep(level - 1.5, level, floor + tv + uv), 2)
-            shear = (0.3 + 0.6 * p) * touch * (0.6 + 0.8 * hair[wsl])
-            wipe = 1.0 - np.exp(-_KNIFE_WIPE * shear * expo_c)
-            a_top = np.where(other, wipe, 0.0).astype(np.float32)[..., None]
-            reach_und = np.clip(floor + uv + 0.5 - level, 0.0, 1.0) * (other | (tv < 0.3))
-            a_und = (wipe * reach_und).astype(np.float32)[..., None]
-            if a_top.max() > 1e-4 or a_und.max() > 1e-4:
-                wiped = top * a_top + und * a_und
-                top -= top * a_top
-                und -= und * a_und
-                brush.tip += assign @ wiped.reshape(npx, PACKED).astype(np.float64)
-        else:
-            touch = None
+        if flowing:
+            # The blade drags the wet paint it touches, as a thin-film flow: between
+            # the moving blade and the still canvas the paint shears, so paint near
+            # the blade travels almost with it and paint at the canvas hardly moves;
+            # what stands above the blade is bulldozed ahead of it. Each wet layer
+            # moves at its own speed, so their order is kept (white dragged over
+            # purple stays on top). The blade glides on its own fresh paint.
+            _flow_under_blade(canvas, sl, stroke_id, floor, level, aa[wsl], along[wsl],
+                              (c[wsl] if not circle else 0.0), h[wsl], ds, tx, ty,
+                              np.clip((0.5 + 0.45 * p) * (0.6 + 0.8 * hair[wsl]), 0.0, 1.0))
 
         # an overloaded tool pressed down squeezes paint out at its edges
         over = np.maximum(col_load - hold, 0.0)
@@ -1332,15 +1347,6 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
             # alike merge (a dirty knife's smear joins the paint it came from, a new
             # colour stays on top of the others).
             lay(d, cover[wsl], moved=rigid)
-        if rigid and touch is not None and bt.deposits and brush.tip[:, IV].sum() > 0:
-            # Sliding over wet paint, the blade leaves a thin film of what it carries
-            # (paint it wiped up a little way back, or its own load): the dragged
-            # colour thins out into a tail.
-            carried = at_pixels(brush.tip[:, IV]) * COLUMNS / max(area_unit * r * r, 1e-9)
-            smear = np.minimum(0.3 * carried, _KNIFE_SMEAR) * touch * np.minimum(expo_c, 1.0)
-            smear = np.where(canvas.top_id[sl] != stroke_id, smear, 0.0)
-            if smear.max() > 1e-4:
-                lay(smear, np.zeros(smear.shape, np.float32), moved=True)
         if d is not None:
             if not rigid:
                 off_canvas = thick * float((expo * streak).sum() - contact.sum())
@@ -1472,6 +1478,77 @@ def _spread(canvas, sl, w, pk, stroke_id, brush, cover):
     share = w / tot
     d = share * pk[IV]
     _deposit(canvas, sl, share[..., None] * pk[None, None, :], d, stroke_id, cover, moved=True)
+
+
+def _layer_speed(z0, z1, gap, slip):
+    """Speed, as a fraction of the blade's, of a wet layer between heights z0
+    and z1 above the canvas, with the blade at height ``gap``: below the blade
+    the paint shears (Couette flow, speed rising with height, times ``slip``);
+    above it, it is pushed along with the blade."""
+    thick = np.maximum(z1 - z0, 1e-9)
+    lo, hi = np.minimum(z0, gap), np.minimum(z1, gap)
+    sheared = np.maximum(hi - lo, 0.0)
+    plug = np.maximum(z1 - np.maximum(z0, gap), 0.0)
+    return (sheared * slip * 0.5 * (hi + lo) / gap + plug) / thick
+
+
+def _flow_under_blade(canvas, sl, stroke_id, floor, level, lateral, along, c, half, ds, tx, ty, slip):
+    """Move the wet paint a blade touches as it travels ``ds`` px along (tx, ty)
+    in the window ``sl`` (thin-film shear and bulldozing, see ``_layer_speed``).
+
+    The blade's footprint at each sub-step is where ``lateral`` > 0 and the
+    pixel's position ``along`` the motion lies within ``half`` of the chord
+    centre ``c`` (relative to the blade's position at the end of the step).
+    Conservative upwind fluxes, in sub-steps short enough to be stable."""
+    top, und = canvas.top[sl], canvas.und[sl]
+    own = canvas.top_id[sl] == stroke_id
+    # under paint, the blade doesn't feel the individual threads of the canvas
+    gap = _box_blur(np.maximum(level - floor, 0.2), 2)
+    # the paint under the blade must reach it somewhere for anything to happen
+    reach = und[..., IV] + np.where(own, 0.0, top[..., IV])
+    if not ((reach > gap - 1.0) & (lateral > 0)).any():
+        return
+    # two wet layers of the same paint can merge without any visible change:
+    # do so, so that paint dragged in from elsewhere lands on top of them
+    both = ~own & (top[..., IV] > 1e-6) & (und[..., IV] > 1e-6)
+    if both.any():
+        same = np.zeros_like(both)
+        same[both] = _alike(top[both], und[both]) < 0.25
+        und[same] += top[same]
+        top[same] = 0.0
+    ax, ay = abs(tx), abs(ty)
+    n_sub = max(int(np.ceil(ds * (ax + ay))), 1)
+    step = ds / n_sub
+    xdir, ydir = (1 if tx >= 0 else -1), (1 if ty >= 0 else -1)
+    for k in range(1, n_sub + 1):
+        pos = -ds + k * step                       # the blade's position along the motion
+        inside = lateral * np.clip(half - np.abs(along - pos - c) + 0.5, 0.0, 1.0)
+        if not inside.any():
+            continue
+        # the flow is smooth over a pixel or two: speeds from lightly smoothed heights
+        u = _box_blur(und[..., IV], 1)
+        t = _box_blur(np.where(own, 0.0, top[..., IV]), 1)
+        shielded = own & (top[..., IV] > 0.3)       # the blade glides on its own fresh paint
+        contact = inside * np.clip(u + t - gap + 1.0, 0.0, 1.0) * ~shielded
+        if not contact.any():
+            continue
+        # viscosity: neighbouring paint drags each other along, so the speed varies
+        # smoothly (without it, the paint tears into foam)
+        frac_u = np.clip(_box_blur(contact * _layer_speed(0.0, u, gap, slip), _VISCOUS), 0.0, 1.0) * step
+        frac_t = np.clip(_box_blur(contact * _layer_speed(u, u + t, gap, slip), _VISCOUS), 0.0, 1.0) * step * ~own
+        for layer, frac in ((und, frac_u), (top, frac_t)):
+            fx = (frac * ax).astype(np.float32)[..., None]
+            fy = (frac * ay).astype(np.float32)[..., None]
+            mx, my = layer * fx, layer * fy
+            layer -= mx + my
+            if xdir > 0:
+                layer[:, 1:] += mx[:, :-1]
+            else:
+                layer[:, :-1] += mx[:, 1:]
+            if ydir > 0:
+                layer[1:] += my[:-1]
+            else:
+                layer[:-1] += my[1:]
 
 
 def _place(canvas, pk, x0, y0, sx, sy, stroke_id, layer="top"):

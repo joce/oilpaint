@@ -923,3 +923,27 @@ def test_knife_slabs_fill_on_curves_and_in_dabs():
     c.stroke([(320, 100)], paint=P.TITANIUM_WHITE, amount=30, brush=brushes.KNIFE_SPOON, pressure=0.3, seed=22)
     assert c.thickness[50:70, 100:180].min() > 2.0          # a solid slab, not an outline
     assert c.thickness[95:105, 315:325].min() > 1.0
+
+
+def test_a_dry_knife_drags_white_out_over_purple():
+    purple = Paint.mix((P.DIOXAZINE_PURPLE, 2), (P.QUINACRIDONE_MAGENTA, 1), (P.TITANIUM_WHITE, 1))
+    c = Canvas(500, 200, seed=4)
+    for y in range(40, 180, 30):
+        c.stroke([(20, y), (480, y + 3)], paint=purple, amount=200, brush=brushes.KNIFE_STRAIGHT.sized(60),
+                 pressure=0.35, seed=y)
+    for y in range(70, 150, 30):        # white over the left part, ending at x = 230
+        c.stroke([(40, y), (230, y - 2)], paint=P.TITANIUM_WHITE, amount=90, brush=brushes.KNIFE_STRAIGHT.sized(56),
+                 pressure=0.4, seed=1000 + y)
+    before = c.render(lighting=False).mean(-1)
+    total = c.thickness.sum()
+    knife = c.stroke([(100, 100), (250, 103), (420, 100)], brush=brushes.PALETTE_KNIFE.sized(60), pressure=0.6,
+                     seed=8)
+    after = c.render(lighting=False).mean(-1)
+    band = slice(90, 112)
+
+    def gain(x0):
+        return float(after[band, x0:x0 + 20].mean() - before[band, x0:x0 + 20].mean())
+    # the white is dragged out over the purple, in a tail that fades with distance
+    assert gain(240) > 0.15 and gain(240) > gain(300) > gain(380) > -0.02
+    assert abs(float(after[150:165, 260:300].mean() - before[150:165, 260:300].mean())) < 0.01   # untouched
+    assert c.thickness.sum() + knife.volume == pytest.approx(total, rel=2e-3)

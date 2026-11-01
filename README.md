@@ -402,16 +402,11 @@ the blade is filled up to the blade and everything above it is pushed away, so:
   cuts into the lower layer, the two fold into each other in streaks.
 * **A dry knife dragged across.** Say white knifed over wet purple, then a clean
   knife pulled from the white out across its edge into the purple:
-  * a light touch skims and smooths;
-  * a firm one grooves the white and carries some of it out over the purple
-    in streaks;
-  * pressing hard scrapes the white off down to the purple, with mixed ridges
-    along the sides.
-
-  The blade pushes what stands above it as a bow wave, letting streaks slip
-  under it (nicks and flex). It wipes up part of the skin it slides over and
-  lays it again a little further on as a thin film, and piles the rest where
-  it lifts.
+  * a light touch skims and pulls a few streaks of white across;
+  * a firm one drags the white out over the purple in a smear that fades
+    from white through lavender to purple;
+  * pressing hard scrapes a channel down through both layers and carries
+    the mixture along, piling it where the knife lifts.
 
   ![knife drag](examples/output/knife_drag.png)
 
@@ -550,6 +545,24 @@ more under pressure. A knife then fills the space under its blade up to that
 level. After each stroke the paint settles: wherever it is steeper than its
 body can hold, it flows downhill.
 
+**Under a knife, wet paint flows.** The blade drags the wet paint it touches,
+as a thin film between the moving blade and the still canvas. Paint near the
+blade travels almost with it, paint at the canvas hardly moves, and paint
+above the blade is bulldozed ahead. A share also spills out at the sides
+and a little sticks to the blade.
+
+* **Layers keep their order.** Each wet layer moves at its own speed, so
+  white dragged over purple stays on top of it.
+* **Viscosity.** Neighbouring paint drags each other along, so the speeds vary
+  smoothly.
+* **Small steps.** The paint is moved by fluxes between neighbouring pixels in
+  steps of under a pixel, so nothing is lost and the pile in front of the
+  blade travels smoothly.
+* **Resting level.** The blade rests on the high points under it, bends to
+  follow the surface over a span set by its stiffness, and sinks into the
+  paint by a share of its thickness that grows with pressure.
+* **Its own load.** The blade glides on the fresh paint it lays.
+
 Paint volume is conserved throughout. Each step integrates the
 brush's exact sweep over each pixel, so the result doesn't depend on the step
 size. The footprint is swept at its current angle and size (both can change
@@ -576,9 +589,10 @@ it's wet.
   top, while paint that is only pushed around merges with the layer it is
   most like. Very complex wet layering (three different colours stacked, then
   scraped) loses some of its structure.
-* Wet paint is moved by rules (fill, bow wave, wipe and smear, slumping),
-  not by a fluid simulation. Dragging one wet colour a long way over another
-  as distinct ribbons, folding and marbling, is only roughly approximated.
+* Wet paint under a knife flows as a thin film along the knife's direction of
+  travel only, and brushes still move paint by simpler rules (pickup, smear,
+  bow wave). Paint folding over itself or swirling sideways (marbling) isn't
+  simulated.
 * Knives lie flat on the canvas (or, with a tiny `aspect`, on their edge);
   the tilt of the blade (spreading with the trailing edge down vs scraping
   with the leading edge) is folded into pressure.
