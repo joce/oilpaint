@@ -69,6 +69,7 @@ Useful members:
 | `pressure` | 0..1, same forms as `width`. Light pressure lays paint *on top of* wet paint. Heavy pressure releases more paint and churns it *into* the wet paint below. Soft, pointed brushes also get wider under pressure. |
 | `angle`    | Brush angle in degrees, same forms as `width`: 0 drags a flat broadside, 90 on its edge. Vary it to twist the brush mid-stroke. |
 | `follow_path` | `True`: the angle turns with the stroke. `False`: the angle is fixed on the canvas, like a calligraphy nib. |
+| `roll`     | Round brushes only: how far the brush is rolled between the fingers, in degrees, same forms as `width`. Rolling turns a different side of the bundle to the canvas (see `Brush`). |
 | `mixing`   | How readily the stroke stirs into the wet paint below. |
 | `pickup`   | How much wet paint the brush lifts and carries along. |
 | `drag`     | How much wet paint the brush pushes ahead. |
@@ -226,9 +227,11 @@ slab.*
 
 A `Brush` is one physical brush with paint on it: a `BrushType` plus its
 current load and dirt. Paint sits in narrow bristle columns across the brush,
-each with a tip and a belly, so a brush can carry several paints at once:
-side by side, tip over belly, or only partly mixed. It keeps them (and any
-paint it picks up) between strokes.
+each in three layers from the point to the ferrule: the tip, the belly and the
+heel. So a brush can carry several paints at once: side by side, tip over
+belly, deep in the heel, or only partly mixed. It keeps them (and any paint it
+picks up) between strokes. On a round brush the columns go around the bundle,
+so it has a front and a back that you can turn to the canvas by rolling it.
 
 ```python
 from oilpaint import Brush, brushes, palette as P
@@ -248,15 +251,25 @@ canvas.stroke(path, brush=brushes.FLAT_SABLE,
 
 # several paints picked up together, only partly mixed: a marbled stroke
 Brush(brushes.FILBERT_HOG).load_mix([(P.CADMIUM_RED, 1), (P.TITANIUM_WHITE, 2)], amount=8, mixing=0.3)
+
+# a round with red on one side and yellow on the other, rolled one full turn along the stroke
+rnd = Brush(brushes.ROUND).load(P.CADMIUM_RED, 10, across="left").load(P.CADMIUM_YELLOW, 10, across="right")
+canvas.stroke(path, brush=rnd, roll=lambda u: 360 * u)
+
+# dipped all the way to the ferrule: part of the paint lodges in the heel
+deep = Brush(brushes.FLAT_HOG).load(P.BURNT_SIENNA, 8, depth=1.0)
+canvas.stroke(path1, brush=deep, pressure=0.4)             # runs dry early
+canvas.stroke(path2, brush=deep, pressure=0.95)            # pressing hard squeezes some out of the heel
 ```
 
 | method / setting | meaning |
 |---|---|
-| `load(paint, amount, across=None, depth="belly")` | `across` says where on the brush: `"left"`, `"right"`, `"center"`, `"edges"`, `("left", 0.3)` (leftmost 30%), `(0.2, 0.6)` (a band, 0 = left edge, 1 = right edge), a function of x in 0..1, or one weight per column. Left and right are the brush's own sides, as seen looking along the stroke. `depth`: `"belly"` (dipped in: the bulk of the load) or `"tip"` (just touched: comes off first). |
+| `load(paint, amount, across=None, depth="belly")` | `across` says where on the brush: `"left"`, `"right"`, `"center"`, `"edges"`, `("left", 0.3)` (leftmost 30%), `(0.2, 0.6)` (a band, 0 = left edge, 1 = right edge), a function of x in 0..1, or one weight per column. Left and right are the brush's own sides, as seen looking along the stroke. On a round, `"left"` and `"right"` are the two sides of the bundle; `roll` then turns them. `depth`: `"tip"` (just touched: comes off first), `"belly"` (dipped in normally: the bulk of the load), `"heel"` (worked up to the ferrule), or a number, how far the brush went into the paint, 0..1 of the hair length: `0.1` loads the tip, `0.5` tip and belly, `1.0` all three layers. |
 | `load_mix(parts, amount, mixing=0.5)` | Several paints picked up together. `mixing` 1 = fully mixed (like `Paint.mix`), lower = left in streaks across the bristles, so the stroke comes out marbled. |
-| `work(passes, pressure=0.5)` | Stroke the brush back and forth on the palette without painting: its paints blend side to side, and tip with belly. |
+| `work(passes, pressure=0.5)` | Stroke the brush back and forth on the palette without painting: its paints blend side to side, tip with belly, and a little with the heel. |
+| heel | Paint in the heel doesn't flow out by itself. Some of it is squeezed into the belly when the brush touches down (more when pressed hard) and whenever the pressure increases during a stroke; the rest stays in the brush until it is cleaned. It also counts in `brush.volume` and `brush.colors("heel")`. |
 | `BrushType.blending` / `Stroke(blending=...)` | How readily the paints on the brush merge as it is used (0..1). Low keeps a double-loaded brush crisply two-toned for a long stroke (soft synthetic flats); high blends within a few widths (scrubby hog). Pressure speeds it up. Default: from stiffness. |
-| `brush.colors(depth="all")` | The colour of each bristle column, left to right: what is on the brush now. |
+| `brush.colors(depth="all")` | The colour of each bristle column, left to right (around the bundle on a round): what is on the brush now. `depth` can be `"tip"`, `"belly"`, `"heel"` or `"all"`. |
 
 What painters do with it:
 
@@ -280,6 +293,22 @@ What painters do with it:
   the side of the brush that touched it.
 * **Fans and knives**: a double-loaded hog fan puts light and dark blades in
   every flick of grass; a double-loaded palette knife lays two-tone slabs.
+* **Rolling a round**: rolling the brush between the fingers as it moves
+  turns a different side of the bundle to the canvas. With two or three
+  colours loaded around it, a slow roll moves the colours from one edge of the
+  line to the other, and a quick roll twists them into a spiral: branches,
+  twigs, ropes, twisted cloth. Rolling also keeps the brush from flattening
+  and brings fresh paint from the back to the front.
+* **Dip depth**: a brush dipped only at the tip lays a short, clean stroke and
+  cleans easily. Dipped to the ferrule, part of the paint lodges in the heel:
+  the stroke runs dry sooner, but pressing hard later squeezes more paint out
+  (scrubbing, or reviving a stroke that is breaking up). Leftover paint in the
+  heel also tints later strokes until the brush is cleaned, which is why
+  painters avoid loading to the ferrule.
+* **Layered loads**: a dark worked deep into the brush, a mid-tone in the
+  belly and a light touched on the tip come out one after the other: one
+  stroke that starts light and darkens, or a stroke you can revive with a
+  darker colour by pressing.
 
 ![multi loading](examples/output/multi_loading.png)
 
@@ -289,6 +318,18 @@ partly mixed pickups at mixing 0.15, 0.45 and 1.0 (left); the same red/yellow
 double load at blending 0.05, 0.4 and 1.0 (right); a viridian/yellow load
 worked 0, 2 and 6 times on the palette; double-loaded fan grass; a two-tone
 knife slab; and a white stroke whose lower side picked up wet red.*
+
+![manipulations](examples/output/manipulations.png)
+
+*Top left: a round loaded red on one side and yellow on the other, not
+rolled, rolled half a turn, and rolled three turns along the stroke. Top
+right: a hog round loaded with umber, ochre and black around the bundle,
+rolled back and forth along a tapering branch. Bottom left: the same amount of
+blue on a flat dipped to 0.1, 0.5 and 1.0 of its length, and worked into the
+heel only. Bottom right: a flat dipped to the ferrule, painted once lightly
+and then pressed hard (only the squeezed-out heel paint comes off); a round
+with umber in the heel, blue in the belly and white on the tip, painted once,
+then pressed hard to squeeze out the umber.*
 
 ## How it works
 
@@ -323,13 +364,17 @@ coverage.
 opaque paints that hide it.*
 
 **The brush moves paint around.** The brush is a footprint (round,
-rectangular, oval-tipped or a fan of clumps; no individual bristles) with a
-reservoir and a small tip. At each step along the spline it does four things:
+rectangular, oval-tipped or a fan of clumps; no individual bristles). Its
+paint sits in 24 columns across it (around the bundle on a round, mapped to
+the footprint through the current roll), each with a tip, a belly
+(reservoir) and a heel that only gives paint up when squeezed. At each step
+along the spline it does four things:
 
 1. It pushes some of the wet paint ahead of it (drag).
 2. It lifts some of the wet paint into its tip (pickup).
 3. It lays down a mix of what the tip holds (deposit), refilling the tip from
-   the reservoir.
+   the reservoir. Neighbouring columns and layers slowly share their paint as
+   the brush flexes (the `blending` setting).
 4. It stirs the new paint into the wet paint below, more with more pressure.
 
 Together this gives smears that fade over a short distance, dirty brushes,

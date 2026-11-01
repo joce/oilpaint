@@ -394,9 +394,42 @@ def multi_loading():
     save(c, "multi_loading.png")
 
 
+# ---------------------------------------------------------------------------
+# 10. Rolling a round, and how deep the brush goes into the paint
+# ---------------------------------------------------------------------------
+def manipulations():
+    c = Canvas(1300, 520, seed=6)
+    R, Y, BL, W = P.CADMIUM_RED, P.CADMIUM_YELLOW, P.ULTRAMARINE_BLUE, P.TITANIUM_WHITE
+    # a round with red on one side and yellow on the other: not rolled, rolled half a turn, three turns
+    for k, roll in enumerate((0, lambda u: 180 * u, lambda u: 1080 * u)):
+        br = Brush(B.ROUND.sized(34).with_(blending=0.1)).load(R, 16, across="left").load(Y, 16, across="right")
+        y = 50 + 65 * k
+        c.stroke([(30, y), (600, y)], brush=br, roll=roll, seed=k)
+    # a hog round with three paints around the bundle, rolled back and forth along a tapering branch
+    br = Brush(B.ROUND_HOG.sized(26))
+    br.load(P.BURNT_UMBER, 10, across=(0.0, 0.34)).load(P.YELLOW_OCHRE, 10, across=(0.33, 0.67))
+    br.load(P.IVORY_BLACK, 6, across=(0.66, 1.0))
+    c.stroke([(660, 180), (800, 120), (960, 100), (1120, 40), (1270, 30)], brush=br,
+             roll=lambda u: 200 * np.sin(4 * np.pi * u), width=[30, 22, 16, 10, 6], seed=10)
+    # the same amount of paint, dipped to the tip, half way, all the way, and worked into the heel
+    for k, depth in enumerate((0.1, 0.5, 1.0, "heel")):
+        br = Brush(B.FLAT_HOG.sized(30)).load(BL, 8, depth=depth)
+        y = 280 + 60 * k
+        c.stroke([(30, y), (600, y)], brush=br, seed=20 + k)
+    # a brush dipped to the ferrule runs out early; pressing hard on the next stroke squeezes out the heel
+    br = Brush(B.FLAT_HOG.sized(30)).load(P.BURNT_SIENNA, 8, depth=1.0)
+    c.stroke([(660, 280), (1270, 280)], brush=br, pressure=0.4, seed=40)
+    c.stroke([(660, 340), (1270, 340)], brush=br, pressure=0.95, seed=41)
+    # a round with umber in the heel, blue in the belly and white on the tip: the colours come out in turn
+    br = Brush(B.ROUND.sized(30)).load(P.BURNT_UMBER, 6, depth="heel").load(BL, 6).load(W, 1.5, depth="tip")
+    c.stroke([(660, 410), (1270, 410)], brush=br, seed=30)
+    c.stroke([(660, 470), (1270, 470)], brush=br, pressure=0.95, seed=31)
+    save(c, "manipulations.png")
+
+
 if __name__ == "__main__":
     for fn in (mixing_chart, strokes, blending, glazing, landscape, brush_rack, brush_uses, surface_sampler,
-               multi_loading):
+               multi_loading, manipulations):
         t0 = time.time()
         fn()
         print(f"  {fn.__name__}: {time.time() - t0:.1f}s")

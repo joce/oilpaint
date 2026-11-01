@@ -615,3 +615,116 @@ def test_across_options_and_errors():
             _across_weights(bad)
     with pytest.raises(ValueError):
         Brush().load("#ffffff", 1, depth="handle")
+
+
+
+# --------------------------------------------------------------------------
+# rolling a round, and loading at different depths
+
+def _halves(c, x0, x1, y=50, h=8):
+    img = c.render(lighting=False)
+    up = img[y - 2 - h:y - 2, x0:x1].mean(axis=(0, 1))
+    down = img[y + 3:y + 3 + h, x0:x1].mean(axis=(0, 1))
+    return up, down
+
+
+def test_side_loading_a_round_puts_each_paint_on_its_side():
+    c = Canvas(300, 100, seed=31, texture=0)
+    b = Brush(brushes.ROUND.sized(36)).load("#c8201e", 10, across="left").load("#f7c600", 10, across="right")
+    c.stroke([(20, 50), (280, 50)], brush=b, roll=0)
+    up, down = _halves(c, 40, 120)
+    assert up[1] < down[1] - 0.2          # red (low green) on the brush's left = up, yellow down
+
+
+def test_rolling_a_round_turns_the_other_side_to_the_paper():
+    def ends(roll):
+        c = Canvas(500, 100, seed=32, texture=0)
+        b = Brush(brushes.ROUND.sized(36).with_(blending=0.05))
+        b.load("#c8201e", 16, across="left").load("#f7c600", 16, across="right")
+        c.stroke([(20, 50), (480, 50)], brush=b, roll=roll)
+        return _halves(c, 40, 80), _halves(c, 400, 440)
+    (s_up, s_down), (e_up, e_down) = ends(lambda u: 180 * u)          # half a turn over the stroke
+    assert s_up[1] < s_down[1] - 0.15                                  # starts red on top
+    assert e_up[1] > e_down[1] + 0.15                                  # ends yellow on top
+    (s_up, s_down), (e_up, e_down) = ends(0)
+    assert e_up[1] < e_down[1] - 0.15                                  # without rolling it stays red on top
+
+
+def test_dip_depth_spreads_the_load_over_tip_belly_and_heel():
+    from oilpaint.brush import _depth_weights
+    assert np.allclose(_depth_weights(0.1), [1, 0, 0])
+    w = _depth_weights(1.0)
+    assert np.all(w > 0) and abs(w.sum() - 1) < 1e-12 and w[1] > w[0]
+    b = Brush(brushes.FLAT_HOG).load("#c8201e", 6, depth=0.5)
+    assert b.heel[:, -1].sum() == 0 and b.tip[:, -1].sum() > 0 and b.reservoir[:, -1].sum() > 0
+    for bad in (0, 1.5, "ferrule"):
+        with pytest.raises(ValueError):
+            _depth_weights(bad)
+
+
+def test_paint_in_the_heel_seeps_out_slowly():
+    def stroke(depth):
+        c = Canvas(900, 80, seed=33, texture=0)
+        b = Brush(brushes.FLAT_HOG.sized(30)).load("#1b3fa0", 8, depth=depth)
+        v0 = b.volume
+        c.stroke([(20, 40), (880, 40)], brush=b)
+        return c.thickness[30:50].mean(axis=0), b.volume / v0, b.heel[:, -1].sum() / v0
+    belly, belly_left, _ = stroke("belly")
+    deep, deep_left, deep_heel = stroke(1.0)
+    heel, heel_left, _ = stroke("heel")
+    assert belly_left < 0.1                                # a normal load is used up
+    assert deep_left > 0.2 and deep_heel > 0.05            # dipped to the ferrule: paint stays in the brush
+    assert 0 < heel[40:120].mean() < 0.5 * belly[40:120].mean()   # heel paint only comes out faintly
+    assert heel_left > 0.5
+
+
+def test_roll_and_depth_conserve_paint():
+    c = Canvas(400, 120, seed=34)
+    b = Brush(brushes.ROUND.sized(30)).load("#c8201e", 5, across="left", depth=0.8)
+    b.load("#f6f5f0", 4, across="right", depth="heel").load("#f7c600", 1, depth="tip")
+    loaded = b.volume
+    c.stroke([(20, 60), (200, 30), (380, 80)], brush=b, roll=lambda u: 540 * u)
+    assert c.thickness.sum() + b.volume == pytest.approx(loaded, rel=1e-3)
+
+
+def test_pressing_hard_squeezes_paint_out_of_the_heel():
+    def second_stroke(pressure):
+        b = Brush(brushes.FLAT_HOG.sized(30)).load("#1b3fa0", 8, depth=1.0)
+        Canvas(600, 80, seed=35).stroke([(20, 40), (580, 40)], brush=b)          # uses up tip and belly
+        c = Canvas(600, 80, seed=36)
+        c.stroke([(20, 40), (580, 40)], brush=b, pressure=pressure)
+        return c.thickness.sum()
+    assert second_stroke(0.9) > 2 * second_stroke(0.4)
+
+
+def test_no_stray_paint_after_a_brush_runs_dry():
+    for depth in ("belly", 1.0):
+        for seed in (1, 6, 9):
+            c = Canvas(1000, 80, seed=seed)
+            b = Brush(brushes.FLAT_HOG.sized(30)).load("#1b3fa0", 8, depth=depth)
+            c.stroke([(30, 40), (970, 40)], brush=b)
+            cols = np.nonzero((c.thickness[20:60] > 0.02).any(axis=0))[0]
+            assert (cols.max() - 30) / 30 < 10, (depth, seed)
+    for seed in (1, 6, 9):      # paint up in the heel: only a little dry-brush scratching comes out
+        c = Canvas(1000, 80, seed=seed)
+        b = Brush(brushes.FLAT_HOG.sized(30)).load("#1b3fa0", 8, depth="heel")
+        loaded = b.volume
+        c.stroke([(30, 40), (970, 40)], brush=b)
+        assert c.thickness.sum() < 0.15 * loaded and b.volume > 0.8 * loaded
+
+
+@pytest.mark.parametrize("shape", ["round", "flat"])
+def test_thin_brushes_go_as_far_as_wide_ones(shape):
+    # `amount` is in brush widths, whatever the size: a 3 px liner and a 30 px
+    # brush loaded with 6 both lay about 6 widths of solid stroke
+    reach = []
+    for width in (3, 6, 30):
+        length = int(width * 30) + 60
+        c = Canvas(length, 80, seed=0)
+        c.stroke([(20, 40), (length - 20, 40)], paint="#1b3fa0", amount=6,
+                 brush=brushes.make(shape, width, "synthetic"), seed=0)
+        th = c.thickness.sum(axis=0)
+        ref = th[20 + width:20 + 3 * width].mean()
+        reach.append((np.nonzero(th > 0.5 * ref)[0].max() - 20) / width)
+    assert all(4.5 < r < 7.5 for r in reach), reach
+    assert max(reach) - min(reach) < 1.2, reach
