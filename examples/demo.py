@@ -479,12 +479,14 @@ def knives():
     # the knives and their marks
     y = 210
     c.stroke([(40, y), (200, y - 10)], paint=[(O, 40), (Y, 25, "left")], brush=B.KNIFE_TROWEL, pressure=0.35, seed=10)
-    for k in range(3):        # small trowel: petals pulled from the tip
-        c.stroke([(260 + 30 * k, y + 30), (275 + 30 * k, y - 30)], paint=[(M, 12), (W, 8, "left")],
-                 brush=B.KNIFE_SMALL.sized(30), angle=35, pressure=[0.3, 0.55], seed=11 + k)
-    for k in range(3):        # pear: rounded petals
-        c.stroke([(400 + 40 * k, y + 35), (410 + 40 * k, y - 25)], paint=[(Y, 14), (O, 8, "right")],
-                 brush=B.KNIFE_PEAR.sized(40), angle=90, pressure=[0.35, 0.6], seed=15 + k)
+    # petals: the flat of the knife pressed down at the outer edge and pulled in towards the centre,
+    # easing off (small trowel, then pear)
+    for k, (cx, knife, paint, wd) in enumerate(((300, B.KNIFE_SMALL, [(M, 12), (W, 8, "left")], 30),
+                                               (450, B.KNIFE_PEAR, [(Y, 14), (O, 8, "right")], 36))):
+        for j in range(4):
+            a = np.radians(200 + 47 * j)
+            c.stroke([(cx + 52 * np.cos(a), y + 25 + 52 * np.sin(a)), (cx + 6 * np.cos(a), y + 25 + 6 * np.sin(a))],
+                     paint=paint, brush=knife, angle=10, width=[wd, 0.35 * wd], pressure=[0.3, 0.55], seed=11 + 4 * k + j)
     c.stroke([(560, y + 30), (760, y - 30)], paint=UM, amount=25, brush=B.KNIFE_STRAIGHT, angle=90, seed=20)   # on edge
     c.stroke([(800, y - 25), (960, y - 25), (980, y + 30)], paint=R, amount=40, brush=B.KNIFE_ANGLED, pressure=0.4,
              seed=21)
@@ -594,7 +596,8 @@ def knife_study(c, x0, y0, w, h, rng):
         green = Paint.mix((P.SAP_GREEN, 1), (Y, rng.uniform(0.3, 2.0)), (W, 0.4 * rng.uniform(0, 1)))
         c.stroke([(x, y)], paint=green, amount=120, brush=edge.sized(10 + 40 * near), angle=90 + rng.normal(0, 14),
                  follow_path=False, pressure=0.5, seed=seed())
-    # flowers: poppies (small trowel petals pulled in towards the centre) and daisies (pear)
+    # flowers: poppies (small trowel) and daisies (pear), each petal the flat of the knife
+    # pressed down at its outer edge and pulled in towards the centre, easing off
     for k in range(int(w / 60)):
         near = rng.uniform(0, 1) ** 0.7
         cx, cy = x0 + rng.uniform(30, w - 30), horizon + 40 + (y0 + h - horizon - 60) * near
@@ -604,10 +607,11 @@ def knife_study(c, x0, y0, w, h, rng):
         for j in range(n):
             a = j * 2 * np.pi / n + rng.uniform(0, 1)
             r0, r1 = (24 if poppy else 30) * size, 5 * size
+            wd = (26 if poppy else 13) * size
             c.stroke([(cx + r0 * np.cos(a), cy + 0.7 * r0 * np.sin(a)), (cx + r1 * np.cos(a), cy + 0.7 * r1 * np.sin(a))],
                      paint=[(R, 10), (O, 4, "left")] if poppy else [(W, 10), (Y, 3, "right")],
-                     brush=(B.KNIFE_SMALL.sized(30 * size) if poppy else B.KNIFE_PEAR.sized(24 * size)),
-                     angle=60 if poppy else 90, pressure=[0.3, 0.5], seed=seed())
+                     brush=(B.KNIFE_SMALL if poppy else B.KNIFE_PEAR), width=[wd, 0.35 * wd],
+                     angle=10, pressure=[0.3, 0.5], seed=seed())
         c.stroke([(cx, cy)], paint=P.IVORY_BLACK if poppy else Y, amount=40, brush=B.KNIFE_SPOON.sized(11 * size),
                  pressure=0.3, seed=seed())
 

@@ -83,7 +83,7 @@ Useful members:
 | `blending` | How readily the paints loaded on the brush merge into each other during the stroke. |
 | `streaks`  | Brush-hair streak texture, 0..1. |
 | `taper`    | Feathered ends: fraction of the length where the brush is lowered/lifted. |
-| `lift`     | 0..1, how the tool leaves the paint at the end: 0 slides off cleanly, higher pulls the paint up into torn ridges and peaks, as a knife lifted off thick paint does. Default 0.6 for knives, 0 for brushes. |
+| `lift`     | 0..1, how the tool leaves the paint at the end: 0 slides off cleanly, higher pulls the paint up into streaks and torn ridges along the pull, as a knife lifted off thick paint does (1 gives a stucco-like texture). Default 0.3 for knives, 0 for brushes. |
 | `seed`     | Seed for the stroke's texture. |
 
 `mixing`, `pickup`, `drag`, `smear`, `streaks`, `taper`, `lift`, `angle`
@@ -394,7 +394,12 @@ the blade is filled up to the blade and everything above it is pushed away, so:
   blade rides on the tops of the threads and the paint is left only in the
   weave.
 * **Running out.** As the paint under the blade runs low the blade sinks: the
-  slab thins out and finally only catches the high points (broken colour).
+  slab thins out and finally only catches the high points, tearing into a
+  streaky tail with the canvas showing through. A smaller load gives a
+  stroke that starts thick and tears out before it ends.
+* **Colour streaks.** Paint on a blade isn't held in lanes the way bristles hold
+  it: two or three paints loaded side by side (or picked up partly mixed with
+  `load_mix`) come out as bands that waver and merge along the stroke.
 * **Over wet paint.** The blade rides on the wet paint already there and sinks
   into it the harder you press (less into stiff paint). A light touch lays a
   clean skin of new colour on top without mixing. Harder pressure cuts into
@@ -443,9 +448,14 @@ from oilpaint import brushes
 
 canvas.stroke(path, "#e8c040", amount=40, brush=brushes.PALETTE_KNIFE, pressure=0.3)   # a thick slab
 canvas.stroke(path, "#e8c040", amount=40, brush=brushes.PALETTE_KNIFE, pressure=0.9)   # scraped thin
-# a petal: a pear knife laid along the petal, pulled in towards the centre, easing off
-canvas.stroke([(x0, y0), (x1, y1)], paint=[("#f6f5f0", 10), ("#f7c600", 3, "right")],
-              brush=brushes.KNIFE_PEAR.sized(30), angle=90, pressure=[0.35, 0.55])
+# a petal: the flat of a pear knife pressed down at the outer edge and pulled in towards the
+# centre, easing off: the mark narrows as less of the blade touches
+canvas.stroke([(outer_x, outer_y), (centre_x, centre_y)], paint=[("#f6f5f0", 10), ("#f7c600", 3, "right")],
+              brush=brushes.KNIFE_PEAR, angle=10, width=[36, 12], pressure=[0.3, 0.55])
+# a swatch that tears out: partly mixed paints, not too much of them
+from oilpaint import Brush
+knife = Brush(brushes.PALETTE_KNIFE.sized(90)).load_mix([("#b8246e", 2), ("#f6f5f0", 1)], 12, mixing=0.25)
+canvas.stroke([(430, 100), (60, 102)], brush=knife, pressure=[0.25, 0.55])
 # make your own: shape, blade length, flexibility (0 stiff .. 1 very flexible), teeth
 my_knife = brushes.knife("trowel", 50, flex=0.7)
 ```
@@ -468,7 +478,7 @@ they're held:
 
 *Top: a palette knife at pressure 0.15, 0.4, 0.7 and 0.95, from a thick slab
 to paint scraped into the weave. Second row: the large trowel, small-trowel
-petals, pear-knife petals, a line with a straight blade pulled along its
+and pear-knife petals (each pulled in towards the centre), a line with a straight blade pulled along its
 length, the angled blade turning a corner, spoon dabs. Third row: a comb
 scoring grooves into wet green, and the scraper taking wet blue back to the
 canvas. Fourth row: white laid on wet blue with a light touch, magenta
@@ -550,7 +560,10 @@ wherever it is steeper than its body can hold, it flows downhill.
 **Under a knife, wet paint flows.** The blade drags the wet paint it touches,
 as a thin film between the moving blade and the still canvas. Paint near the
 blade travels almost with it, paint at the canvas hardly moves, and paint
-above the blade is bulldozed ahead. A share also spills out at the sides.
+above the blade is bulldozed ahead. Near the edges of the mark, some of the
+paint that was lying there spills out sideways into lips: a narrow mark
+spills most of what it cuts through, a wide scraper only at its ends, and a
+heap the blade is pushing along rides with it instead of leaving trails.
 A knife doesn't pick wet paint up as it goes (the flow carries it), so it
 doesn't get dirty the way a brush does: the scraped paint is left where the
 knife lifts.

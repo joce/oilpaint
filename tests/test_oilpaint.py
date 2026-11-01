@@ -834,9 +834,9 @@ def test_a_comb_scores_grooves():
 
 
 def test_lifting_a_knife_pulls_up_peaks():
-    def end_texture(lift):
+    def end_texture(lift):        # streaks pulled along the stroke: texture across it
         c = _knife_slab(0.4, lift=lift)
-        return float(np.abs(np.diff(c.thickness[45:75, 190:215], axis=1)).mean())
+        return float(np.abs(np.diff(c.thickness[45:75, 190:215], axis=0)).mean())
     assert end_texture(1.0) > 1.5 * end_texture(0.0)
 
 
@@ -913,7 +913,8 @@ def test_a_dry_knife_dragged_across_white_on_purple():
     assert c.thickness[swipe].mean() < before_t
     c = layered()
     c.stroke([(180, 20), (175, 150), (185, 285)], brush=brushes.PALETTE_KNIFE.sized(60), pressure=0.95, seed=7)
-    assert c.thickness[swipe].mean() < 0.5 * before_t     # pressed hard, it scrapes through both layers
+    # pressed hard, it cuts a channel through both layers (some of the dragged mixture stays in it)
+    assert c.thickness[swipe].mean() < 0.6 * before_t
 
 
 def test_knife_slabs_fill_on_curves_and_in_dabs():
@@ -985,3 +986,33 @@ def test_moved_paint_is_fully_covered():
     lum = c.render(lighting=False).mean(-1)
     core = lum[50:105, 60:540]
     assert core.max() - np.median(core) < 0.1
+
+
+def test_colour_bands_wander_on_a_knife_but_not_on_a_brush():
+    from oilpaint import Brush
+
+    def boundary_wander(tool):
+        c = Canvas(500, 160, seed=3)
+        br = Brush(tool).load(P.CADMIUM_RED, 30, across="left").load(P.TITANIUM_WHITE, 30, across="right")
+        c.stroke([(40, 80), (460, 80)], brush=br, pressure=0.4, seed=1)
+        img = c.render(lighting=False)
+        redness = img[40:120, 80:300, 0] - img[40:120, 80:300, 2]       # red minus blue: red side vs white side
+        red_rows = (redness > 0.5 * redness.max()).sum(axis=0)            # width of the red band in each column
+        return float(np.std(red_rows))
+    assert boundary_wander(brushes.PALETTE_KNIFE.sized(60)) > 1.0
+    assert boundary_wander(brushes.FLAT_SABLE.sized(60)) < 1.0
+
+
+def test_a_scraper_leaves_no_outline_on_bare_canvas():
+    c = Canvas(500, 260, seed=21)
+    c.stroke([(20, 130), (480, 130)], paint=P.ULTRAMARINE_BLUE, amount=16, brush=brushes.FLAT_HOG.sized(90), seed=32)
+    top_edge = int(np.nonzero((c.top_v + c.und_v)[:, 250] > 0.05)[0].min())
+    c.stroke([(180, 70), (320, 190)], brush=brushes.SCRAPER, angle=-30, pressure=0.95, seed=33)
+    wet = c.top_v + c.und_v
+    # the scraper moves down and away: nothing of the band ends up on the bare canvas above it
+    assert wet[:top_edge - 4].sum() < 5.0
+    # and no light pinholes inside the scraped paint
+    lum = c.render(lighting=False).mean(-1)[:, 150:400]
+    w = wet[:, 150:400]
+    inside = (w > 0.5) & (np.roll(w, 2, 0) > 0.5) & (np.roll(w, -2, 0) > 0.5)
+    assert (lum[inside] > 0.6).sum() == 0

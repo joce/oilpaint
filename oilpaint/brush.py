@@ -40,7 +40,7 @@ import numpy as np
 
 from . import spectral as sp
 from ._filters import _box_blur, _max_filter
-from .noise import aniso_noise, fractal_noise_2d, value_noise_1d
+from .noise import aniso_noise, fractal_noise_2d, value_noise_1d, value_noise_2d
 from .paint import ColorLike, Paint, as_paint
 from .spline import Path, Profile, as_path, evaluate_profile
 
@@ -48,6 +48,8 @@ N = sp.N_BANDS
 IS, IV, IB = N, N + 1, N + 2      # packed indices of scattering, volume and body (stiffness x volume)
 PACKED = N + 3
 
+# Paint thinner than this can't form a continuous film (as canvas.MIN_FILM).
+_MIN_FILM = 0.15
 # Width of the footprint's soft (anti-aliased) edge in pixels. Kept narrow:
 # a wide soft edge would read as a thin film of paint, which tints differently.
 _EDGE_PX = 1.5
@@ -88,9 +90,13 @@ _IMPASTO = 0.2
 _KNIFE_GAP = 16.0
 # Paint a knife carries on its blade beyond what fits under it (load units).
 _KNIFE_CARRY = 1.5
-# Share of the wet paint standing above a moving blade that spills out at its
-# sides as lips (the rest is bulldozed ahead).
+# How far the colour bands of a loaded knife wander sideways (in blade half-lengths).
+_KNIFE_BAND_WANDER = 0.12
+# Share of the wet paint standing above a moving blade near the edges of its
+# mark that spills out sideways as lips (the rest is bulldozed ahead), and how
+# near (px): a narrow mark spills almost all of it, a wide scraper only at its ends.
 _KNIFE_SPILL = 0.3
+_KNIFE_SPILL_PX = 8.0
 # A knife rides no higher than this times the paint film under its blade.
 _KNIFE_FILM = 0.5
 # Radius (px) over which wet paint dragged by a blade moves together (viscosity).
@@ -272,7 +278,7 @@ class BrushType:
         derived["blending"] = float(np.clip(blend, 0.0, 1.0))
         # a slight build-up of paint at the edges of a brushed stroke
         derived["ridge"] = 0.0 if self.rigid else 0.3 + 0.4 * st
-        derived["lift"] = 0.6 if self.rigid else 0.0
+        derived["lift"] = 0.3 if self.rigid else 0.0
         return derived
 
 
@@ -890,6 +896,17 @@ class _Run:
         # how much the surface texture (vs. the hair pattern) decides where a dry brush catches
         self.tooth_w = float(np.clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85))
 
+        if bt.rigid:
+            # The wet paint lying on the canvas before the stroke: the blade's ends
+            # push it aside into lips (a pile it is carrying mostly rides along).
+            self.wet_before = canvas.top_v + canvas.und_v
+            # Paint on a blade isn't held in lanes like paint in bristles: its
+            # colour bands wander a little from side to side along the stroke.
+            period = max(0.5 * w_typ, 4.0)
+            n_s = int(arc[-1] / period) + 3
+            self.bands = value_noise_2d(8 * n_s, 64, 8.0, rng)
+            self.band_period = period
+
         self.stroke_id = canvas._new_stroke_id()
         self.dry = False
         brush.wet = 0.0
@@ -1045,6 +1062,11 @@ class _Run:
         would only come out by diffusion, and thin strokes would run long)."""
         brush = self.brush
         u_px = s.ucoord[s.wsl]
+        if self.bt.rigid:
+            along_stroke = np.clip((self.arc[s.i] + s.along[s.wsl]) / self.band_period * 8.0, 0.0,
+                                   self.bands.shape[0] - 1.001)
+            across = np.clip((u_px + 1.0) * 0.5 * 63.0, 0.0, 62.999)
+            u_px = u_px + _KNIFE_BAND_WANDER * (2.0 * _bilinear(self.bands, along_stroke, across) - 1.0)
         span = 1.0 / max(s.r * (1.0 if self.circle else abs(_signed_floor(np.cos(s.phi), self.aspect))), 1e-6)
         span_cols = span * COLUMNS * (0.25 if brush.ring else 0.5)
         nsub = int(min(max(np.ceil(span_cols / 2.0 - 1e-9), 1), 8))
@@ -1239,9 +1261,10 @@ def _knife_step(run: _Run, s: _Step) -> None:
     # 3) Where the blade sits: on the high points of the surface below (thread
     #    tops for a flexible blade, the highest ridges around for a stiff one).
     rest = canvas._peaks_fine[s.sl] + run.stiff_blade * (canvas._peaks_wide[s.sl] - canvas._peaks_fine[s.sl])
-    # Wet paint from earlier strokes holds the blade up too: it rests on its
-    # high points and sinks in the harder it is pressed (less into stiff
-    # paint). A light touch lays new paint on top of the old.
+    # Wet paint from earlier strokes holds the blade up too, the heap it pushes
+    # included (a knife rides on a wave of paint): it rests on its high points
+    # and sinks in the harder it is pressed (less into stiff paint). A light
+    # touch lays new paint on top of the old.
     earlier = canvas.top_id[s.sl] != run.stroke_id
     old_v = und[..., IV] + np.where(earlier, top[..., IV], 0.0)
     if old_v.max() > 0.05:
@@ -1272,28 +1295,30 @@ def _knife_step(run: _Run, s: _Step) -> None:
     level = rest + ride * (1.0 + 0.25 * run.chatter[s.i] + 0.12 * (s.hair[wsl] - 0.5)
                            + run.blade_tilt * np.clip(s.ucoord[wsl], -1.0, 1.0))
 
-    # 4) Wet paint standing above the blade. Some spills out at the sides (lips);
-    #    the rest is bulldozed ahead by the flow (5). Nicks and flex let streaks
-    #    of it slip under the blade and stay. A comb's teeth push what they cut
-    #    into ridges between them; a blade just set down squeezes it out all around.
+    # 4) Wet paint standing above the blade is bulldozed ahead by the flow (5);
+    #    near the edges of the mark, some of the paint that was lying there spills
+    #    out sideways (lips; the pile the blade carries rides along with it). Nicks
+    #    and flex let streaks of it slip under the blade and stay. A comb's teeth
+    #    push what they cut into ridges between them.
     ridges = _Ridges()
-    flowing = bt.clumps == 0 and not s.touchdown
+    flowing = bt.clumps == 0
     tv = top[..., IV]
     excess = np.clip(floor + tv + und[..., IV] - level, 0.0, None)
     excess *= 1.0 - np.exp(-4.0 * s.expo_c * (0.15 + 1.7 * s.hair[wsl] ** 2))
     if flowing:
-        excess *= _KNIFE_SPILL
+        half = max(s.r * s.lmax, 1e-6)                    # the mark's half-width, px
+        from_edge = half - np.abs(s.lat_px[wsl])          # distance in from the mark's edge, px
+        near = _smoothstep(_KNIFE_SPILL_PX, 0.0, from_edge)
+        excess = _KNIFE_SPILL * near * np.minimum(excess, run.wet_before[s.sl])
     if excess.max() > 1e-3:
         moved = _take(top, und, excess, tv)
         if flowing:
             ridges.add_sides(s, moved)
-        elif bt.clumps > 0:
+        else:
             fresh = (s.between * _smoothstep(-s.ds - 1.0, 0.0, s.along - s.c)
                      * _smoothstep(1.0, -1.0, s.along - s.c - s.h))[wsl]
             _spread(canvas, s.sl, fresh, moved.sum(axis=(0, 1)), run.stroke_id, brush,
                     np.zeros(fresh.shape, np.float32))
-        else:
-            ridges.ring += moved.sum(axis=(0, 1))
     # 5) The blade drags the wet paint it touches, as a thin-film flow: between
     #    the moving blade and the still canvas the paint shears, so paint near
     #    the blade travels almost with it and paint at the canvas hardly moves;
@@ -1321,7 +1346,7 @@ def _knife_step(run: _Run, s: _Step) -> None:
     # A knife lifted off thick paint pulls it up into little peaks and torn ridges.
     if eff["lift"] > 0 and s.i == len(run.pts) - 1:
         under = (s.aa * np.clip((s.h - np.abs(s.rel)) / 1.5, 0.0, 1.0))[wsl]
-        _lift_off(canvas, s.sl, under, eff["lift"] * (0.5 + 0.8 * ld.body), max(1.5, 0.05 * s.Wd),
+        _lift_off(canvas, s.sl, under, eff["lift"] * (0.5 + 0.8 * ld.body), max(2.5, 0.08 * s.Wd),
                   np.degrees(np.arctan2(s.ty, s.tx)), run.rng)
 
     # 7) A blade only shears the paint it cuts through: riding within the top
@@ -1335,6 +1360,14 @@ def _knife_step(run: _Run, s: _Step) -> None:
 
 # ----------------------------------------------------------------------------
 # pieces shared by brushes and knives
+
+
+def _bilinear(grid, y, x):
+    """Sample ``grid`` at fractional indices (y, x) (inside its bounds)."""
+    y0, x0 = y.astype(int), x.astype(int)
+    fy, fx = y - y0, x - x0
+    return ((grid[y0, x0] * (1 - fx) + grid[y0, x0 + 1] * fx) * (1 - fy)
+            + (grid[y0 + 1, x0] * (1 - fx) + grid[y0 + 1, x0 + 1] * fx) * fy)
 
 
 def _along_blade(lat, under, values, span):
@@ -1729,10 +1762,9 @@ def _lift_off(canvas, sl, under, amp, cell, direction, rng):
     if wv.sum() <= 1e-9:
         return
     hh, ww = under.shape
-    n = 0.7 * aniso_noise(hh, ww, 4.0 * cell, cell, direction, rng, octaves=3) \
-        + 0.3 * fractal_noise_2d(hh, ww, cell, rng, octaves=2)
+    n = aniso_noise(hh, ww, 6.0 * cell, cell, direction, rng, octaves=2)
     n = (n - n.min()) / max(np.ptp(n), 1e-9)
-    crest = (1.0 - np.abs(2.0 * n - 1.0)) ** 3
+    crest = (1.0 - np.abs(2.0 * n - 1.0)) ** 2
     m = (wv * crest).sum() / wv.sum()
     fac = np.clip(1.0 + 2.0 * amp * under * (crest - m), 0.05, None)
     fac *= V.sum() / max((V * fac).sum(), 1e-12)
@@ -1743,18 +1775,17 @@ def _fix_coverage(canvas, region):
     """Each pixel records how much of it its wet paint covers (anti-aliased
     edges): a film of thickness volume / coverage over that part. Paint pushed
     into a pixel (dragged, slumped, squeezed out) doesn't update that record,
-    so make it consistent: no pixel holds a film much thicker than its
-    neighbours'; where it would, the paint covers more of it."""
+    so make it consistent. A pixel with paint all around it isn't at an edge:
+    it is fully covered. Elsewhere, no pixel holds a film much thicker than
+    the mostly-covered pixels around it; where it would, the paint covers
+    more of it."""
+    total = canvas.top_v[region] + canvas.und_v[region]
+    inside = -_max_filter(-total, 1) > _MIN_FILM     # every neighbour carries a film of paint
     for V, A in ((canvas.top_v[region], canvas.top_a[region]), (canvas.und_v[region], canvas.und_a[region])):
-        film = np.where(A > 0, V / np.maximum(A, 1e-6), 0.0)
-        p = np.pad(film, 1)
-        h, w = film.shape
-        nb = np.zeros_like(film)
-        for dy in (0, 1, 2):
-            for dx in (0, 1, 2):
-                if dy != 1 or dx != 1:
-                    np.maximum(nb, p[dy:dy + h, dx:dx + w], out=nb)
+        reliable = np.where(A >= 0.5, V / np.maximum(A, 1e-6), 0.0)     # film thickness where it is well defined
+        nb = _max_filter(reliable, 2)
         need = np.where((A > 0) & (nb > 0), np.minimum(V / (1.25 * np.maximum(nb, 1e-6)), 1.0), 0.0)
+        need = np.where((A > 0) & inside & (V > 0.5 * _MIN_FILM), 1.0, need)
         np.maximum(A, need.astype(A.dtype), out=A)
 
 
