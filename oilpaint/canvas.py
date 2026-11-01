@@ -7,8 +7,9 @@ from typing import Optional, Sequence
 import numpy as np
 
 from . import spectral as sp
-from .brush import Brush, Stroke, apply_stroke
-from .paint import ColorLike
+from ._filters import _box_blur, _max_filter, _smooth121
+from .brush import IB, PACKED, Brush, Stroke, apply_stroke
+from .paint import DEFAULT_BODY, ColorLike
 from .png import write_png
 from .surface import DEFAULT_SURFACE, Surface
 
@@ -63,10 +64,11 @@ class Canvas:
         if image is not None and image.shape[:2] != (H, W):
             raise ValueError(f"ground image is {image.shape[1]}x{image.shape[0]}, canvas is {W}x{H}")
         self.ground = self.surface.ground_reflectance(H, W, self._rng, image=image)
-        # Wet sublayers, packed per pixel as [K (N bands), S, volume], all
-        # extensive (optical thickness). The *_k/_s/_v names are views.
-        self.top = np.zeros((H, W, N + 2), f32)
-        self.und = np.zeros((H, W, N + 2), f32)
+        # Wet sublayers, packed per pixel as [K (N bands), S, volume, body x
+        # volume], all extensive (summed over the paint present). The
+        # *_k/_s/_v names are views.
+        self.top = np.zeros((H, W, PACKED), f32)
+        self.und = np.zeros((H, W, PACKED), f32)
         self._make_views()
         # Fraction of each pixel the wet paint covers (anti-aliased edges).
         self.top_a = np.zeros((H, W), f32)
@@ -94,7 +96,14 @@ class Canvas:
         for name in ("top_a", "und_a"):          # canvases saved before coverage existed
             if name not in self.__dict__:
                 setattr(self, name, np.zeros((self.height, self.width), np.float32))
+        for name in ("top", "und"):              # ... or before paint had a body
+            layer = self.__dict__[name]
+            if layer.shape[-1] < PACKED:
+                body = (DEFAULT_BODY * layer[..., IB - 1])[..., None]
+                self.__dict__[name] = np.concatenate([layer, body.astype(layer.dtype)], axis=-1)
         self._make_views()
+        if not hasattr(self, "_floor"):
+            self._update_tooth()
 
     # ------------------------------------------------------------------
     # painting
@@ -142,6 +151,14 @@ class Canvas:
         tooth = tooth - _box_blur(tooth, 12) + 0.5 * self.texture
         lo, hi = np.percentile(tooth, [1, 99])
         self._tooth = np.clip((tooth - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
+        # The solid surface under the wet paint, in units of paint thickness:
+        # the weave plus dried paint. A rigid blade pressed on it rests on its
+        # high points: the tops of the threads (a flexible blade) or the
+        # highest ridges around (a stiff one).
+        self._floor = (WEAVE_DEPTH * self.texture * self.grain + self.dry_height).astype(np.float32)
+        r_fine = max(1, int(round(0.5 * self.surface.scale)))
+        self._peaks_fine = _box_blur(_max_filter(self._floor, r_fine), 1)
+        self._peaks_wide = _box_blur(_max_filter(self._floor, 3 * r_fine + 3), 2)
 
     # ------------------------------------------------------------------
     # inspection
@@ -212,28 +229,45 @@ class Canvas:
             out[s] = sp.reflectance_to_linear_rgb(self._reflectance_rows(s))
         return out
 
-    def _light(self, lin, light, relief, gloss, matte=None):
+    def surface_height(self, relief: float = 1.0) -> np.ndarray:
+        """Height of the painted surface in pixels (the canvas weave plus all
+        the paint), as used for lighting."""
         paint_h = self.top_v + self.und_v + self.dry_height
-        # Thin paint follows the weave; thick paint buries it.
-        weave = 0.35 * self.texture * self.grain / (1.0 + 4.0 * paint_h)
-        # Paint body with soft bevels at stroke edges, plus the fine brush marks.
-        body = _box_blur(_box_blur(paint_h, 2), 2)
-        marks = paint_h - _box_blur(paint_h, 1)
-        h = weave + relief * (0.5 * body + 0.4 * marks)
+        # thin paint follows the weave; thick paint fills it in and buries it
+        weave = 0.4 * self.texture * self.grain * np.exp(-paint_h / 0.7)
+        # Thin strokes thin out towards their edges (soft shoulders, low
+        # relief); impasto keeps every ridge, groove and sharp edge.
+        broad = _box_blur(_box_blur(paint_h, 2), 2)
+        fine = _smooth121(paint_h)
+        detail = 0.4 + 0.6 * _smoothstep(0.6, 2.0, _box_blur(np.abs(fine - broad), 2))
+        return weave + (HEIGHT_PX * relief) * (broad + detail * (fine - broad))
+
+    def _light(self, lin, light, relief, gloss, matte=None):
+        h = self.surface_height(relief)
         gy, gx = np.gradient(h)
         n = np.stack([-gx, -gy, np.ones_like(h)], -1)
         n /= np.linalg.norm(n, axis=-1, keepdims=True)
         L = light / np.linalg.norm(light)
         flat = L[2]
         ndotl = np.clip(n @ L, 0, None)
-        diffuse = 1.0 + 0.8 * (ndotl - flat) / flat
+        # Raking light: impasto ridges cast shadows on the paint behind them...
+        shadow = _cast_shadow(h, L)
+        # ...and deep grooves and hollows get less light from all around.
+        cavity = np.clip(_box_blur(h, 3) - h, 0.0, None)
+        ambient = 1.0 - 0.35 * _smoothstep(0.3, 2.0, cavity)
+        direct = (ndotl / flat) * (1.0 - 0.6 * shadow)
+        diffuse = ambient * (0.2 + 0.8 * direct)
+        # Oil gloss: a broad sheen plus sharp highlights on the slopes facing
+        # the light (stronger while wet). Flat paint seen from the front shows none.
         Hv = L + np.array([0.0, 0.0, 1.0])
         Hv /= np.linalg.norm(Hv)
-        ndoth = np.clip(n @ Hv, 0, None)
+        flat_h = Hv[2]
+        tilt = np.clip((np.clip(n @ Hv, 0, None) - flat_h) / (1 - flat_h), 0, None)
+        paint_h = self.top_v + self.und_v + self.dry_height
         coverage = np.clip(paint_h / 0.5, 0, 1)
         wet = np.clip((self.top_v + self.und_v) / 0.5, 0, 1)
-        flat_h = Hv[2]
-        spec = gloss * (0.03 + 0.07 * wet) * coverage * np.clip((ndoth - flat_h) / (1 - flat_h), 0, None) ** 3
+        spec = gloss * coverage * (1.0 - shadow) * ((0.03 + 0.07 * wet) * tilt ** 3
+                                                    + (0.05 + 0.15 * wet) * tilt ** 8)
         if matte is not None:
             spec = spec * (1.0 - 0.9 * np.clip(matte / max(self.surface.absorbency, 1e-6), 0, 1)
                            * self.surface.absorbency)
@@ -248,6 +282,14 @@ class Canvas:
         from PIL import Image  # optional dependency
         return Image.fromarray(np.round(self.render(**render_options) * 255).astype(np.uint8))
 
+
+#: Rendered height of one unit of paint thickness, in pixels (``relief`` in
+#: :meth:`Canvas.render` scales it).
+HEIGHT_PX = 0.6
+
+#: Height of the canvas weave, in units of paint thickness: paint about this
+#: thick fills the valleys between the threads.
+WEAVE_DEPTH = 1.0
 
 #: Paint thinner than this cannot form a continuous film; it is rendered as
 #: partial coverage of a film this thick (dry-brush specks, stroke edges).
@@ -271,17 +313,28 @@ def _composite(kappa, sigma, volume, alpha, below):
     return cov * film + (1.0 - cov) * below
 
 
-def _box_blur(a: np.ndarray, r: int) -> np.ndarray:
-    """Separable box blur with edge clamping (radius r)."""
-    if r <= 0:
-        return a
-    out = a.astype(np.float64)
-    for axis in (0, 1):
-        pad = [(0, 0), (0, 0)]
-        pad[axis] = (r + 1, r)
-        c = np.cumsum(np.pad(out, pad, mode="edge"), axis=axis)
-        n = out.shape[axis]
-        hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
-        lo = np.take(c, np.arange(0, n), axis=axis)
-        out = (hi - lo) / (2 * r + 1)
-    return out.astype(a.dtype)
+def _cast_shadow(h: np.ndarray, L: np.ndarray, max_steps: int = 32) -> np.ndarray:
+    """0..1: how much each pixel is shadowed from the light direction ``L``
+    by higher paint (heights ``h`` in pixels) between it and the light."""
+    horiz = float(np.hypot(L[0], L[1]))
+    if horiz < 1e-6:
+        return np.zeros_like(h)
+    lx, ly = L[0] / horiz, L[1] / horiz
+    rise = L[2] / horiz                    # how fast the light ray climbs per pixel
+    span = float(h.max() - h.min())
+    steps = int(min(max_steps, np.ceil(span / max(rise, 1e-3)) + 1))
+    if steps < 1 or span < 0.05:
+        return np.zeros_like(h)
+    H, W = h.shape
+    blocked = np.zeros_like(h)
+    for t in range(1, steps + 1):
+        dx, dy = int(round(t * lx)), int(round(t * ly))
+        ys = np.clip(np.arange(H) + dy, 0, H - 1)
+        xs = np.clip(np.arange(W) + dx, 0, W - 1)
+        np.maximum(blocked, h[ys][:, xs] - h - t * rise, out=blocked)
+    return np.clip(blocked / 0.8, 0.0, 1.0).astype(np.float32)
+
+
+def _smoothstep(e0, e1, x):
+    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)

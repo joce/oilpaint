@@ -476,7 +476,7 @@ def test_rag_only_lifts_paint():
 def test_stroke_edges_are_anti_aliased():
     # a 1 px diagonal line: most of its pixels are only partly covered
     c = Canvas(120, 120, seed=13, texture=0)
-    c.stroke([(10, 110), (100, 15)], paint="#000000", amount=400, width=1.0)
+    c.stroke([(10, 110), (100, 15)], paint="#000000", amount=160, width=1.0)
     img = c.render(lighting=False).mean(-1)
     ground = img[5, 115]
     painted = img < ground - 0.02
@@ -728,3 +728,198 @@ def test_thin_brushes_go_as_far_as_wide_ones(shape):
         reach.append((np.nonzero(th > 0.5 * ref)[0].max() - 20) / width)
     assert all(4.5 < r < 7.5 for r in reach), reach
     assert max(reach) - min(reach) < 1.2, reach
+
+
+# --------------------------------------------------------------------------
+# impasto: paint body, relief, ridges and knives
+
+
+def test_paint_body_mixes_by_volume():
+    assert P.CADMIUM_RED.body == pytest.approx(0.7)
+    thinned = Paint.mix((P.CADMIUM_RED, 1), (P.MEDIUM, 1))
+    stiffened = Paint.mix((P.CADMIUM_RED, 2), (P.IMPASTO_MEDIUM, 1))
+    assert thinned.body < 0.4 < 0.75 < stiffened.body
+    assert Paint("#123456", body=0.2).body == 0.2 and P.CADMIUM_RED.with_body(0.9).body == 0.9
+    with pytest.raises(ValueError):
+        Paint("#123456", body=1.5)
+    from oilpaint import Brush
+    assert Brush(brushes.FLAT_HOG).load(thinned, 5).paint.body == pytest.approx(thinned.body, abs=1e-6)
+
+
+def _grooves(c, rows, cols):
+    t = c.thickness[rows, cols]
+    return float(np.abs(np.diff(t, axis=0)).mean())
+
+
+def test_a_heavy_load_builds_relief():
+    thin, thick = Canvas(300, 100, seed=1), Canvas(300, 100, seed=1)
+    for c, amount in ((thin, 6), (thick, 40)):
+        c.stroke([(30, 50), (270, 50)], paint=P.CADMIUM_RED, amount=amount, brush=brushes.FLAT_HOG.sized(36), seed=1)
+    core = (slice(38, 62), slice(60, 200))
+    assert thick.thickness[core].mean() > 2.5 * thin.thickness[core].mean()
+    assert _grooves(thick, *core) > 3 * _grooves(thin, *core)      # deep bristle grooves
+
+
+def test_pressing_an_overloaded_brush_squeezes_ridges_out_at_the_edges():
+    def outside(pressure):
+        c = Canvas(300, 100, seed=1)
+        c.stroke([(30, 50), (270, 50)], paint=P.CADMIUM_RED, amount=45, brush=brushes.FLAT_HOG.sized(36),
+                 pressure=pressure, seed=1)
+        t = c.thickness[:, 80:220]
+        return float(t[:31].sum() + t[69:].sum())       # beyond the brush's 36 px
+    assert outside(0.9) > 3 * outside(0.2)
+
+
+def test_fluid_paint_levels_out_stiff_paint_holds_its_marks():
+    def grooves(paint):
+        c = Canvas(400, 100, seed=1)
+        c.stroke([(30, 50), (370, 48)], paint=paint, amount=40, brush=brushes.FLAT_HOG.sized(36), seed=61)
+        return _grooves(c, slice(38, 62), slice(100, 300))
+    tube = grooves(P.CADMIUM_RED)
+    fluid = grooves(Paint.mix((P.CADMIUM_RED, 1), (P.MEDIUM, 3)))
+    stiff = grooves(Paint.mix((P.CADMIUM_RED, 2), (P.IMPASTO_MEDIUM, 1)))
+    assert fluid < 0.4 * tube and stiff >= 0.95 * tube
+
+
+def _knife_slab(pressure, **kw):
+    c = Canvas(300, 120, seed=2)
+    c.stroke([(40, 60), (200, 60)], paint=P.TITANIUM_WHITE, amount=60, brush=brushes.PALETTE_KNIFE.sized(50),
+             pressure=pressure, seed=2, **kw)
+    return c
+
+
+def test_knife_pressure_sets_how_thick_the_slab_is():
+    light, firm, scraped = (_knife_slab(p) for p in (0.2, 0.6, 0.95))
+    core = (slice(45, 75), slice(70, 130))
+    t = [c.thickness[core].mean() for c in (light, firm, scraped)]
+    assert t[0] > 2 * t[1] > 4 * t[2]
+    slab = light.thickness[core]
+    assert slab.std() / slab.mean() < 0.12                     # a flat, smooth slab
+    # scraped close, paint is left in the valleys of the weave only
+    weave = scraped.grain[core]
+    assert np.corrcoef(scraped.thickness[core].ravel(), weave.ravel())[0, 1] < -0.8
+
+
+def test_a_knife_runs_out_cleanly():
+    from oilpaint import Brush
+    c = Canvas(400, 120, seed=4)
+    c.stroke([(40, 60), (360, 62)], brush=Brush(brushes.KNIFE_TROWEL).load(P.CADMIUM_YELLOW, 30), pressure=0.35,
+             seed=60)
+    thick = np.nonzero(c.thickness.max(axis=0) > 2.0)[0]
+    assert 150 < thick.max() < 340            # the slab ends before the stroke does...
+    assert c.thickness[:, thick.max() + 10:].max() < 3.0      # ...thinning out, without leaving rails behind
+
+
+def test_a_knife_pushes_wet_paint_into_ridges_beside_it():
+    c = Canvas(300, 120, seed=3)
+    c.stroke([(20, 60), (280, 60)], paint=P.ULTRAMARINE_BLUE, amount=40, brush=brushes.FLAT_HOG.sized(80), seed=3)
+    before = c.thickness.copy()
+    total = before.sum()
+    knife = c.stroke([(60, 60), (240, 60)], brush=brushes.PALETTE_KNIFE.sized(40), angle=90, pressure=0.95, seed=4)
+    after = c.thickness
+    cols = slice(100, 200)
+    assert after[55:66, cols].mean() < 0.5 * before[55:66, cols].mean()       # scraped down
+    beside = np.r_[48:52, 67:71]
+    assert after[beside, cols].mean() > before[beside, cols].mean() + 0.3       # piled up beside
+    assert after.sum() + knife.volume == pytest.approx(total, rel=1e-4)
+
+
+def test_a_comb_scores_grooves():
+    c = Canvas(300, 120, seed=3)
+    c.stroke([(20, 60), (280, 60)], paint=P.SAP_GREEN, amount=14, brush=brushes.FLAT_HOG.sized(70), seed=3)
+    before = c.thickness[40:80, 100:200].mean(axis=1)
+    c.stroke([(30, 60), (270, 60)], brush=brushes.KNIFE_COMB, pressure=0.6, seed=4)
+    after = c.thickness[40:80, 100:200].mean(axis=1)
+    assert after.std() > 1.3 * before.std() and after.min() < 0.85 * before.min()
+
+
+def test_lifting_a_knife_pulls_up_peaks():
+    def end_texture(lift):
+        c = _knife_slab(0.4, lift=lift)
+        return float(np.abs(np.diff(c.thickness[45:75, 190:215], axis=1)).mean())
+    assert end_texture(1.0) > 1.5 * end_texture(0.0)
+
+
+def test_paint_is_conserved_with_knives_and_squeezing():
+    c = Canvas(300, 200, seed=5)
+    loaded = 0.0
+    for k, (b, amount, pressure) in enumerate([(brushes.PALETTE_KNIFE, 40, 0.3), (brushes.KNIFE_PEAR, 30, 0.8),
+                                               (brushes.FLAT_HOG.sized(30), 50, 0.9)]):
+        br = c.stroke([(60, 50 + 50 * k), (240, 60 + 40 * k)], paint=P.ALL[k], amount=amount, brush=b,
+                      pressure=pressure, seed=k)
+        loaded += amount * 0.9 * br.width ** 2 - br.volume
+    knife = c.stroke([(150, 20), (150, 180)], brush=brushes.KNIFE_STRAIGHT, pressure=0.9, seed=9)
+    loaded -= knife.volume
+    assert c.thickness.sum() == pytest.approx(loaded, rel=1e-4)
+
+
+def test_knife_factory():
+    k = brushes.knife("pear", 30, flex=0.8)
+    assert k.rigid and k.shape == "pear" and k.width == 30 and k.stiffness == pytest.approx(0.6)
+    assert brushes.knife("straight", 40, teeth=6).clumps == 6
+    assert not brushes.FLAT_HOG.rigid
+    with pytest.raises(ValueError):
+        brushes.knife("sword", 30)
+    with pytest.raises(ValueError):
+        brushes.knife("pear", 30, flex=2)
+
+
+def test_impasto_casts_shadows_under_a_raking_light():
+    c = _knife_slab(0.2)
+    lit = c.render(light=(-0.6, -0.8, 0.5))
+    flat = c.render(lighting=False)
+    # the slab's far edge (away from the light) throws a shadow onto the canvas beside it
+    shade = (lit[80:95, 70:130].mean(-1) / flat[80:95, 70:130].mean(-1)).mean(axis=1)
+    assert shade.min() < 0.7
+    assert c.surface_height().max() > 4.0
+
+
+def test_old_canvas_pickles_without_paint_body_still_render():
+    import pickle
+    c = Canvas(60, 40, seed=14)
+    c.stroke([(5, 20), (55, 20)], paint="#336699", amount=5, width=12)
+    state = c.__getstate__()
+    state["top"], state["und"] = state["top"][..., :-1].copy(), state["und"][..., :-1].copy()
+    for name in ("_floor", "_peaks_fine", "_peaks_wide"):
+        del state[name]
+    old = Canvas.__new__(Canvas)
+    old.__setstate__(pickle.loads(pickle.dumps(state)))
+    assert old.top.shape == c.top.shape and np.isfinite(old.render()).all()
+    old.stroke([(5, 30), (55, 30)], paint="#993366", amount=5, width=12)
+
+
+def test_a_dry_knife_dragged_across_white_on_purple():
+    purple = Paint.mix((P.DIOXAZINE_PURPLE, 2), (P.QUINACRIDONE_MAGENTA, 1), (P.TITANIUM_WHITE, 1))
+
+    def layered():
+        c = Canvas(360, 300, seed=4)
+        for y in range(50, 250, 34):
+            c.stroke([(30, y), (330, y + 4)], paint=purple, amount=60, brush=brushes.KNIFE_TROWEL.sized(56),
+                     pressure=0.3, seed=y)
+        for y in range(80, 230, 34):
+            c.stroke([(60, y), (300, y - 3)], paint=P.TITANIUM_WHITE, amount=60,
+                     brush=brushes.KNIFE_TROWEL.sized(50), pressure=0.35, seed=1000 + y)
+        return c
+
+    def lightness(c, region):
+        return float(c.render(lighting=False)[region].mean())
+
+    swipe = (slice(90, 200), slice(165, 195))
+    c = layered()
+    before_t, before_l = c.thickness[swipe].mean(), lightness(c, swipe)
+    assert before_l > 0.9                      # wet white laid over wet purple stays white on top
+    c.stroke([(180, 20), (175, 150), (185, 285)], brush=brushes.PALETTE_KNIFE.sized(60), pressure=0.6, seed=7)
+    assert lightness(c, swipe) > before_l - 0.05          # a firm drag smears the white; it doesn't turn lavender
+    assert c.thickness[swipe].mean() < before_t
+    c = layered()
+    c.stroke([(180, 20), (175, 150), (185, 285)], brush=brushes.PALETTE_KNIFE.sized(60), pressure=0.95, seed=7)
+    assert c.thickness[swipe].mean() < 0.5 * before_t     # pressed hard, it scrapes through both layers
+
+
+def test_knife_slabs_fill_on_curves_and_in_dabs():
+    c = Canvas(400, 200, seed=1)
+    c.stroke([(60, 60), (220, 60), (240, 120)], paint=P.CADMIUM_RED, amount=40, brush=brushes.KNIFE_ANGLED,
+             pressure=0.4, seed=21)
+    c.stroke([(320, 100)], paint=P.TITANIUM_WHITE, amount=30, brush=brushes.KNIFE_SPOON, pressure=0.3, seed=22)
+    assert c.thickness[50:70, 100:180].min() > 2.0          # a solid slab, not an outline
+    assert c.thickness[95:105, 315:325].min() > 1.0

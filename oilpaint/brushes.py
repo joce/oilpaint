@@ -16,6 +16,12 @@ Shapes: ``round``, ``flat``, ``filbert``, ``fan`` (see :class:`BrushType`).
 Hairs: ``hog`` (stiff bristle with split "flag" tips that hold and spread
 thick paint), ``mongoose``, ``synthetic``, ``sable`` (soft, smooth, fine),
 ``squirrel`` (very soft, holds a lot: mops and blenders).
+
+Knives are made the same way, from a blade shape, a blade length and how
+flexible the blade is::
+
+    big_trowel = brushes.knife("trowel", 60, flex=0.6)
+    comb = brushes.knife("straight", 50, teeth=8)
 """
 
 from __future__ import annotations
@@ -110,11 +116,56 @@ FAN_HOG = make("fan", 40, "hog", length=0.7, clumps=10, name="Fan (hog)")
 FAN_SOFT = make("fan", 40, "sable", length=0.7, clumps=16, streaks=0.2, name="Fan (soft)")
 
 # --- knives ------------------------------------------------------------------
-#: Palette knife: a thin steel blade. Lays flat, smooth, thick slabs of paint
-#: with sharp edges and ridges; no brush marks.
-PALETTE_KNIFE = BrushType(shape="flat", width=36, aspect=0.04, stiffness=1.0, bristles=1.0, capacity=0.6,
-                          streaks=0.0, rough=0.0, drag=0.6, pickup=0.25, mixing=0.15, blending=0.12,
-                          name="Palette knife")
+_BLADE_ASPECT = {"trowel": 0.4, "pear": 0.5, "straight": 0.2, "angled": 0.3, "spoon": 0.6}
+
+
+def knife(shape: str = "trowel", length: float = 40.0, flex: float = 0.5, aspect: float | None = None,
+          teeth: int = 0, name: str | None = None, **overrides) -> BrushType:
+    """Build a painting knife.
+
+    ``shape`` is the blade outline: ``"trowel"`` (diamond, pointed tip),
+    ``"pear"`` (teardrop, round tip), ``"straight"`` (long blade, rounded
+    end), ``"angled"`` (end cut on a slant) or ``"spoon"`` (oval).
+    ``length`` is the blade length in pixels, ``aspect`` its width relative
+    to its length (a typical value for the shape by default). ``flex`` is 0
+    for a stiff blade (rides on the high points, lays thick slabs, scrapes
+    cleanly) to 1 for a very flexible one (bends under pressure, follows the
+    surface, spreads thin). ``teeth`` > 0 makes a comb or serrated blade.
+    Any :class:`BrushType` field can be overridden.
+    """
+    if shape not in _BLADE_ASPECT:
+        raise ValueError(f"unknown blade {shape!r}; use one of {sorted(_BLADE_ASPECT)}")
+    if not 0.0 <= flex <= 1.0:
+        raise ValueError("flex must be between 0 (stiff) and 1 (very flexible)")
+    props = dict(shape=shape, width=float(length), aspect=_BLADE_ASPECT[shape] if aspect is None else aspect,
+                 stiffness=1.0 - 0.5 * flex, bristles=1.0, capacity=1.0, clumps=int(teeth),
+                 name=name or f"{shape} knife {length:g}px")
+    props.update(overrides)
+    return BrushType(**props)
+
+
+#: Palette knife: a medium diamond trowel blade, the all-rounder. Pulled
+#: sideways it lays a flat, smooth slab with sharp edges; light pressure
+#: leaves it thick, hard pressure scrapes it thin into the weave.
+PALETTE_KNIFE = knife("trowel", 36, flex=0.4, name="Palette knife")
+#: Large trowel: covering areas with thick, flat planes of colour.
+KNIFE_TROWEL = knife("trowel", 56, flex=0.5, name="Trowel knife (large)")
+#: Small trowel: details, small petals and leaves with the tip, dots, highlights.
+KNIFE_SMALL = knife("trowel", 18, flex=0.5, name="Trowel knife (small)")
+#: Pear (teardrop) blade: rounded marks, soft-ended petals, rounded dabs.
+KNIFE_PEAR = knife("pear", 40, flex=0.5, name="Pear knife")
+#: Long straight blade: long sharp edges and lines (on its edge), skies and
+#: big flat areas, scraping back.
+KNIFE_STRAIGHT = knife("straight", 72, flex=0.6, name="Straight knife")
+#: Angled blade: the sharp toe gets into corners and cuts crisp angled edges.
+KNIFE_ANGLED = knife("angled", 44, flex=0.4, name="Angled knife")
+#: Spoon: a small oval blade for round dabs and petals.
+KNIFE_SPOON = knife("spoon", 26, flex=0.3, name="Spoon knife")
+#: Comb knife: a stiff serrated edge for scoring parallel grooves (sgraffito)
+#: into wet paint: grass, wood grain, hair, texture.
+KNIFE_COMB = knife("straight", 48, flex=0.1, teeth=8, name="Comb knife")
+#: Scraper: a wide stiff blade for scraping back to the canvas or laying big flat planes.
+SCRAPER = knife("straight", 110, flex=0.1, aspect=0.25, name="Scraper")
 
 # --- other tools -------------------------------------------------------------
 #: A rag: lifts wet paint without putting any back, to wipe out lights or

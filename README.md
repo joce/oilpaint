@@ -38,13 +38,16 @@ and `pytest tests` to run the tests.
 
 ## API
 
-### `Paint(color, opacity=1.0, strength=1.0, name=None)`
+### `Paint(color, opacity=1.0, strength=1.0, name=None, body=None)`
 
 * `color`: how the paint looks brushed out at normal thickness on white
   canvas. Use `"#rrggbb"`, a float triple in 0..1, or an int triple in 0..255.
 * `opacity`: 0..1, how much it hides what's underneath. 1 is a body color,
   ~0.3 a glazing color, 0 a pure dye.
 * `strength`: tinting strength, i.e. how much it dominates mixtures.
+* `body`: 0..1, how stiff the paint is (default 0.7, paint from the tube).
+  Stiff paint holds the marks of the tool: ridges, peaks, bristle grooves.
+  Fluid paint (thinned with medium) levels out smooth. See **Impasto** below.
 
 Useful members:
 
@@ -54,8 +57,11 @@ Useful members:
 * `mix_colors(["#1b3fa0", "#f5d000"])` gives the hex color of a quick palette mix.
 * `oilpaint.palette` has ready-made paints: `TITANIUM_WHITE`, `CADMIUM_YELLOW`,
   `ULTRAMARINE_BLUE`, `ALIZARIN_CRIMSON`, `PHTHALO_BLUE`, `BURNT_UMBER`, …
-  It also has `MEDIUM`, a clear medium for thinning paint into a glaze:
-  `Paint.mix((ALIZARIN_CRIMSON, 1), (MEDIUM, 3))`.
+  It also has `MEDIUM`, a clear, fluid medium for thinning paint into a glaze:
+  `Paint.mix((ALIZARIN_CRIMSON, 1), (MEDIUM, 3))`, and `IMPASTO_MEDIUM`, a
+  stiff gel that makes paint hold sharp ridges: `Paint.mix((CADMIUM_RED, 2),
+  (IMPASTO_MEDIUM, 1))`. Mixing averages the body by volume;
+  `paint.with_body(0.9)` gives a stiffer copy.
 
 ### `canvas.stroke(path, paint, amount=6, width=None, pressure=0.5, brush=None, **options)`
 
@@ -63,10 +69,10 @@ Useful members:
 |------------|---------|
 | `path`     | List of `(x, y)` points: a smooth Catmull-Rom spline passes through them. Or a `CatmullRom`, `Bezier` (anchor, handle, handle, anchor, …) or `Polyline`. One point makes a dab. |
 | `paint`    | A `Paint` or a color. `None` uses a clean brush (blending), or the given `brush`. A list loads several paints: `[(paint, amount[, across[, depth]]), ...]` (see `Brush`). |
-| `amount`   | Paint on the brush, in "brush widths of solid stroke": `amount=6` covers about 6 widths before the brush runs dry and starts to break up. A bigger load also gives thicker paint (impasto). Small brushes need bigger amounts to go as far. |
+| `amount`   | Paint on the brush, in "brush widths of solid stroke": `amount=6` covers about 6 widths before the brush runs dry and starts to break up. Small brushes need bigger amounts to go as far (they also hold more for their size). Loading a brush beyond what its hair holds (roughly `amount` 10 to 15 and up for a brush 20 px or wider, depending on the hair) puts a glob of paint on it that goes on thick: impasto. |
 | `brush`    | The tool: a `BrushType` (e.g. `brushes.FLAT_HOG`, see below), or a `Brush` that keeps leftover paint and dirt between strokes. Default: a medium round. |
 | `width`    | Brush width in px; defaults to the brush's own size. A number, one value per control point, or `f(u)` with `u` in 0..1 along the stroke. |
-| `pressure` | 0..1, same forms as `width`. Light pressure lays paint *on top of* wet paint. Heavy pressure releases more paint and churns it *into* the wet paint below. Soft, pointed brushes also get wider under pressure. |
+| `pressure` | 0..1, same forms as `width`. Light pressure lays paint *on top of* wet paint. Heavy pressure releases more paint and churns it *into* the wet paint below. Soft, pointed brushes also get wider under pressure. An overloaded brush pressed hard squeezes paint out into ridges at its edges. A knife's pressure sets how thick its slab is: light leaves it thick, hard scrapes close to the canvas. |
 | `angle`    | Brush angle in degrees, same forms as `width`: 0 drags a flat broadside, 90 on its edge. Vary it to twist the brush mid-stroke. |
 | `follow_path` | `True`: the angle turns with the stroke. `False`: the angle is fixed on the canvas, like a calligraphy nib. |
 | `roll`     | Round brushes only: how far the brush is rolled between the fingers, in degrees, same forms as `width`. Rolling turns a different side of the bundle to the canvas (see `Brush`). |
@@ -77,10 +83,11 @@ Useful members:
 | `blending` | How readily the paints loaded on the brush merge into each other during the stroke. |
 | `streaks`  | Brush-hair streak texture, 0..1. |
 | `taper`    | Feathered ends: fraction of the length where the brush is lowered/lifted. |
+| `lift`     | 0..1, how the tool leaves the paint at the end: 0 slides off cleanly, higher pulls the paint up into torn ridges and peaks, as a knife lifted off thick paint does. Default 0.6 for knives, 0 for brushes. |
 | `seed`     | Seed for the stroke's texture. |
 
-`mixing`, `pickup`, `drag`, `smear`, `streaks`, `taper`, `angle` and
-`follow_path` default to the brush type's own character; pass them to
+`mixing`, `pickup`, `drag`, `smear`, `streaks`, `taper`, `lift`, `angle`
+and `follow_path` default to the brush type's own character; pass them to
 override it for one stroke.
 
 `stroke()` returns the `Brush` it used. You can also build a `Stroke(...)`
@@ -102,7 +109,7 @@ dataclass with the same fields and call `canvas.paint(stroke1, stroke2, ...)`.
 | `BLENDER` | A wide soft flat for glazes and smooth gradients. |
 | `FILBERT_HOG`, `FILBERT_SABLE` | Flats with an oval tip: broad strokes, or petals and leaves (press, then lift). |
 | `FAN_HOG`, `FAN_SOFT` | Separate bristle clumps: grass, hair, foliage, or feathering. |
-| `PALETTE_KNIFE` | A steel blade: smooth slabs of thick paint, sharp edges, no brush marks. |
+| `PALETTE_KNIFE`, `KNIFE_…`, `SCRAPER` | Painting knives: rigid steel blades of different shapes (see **Knives** below). |
 | `RAG` | Lifts wet paint without laying any down: wipe out lights or correct mistakes. |
 
 ```python
@@ -123,15 +130,15 @@ custom = BrushType(shape="filbert", width=26, aspect=0.45, stiffness=0.6, capaci
 
 | field | meaning |
 |-------|---------|
-| `shape` | `round`, `flat` (square ends), `filbert` (flat with an oval tip), `fan` (spread of separate clumps). |
-| `width` | Default width in px. |
-| `aspect` | Footprint thickness relative to width: 1 for a round, ~0.2 for a flat, 0.04 for a knife blade. |
+| `shape` | Brushes: `round`, `flat` (square ends), `filbert` (flat with an oval tip), `fan` (spread of separate clumps). Knives: `trowel`, `pear`, `straight`, `angled`, `spoon`. |
+| `width` | Default width in px (for a knife, the blade's length). |
+| `aspect` | Footprint thickness relative to width: 1 for a round, ~0.2 for a flat. For a knife, the blade's width relative to its length. |
 | `angle`, `follow_path` | Default orientation (see `stroke`). |
 | `stiffness` | 0 = very soft (sable, squirrel) … 1 = very stiff (hog, knife). Stiff tools leave stronger ridges and ragged edges, push more paint and blend less. |
 | `bristles` | Density: 0 = sparse and coarse (bold streaks, dry-brush breakup) … 1 = dense and fine (smooth). |
 | `capacity` | How much paint sits in the tip: above 1 ("fat") the brush keeps colour it picked up and smears it further; below 1 it is quickly cleaned by its own fresh paint. (How far a stroke reaches is set by `amount`.) |
 | `spread` | How much the brush widens under pressure. |
-| `clumps` | Number of separate bristle clumps (fans). |
+| `clumps` | Number of separate bristle clumps (fans), or teeth on a comb knife. |
 | `slant` | Bristles cut on a bias (angled ~0.5, dagger ~0.9): the toe touches first. |
 | `softness` | Feathered edges and ends (mops, blenders). |
 | `taper` | Default feathered ends for strokes made with it. |
@@ -166,7 +173,13 @@ branches, an angled flat cutting a corner, dagger strokes.*
 * `canvas.dry()` lets everything dry. Later strokes stop mixing with it and
   glazes layer over it optically.
 * `canvas.render(lighting=True, light=(-0.6, -0.8, 1.1), relief=1.0, gloss=1.0)`
-  returns an `(H, W, 3)` sRGB float image, lit to show impasto and the surface texture.
+  returns an `(H, W, 3)` sRGB float image, lit to show impasto and the surface
+  texture: shading of the relief, cast shadows, darker hollows and the gloss
+  of oil. `light` is the direction of the light (x, y, z; y points down the
+  image): a smaller z rakes across the surface and brings out the relief
+  (the impasto images here use `(-0.6, -0.8, 0.7)`). `relief` scales the
+  height of the paint, `gloss` the highlights.
+* `canvas.surface_height()` is the height map used for lighting, in pixels.
 * `canvas.save("out.png", **render_options)` and `canvas.to_pil()` export the image.
 * `canvas.color_at(x, y)`, `canvas.thickness`, `canvas.wet_thickness` and
   `canvas.reflectance()` let you inspect the paint.
@@ -331,6 +344,145 @@ and then pressed hard (only the squeezed-out heel paint comes off); a round
 with umber in the heel, blue in the belly and white on the tip, painted once,
 then pressed hard to squeeze out the umber.*
 
+### Impasto: thick paint and relief
+
+Thin paint gives colour; thick paint also gives shape. Paint has a height on
+the canvas, and the tools push it around:
+
+* **Load.** A normal load lays a normal film. Beyond what the hair holds, the
+  extra sits on the brush as a glob that goes on thick, and the bristles comb
+  it into grooves and ridges.
+* **Pressure.** Pressing an overloaded brush or knife squeezes paint out at its
+  edges into ridges. Light pressure leaves a thick deposit; heavy pressure
+  spreads it thin and pushes the excess aside.
+* **Ploughing.** Dragging a tool through thick wet paint pushes the paint above
+  it aside into ridges and ahead of it, and leaves a pile where it lifts.
+* **Body.** How long the marks last depends on the paint's `body`. Paint thinned
+  with `MEDIUM` flows and levels out; tube paint keeps its bristle marks;
+  paint stiffened with `IMPASTO_MEDIUM` holds sharp ridges. Even stiff paint
+  slumps a little where it stands as a sheer cliff.
+
+```python
+from oilpaint import Paint, brushes, palette as P
+
+# an overloaded hog flat, pressed firmly: bristle grooves, ridges along both edges
+canvas.stroke(path, P.CADMIUM_RED, amount=45, brush=brushes.FLAT_HOG.sized(36), pressure=0.8)
+# the same load thinned with medium: smooth, almost no relief
+canvas.stroke(path, Paint.mix((P.CADMIUM_RED, 1), (P.MEDIUM, 3)), amount=45, brush=brushes.FLAT_HOG.sized(36))
+canvas.save("impasto.png", light=(-0.6, -0.8, 0.7))     # a raking light shows the relief
+```
+
+![impasto](examples/output/impasto.png)
+
+*Top: the same hog flat loaded with `amount` 6, 15, 30 and 60. The colour is
+the same; the relief grows. Second row: an overloaded flat (`amount=45`) at
+pressure 0.2, 0.55 and 0.9, squeezing more and more paint into ridges at its
+edges. Third row: the same load of orange thinned 1:3 with medium (levels
+out), straight from the tube, and stiffened with impasto medium (crisp
+grooves). Below: a heavily loaded two-colour filbert with white dragged
+through it wet, thick dabs with a hog round, and an overloaded round.*
+
+### Knives
+
+A painting knife is a rigid steel blade. It doesn't hold paint in hair: the
+paint is a film under the blade, and the blade rides on it. Everything under
+the blade is filled up to the blade and everything above it is pushed away, so:
+
+* **Pressure sets the thickness.** A light touch leaves a thick, smooth slab with
+  crisp edges. Pressing harder lays it thinner, with the excess squeezed into
+  lips along the sides. Pressing hard scrapes close to the canvas: the
+  blade rides on the tops of the threads and the paint is left only in the
+  weave.
+* **Running out.** As the paint under the blade runs low the blade sinks: the
+  slab thins out and finally only catches the high points (broken colour).
+* **Over wet paint.** The blade rides on the wet paint already there and sinks
+  into it the harder you press (less into stiff paint). A light touch lays a
+  clean skin of new colour on top without mixing. Harder pressure cuts into
+  the paint below, pushes it into ridges and drags it along. Where the blade
+  cuts into the lower layer, the two fold into each other in streaks.
+* **A dry knife dragged across.** Say white knifed over wet purple, then a clean
+  knife pulled from the white out across its edge into the purple:
+  * a light touch skims and smooths;
+  * a firm one grooves the white and carries some of it out over the purple
+    in streaks;
+  * pressing hard scrapes the white off down to the purple, with mixed ridges
+    along the sides.
+
+  The blade pushes what stands above it as a bow wave, letting streaks slip
+  under it (nicks and flex). It wipes up part of the skin it slides over and
+  lays it again a little further on as a thin film, and piles the rest where
+  it lifts.
+
+  ![knife drag](examples/output/knife_drag.png)
+
+  *A thick purple field with white knifed over its left half while wet, then
+  a clean knife dragged from the white out into the purple at pressure 0.3,
+  0.6 and 0.9.*
+* **Over dry ridges.** The blade skims the high points and leaves the hollows:
+  broken colour.
+* **Lifting off.** A knife lifted off thick paint pulls it up into torn ridges
+  and peaks (`lift`).
+* **Comb knives.** The teeth score grooves into wet paint and push it into
+  ridges between them (sgraffito).
+* **Edge lines.** For lines with the edge of the blade, use a blade with a tiny
+  `aspect` (the blade held upright, only its edge touching) and dab it. For
+  example, `canvas.stroke([(x, y)], paint, amount=80,
+  brush=brushes.KNIFE_STRAIGHT.with_(aspect=0.04), angle=80,
+  follow_path=False)` lays a line the length of the blade at 80° from
+  horizontal: grass, stems, masts.
+
+| preset | blade | for |
+|--------|-------|-----|
+| `PALETTE_KNIFE` | medium diamond trowel | the all-rounder: slabs pulled sideways, petals with the tip |
+| `KNIFE_TROWEL` | large trowel | covering areas with thick, flat planes of colour |
+| `KNIFE_SMALL` | small trowel | details, small petals and leaves, dots, highlights |
+| `KNIFE_PEAR` | teardrop, round tip | rounded petals and dabs |
+| `KNIFE_STRAIGHT` | long straight blade | long sharp edges, lines on its edge, skies, scraping |
+| `KNIFE_ANGLED` | end cut on a slant | crisp angled edges, corners |
+| `KNIFE_SPOON` | small oval | round dabs, flower centres |
+| `KNIFE_COMB` | serrated edge | parallel grooves scored into wet paint |
+| `SCRAPER` | wide, stiff | scraping back to the canvas, big flat planes |
+
+```python
+from oilpaint import brushes
+
+canvas.stroke(path, "#e8c040", amount=40, brush=brushes.PALETTE_KNIFE, pressure=0.3)   # a thick slab
+canvas.stroke(path, "#e8c040", amount=40, brush=brushes.PALETTE_KNIFE, pressure=0.9)   # scraped thin
+# a petal: a pear knife laid along the petal, pulled in towards the centre, easing off
+canvas.stroke([(x0, y0), (x1, y1)], paint=[("#f6f5f0", 10), ("#f7c600", 3, "right")],
+              brush=brushes.KNIFE_PEAR.sized(30), angle=90, pressure=[0.35, 0.55])
+# make your own: shape, blade length, flexibility (0 stiff .. 1 very flexible), teeth
+my_knife = brushes.knife("trowel", 50, flex=0.7)
+```
+
+Do the different knives make a difference? Yes, though less than the way
+they're held:
+
+* **Shape.** The blade's outline is the shape of the mark. A diamond trowel
+  leaves pointed ends and a pear leaves rounded ones. A long straight blade
+  gives long straight edges and lines.
+* **Size.** The blade's size sets the scale: a small trowel for petals and dots,
+  a large one or a scraper for planes.
+* **Flexibility.** A flexible blade bends under pressure, follows the surface
+  and spreads thinner. A stiff one rides on the high points, lays thicker
+  slabs and scrapes cleanly.
+* **Handle.** A cranked (offset) handle keeps the knuckles out of the wet paint;
+  it changes nothing in the mark, so it isn't modelled.
+
+![knives](examples/output/knives.png)
+
+*Top: a palette knife at pressure 0.15, 0.4, 0.7 and 0.95, from a thick slab
+to paint scraped into the weave. Second row: the large trowel, small-trowel
+petals, pear-knife petals, a line with a straight blade pulled along its
+length, the angled blade turning a corner, spoon dabs. Third row: a comb
+scoring grooves into wet green, and the scraper taking wet blue back to the
+canvas. Fourth row: white laid on wet blue with a light touch, magenta
+skimmed over dry ridges of yellow, and a double-loaded slab lifted off
+cleanly (`lift=0`) and pulled up (`lift=1`). Below: a small field of flowers,
+all knife work: sky in long pulls with clouds twisted on thick, a field of
+overlapping pulls, grass dabbed with the edge of a blade, poppy and daisy
+petals pulled in towards their centres.*
+
 ## How it works
 
 **Color is spectral.** Each paint is turned into a smooth reflectance spectrum
@@ -379,7 +531,26 @@ along the spline it does four things:
 
 Together this gives smears that fade over a short distance, dirty brushes,
 streaky wet-into-wet blends, and strokes that run dry and break up on the
-canvas tooth. Paint volume is conserved throughout. Each step integrates the
+canvas tooth.
+
+**Paint has height and gets pushed around.** The underside of the tool sits
+at a level above the canvas. For bristles, that's about the thickness they
+lay, lower along the hair lines. For a knife, it's the blade resting on the
+highest points below it (thread tops, dry ridges, and wet paint from
+earlier strokes, which it sinks into under pressure), plus a gap set by
+pressure, and no higher than the paint film under it. Wet paint standing
+above that level is shifted:
+
+* partly onto the tool;
+* partly out past the edges, into ridges with anti-aliased edges;
+* the rest ahead of the tool, where it piles up when the tool lifts.
+
+A tool carrying more paint than it holds squeezes the extra out at its edges,
+more under pressure. A knife then fills the space under its blade up to that
+level. After each stroke the paint settles: wherever it is steeper than its
+body can hold, it flows downhill.
+
+Paint volume is conserved throughout. Each step integrates the
 brush's exact sweep over each pixel, so the result doesn't depend on the step
 size. The footprint is swept at its current angle and size (both can change
 along the stroke), which is what makes a flat's square ends, its thin edge
@@ -388,11 +559,31 @@ and its twisted ribbons.
 ![blending](examples/output/blending.png)
 ![strokes](examples/output/strokes.png)
 
+**Light.** Rendering builds a height map from the canvas weave and the
+paint. Thin strokes get soft shoulders; impasto keeps every ridge and groove.
+It then shades it with the light, casts shadows from ridges onto the paint
+behind them, darkens deep hollows, and adds the gloss of oil, sharper while
+it's wet.
+
 ## Limitations
 
-* No bristle-level simulation, paint flow or drying over time (`dry()` is
-  all-or-nothing). Absorbency acts immediately rather than as the paint dries.
+* No bristle-level simulation or drying over time (`dry()` is
+  all-or-nothing). Absorbency acts immediately rather than as the paint
+  dries, and wet paint settles right after each stroke rather than over
+  minutes.
+* Each pixel keeps two wet layers (the latest one and everything wet beneath
+  it). A third wet layer is merged into one of them: new paint always goes on
+  top, while paint that is only pushed around merges with the layer it is
+  most like. Very complex wet layering (three different colours stacked, then
+  scraped) loses some of its structure.
+* Wet paint is moved by rules (fill, bow wave, wipe and smear, slumping),
+  not by a fluid simulation. Dragging one wet colour a long way over another
+  as distinct ribbons, folding and marbling, is only roughly approximated.
+* Knives lie flat on the canvas (or, with a tiny `aspect`, on their edge);
+  the tilt of the blade (spreading with the trailing edge down vs scraping
+  with the leading edge) is folded into pressure.
 * Paint optics are derived from RGB colors, not measured pigment data. If you
   have measured spectra, `Paint.from_optics(K, S)` accepts them directly.
-* Pure numpy: about 20–30 ms per stroke on a typical canvas. Memory is about
-  0.3 KB per pixel (a 1000×750 canvas needs ~240 MB).
+* Pure numpy: tens of milliseconds per stroke on a typical canvas (more for
+  big, heavily loaded or knife strokes). Memory is about 0.3 KB per pixel (a
+  1000×750 canvas needs ~250 MB).

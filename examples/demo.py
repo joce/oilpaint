@@ -427,9 +427,193 @@ def manipulations():
     save(c, "manipulations.png")
 
 
+# ---------------------------------------------------------------------------
+# 11. Impasto: thick paint, ridges and the body of the paint
+# ---------------------------------------------------------------------------
+RAKING = (-0.6, -0.8, 0.7)      # a lower light that shows the relief
+
+
+def impasto():
+    c = Canvas(1300, 720, seed=12)
+    R, O, Y, W, BL = P.CADMIUM_RED, P.CADMIUM_ORANGE, P.CADMIUM_YELLOW, P.TITANIUM_WHITE, P.ULTRAMARINE_BLUE
+    hog = B.FLAT_HOG.sized(36)
+    # the same hog flat loaded with more and more paint: colour, then relief
+    for k, amount in enumerate((6, 15, 30, 60)):
+        c.stroke([(40 + 315 * k, 60), (300 + 315 * k, 52)], paint=R, amount=amount, brush=hog, seed=k)
+    # an overloaded brush pressed harder and harder squeezes paint out into ridges at its edges
+    for k, pressure in enumerate((0.2, 0.55, 0.9)):
+        c.stroke([(40 + 420 * k, 160), (390 + 420 * k, 150)], paint=BL, amount=45, brush=hog, pressure=pressure,
+                 seed=10 + k)
+    # the body of the paint: thinned with medium it levels out; impasto medium holds every bristle mark
+    for k, paint in enumerate((Paint.mix((O, 1), (P.MEDIUM, 3)), O, Paint.mix((O, 2), (P.IMPASTO_MEDIUM, 1)))):
+        c.stroke([(40 + 420 * k, 260), (390 + 420 * k, 255)], paint=paint, amount=40, brush=hog, seed=20 + k)
+    # a big two-colour swoosh with a heavily loaded filbert, and a white one dragged through it while wet
+    c.stroke([(60, 560), (200, 420), (420, 380), (640, 430)], paint=[(R, 90), (O, 50, "left")],
+             brush=B.FILBERT_HOG.sized(70), pressure=[0.6, 0.45, 0.35, 0.2], seed=30)
+    c.stroke([(120, 600), (300, 480), (520, 470)], paint=W, amount=50, brush=B.FILBERT_HOG.sized(36),
+             pressure=[0.7, 0.4, 0.2], seed=31)
+    # thick dabs with a round, side by side and stacked, like a heavy highlight
+    rng = np.random.default_rng(3)
+    for k in range(14):
+        x, y = 760 + rng.normal(0, 60), 520 + rng.normal(0, 45)
+        c.stroke([(x, y), (x + rng.normal(15, 6), y + rng.normal(-8, 5))], paint=[(Y, 40), (W, 20, "left")],
+                 brush=B.ROUND_HOG.sized(30), pressure=0.4, seed=40 + k)
+    # an overloaded rigger squiggle and a rolled two-colour round
+    c.stroke([(1000, 620), (1060, 420), (1130, 600), (1200, 410), (1260, 560)], paint=P.VIRIDIAN, amount=40,
+             brush=B.ROUND.sized(20), pressure=0.5, seed=50)
+    save(c, "impasto.png", light=RAKING)
+
+
+# ---------------------------------------------------------------------------
+# 12. Painting knives
+# ---------------------------------------------------------------------------
+def knives():
+    c = Canvas(1300, 1000, seed=21)
+    W, Y, O, R, M = P.TITANIUM_WHITE, P.CADMIUM_YELLOW, P.CADMIUM_ORANGE, P.CADMIUM_RED, P.QUINACRIDONE_MAGENTA
+    CE, UB, G, UM = P.CERULEAN_BLUE, P.ULTRAMARINE_BLUE, P.SAP_GREEN, P.BURNT_UMBER
+    sky = Paint.mix((CE, 1), (W, 2))
+    # pressure: a thick slab, a firm one, one scraped thin, one scraped right into the weave
+    for k, pressure in enumerate((0.15, 0.4, 0.7, 0.95)):
+        c.stroke([(40 + 315 * k, 70), (280 + 315 * k, 65)], paint=sky, amount=70, brush=B.PALETTE_KNIFE.sized(56),
+                 pressure=pressure, seed=k)
+    # the knives and their marks
+    y = 210
+    c.stroke([(40, y), (200, y - 10)], paint=[(O, 40), (Y, 25, "left")], brush=B.KNIFE_TROWEL, pressure=0.35, seed=10)
+    for k in range(3):        # small trowel: petals pulled from the tip
+        c.stroke([(260 + 30 * k, y + 30), (275 + 30 * k, y - 30)], paint=[(M, 12), (W, 8, "left")],
+                 brush=B.KNIFE_SMALL.sized(30), angle=35, pressure=[0.3, 0.55], seed=11 + k)
+    for k in range(3):        # pear: rounded petals
+        c.stroke([(400 + 40 * k, y + 35), (410 + 40 * k, y - 25)], paint=[(Y, 14), (O, 8, "right")],
+                 brush=B.KNIFE_PEAR.sized(40), angle=90, pressure=[0.35, 0.6], seed=15 + k)
+    c.stroke([(560, y + 30), (760, y - 30)], paint=UM, amount=25, brush=B.KNIFE_STRAIGHT, angle=90, seed=20)   # on edge
+    c.stroke([(800, y - 25), (960, y - 25), (980, y + 30)], paint=R, amount=40, brush=B.KNIFE_ANGLED, pressure=0.4,
+             seed=21)
+    for k in range(4):        # spoon: round dabs
+        c.stroke([(1020 + 34 * k, y + 15 * (-1) ** k)], paint=W, amount=30, brush=B.KNIFE_SPOON, pressure=0.3,
+                 seed=22 + k)
+    # comb through wet paint, and a scraper taking a wet area back to the canvas
+    y = 350
+    c.stroke([(40, y), (560, y)], paint=G, amount=16, brush=B.FLAT_HOG.sized(80), seed=30)
+    c.stroke([(60, y + 5), (540, y - 5)], brush=B.KNIFE_COMB, pressure=0.6, seed=31)
+    c.stroke([(640, y), (1260, y)], paint=UB, amount=16, brush=B.FLAT_HOG.sized(90), seed=32)
+    c.stroke([(860, y - 60), (1000, y + 60)], brush=B.SCRAPER, angle=-30, pressure=0.95, seed=33)
+    # knife on wet paint: a clean skin on top; over dry ridges: broken colour; lifting off: torn peaks
+    y = 480
+    c.stroke([(40, y), (360, y)], paint=UB, amount=16, brush=B.FLAT_HOG.sized(70), seed=40)
+    c.stroke([(70, y), (330, y + 5)], paint=W, amount=45, brush=B.PALETTE_KNIFE.sized(44), pressure=0.3, seed=41)
+    for k in range(7):
+        c.stroke([(440 + 20 * k, y - 50), (460 + 20 * k, y + 50)], paint=Y, amount=40, brush=B.FLAT_HOG.sized(16),
+                 seed=42 + k)
+    c.dry()
+    c.stroke([(420, y + 5), (640, y - 5)], paint=M, amount=18, brush=B.PALETTE_KNIFE.sized(60), pressure=0.5, seed=50)
+    for k, lift in enumerate((0.0, 1.0)):
+        c.stroke([(760 + 260 * k, y), (960 + 260 * k, y)], paint=[(R, 45), (O, 25, "left")],
+                 brush=B.PALETTE_KNIFE.sized(56), pressure=0.3, lift=lift, seed=51 + k)
+    knife_study(c, 30, 570, 1240, 410, np.random.default_rng(5))
+    save(c, "knives.png", light=RAKING)
+
+
+def knife_drag():
+    """White knifed over wet purple; then a clean knife dragged across the white's edge, into the purple."""
+    purple = Paint.mix((P.DIOXAZINE_PURPLE, 2), (P.QUINACRIDONE_MAGENTA, 1), (P.TITANIUM_WHITE, 1))
+    c = Canvas(900, 560, seed=4)
+    for y in range(40, 540, 30):           # a thick purple field
+        c.stroke([(20, y), (880, y + 3)], paint=purple, amount=200, brush=B.KNIFE_STRAIGHT.sized(60), pressure=0.35,
+                 seed=y)
+    for y in range(70, 510, 30):           # thick white over the left half, wet into wet
+        c.stroke([(60, y), (430, y - 2)], paint=P.TITANIUM_WHITE, amount=90, brush=B.KNIFE_STRAIGHT.sized(56),
+                 pressure=0.4, seed=1000 + y)
+    for k, pressure in enumerate((0.3, 0.6, 0.9)):   # a clean knife dragged from the white into the purple
+        y = 130 + 150 * k
+        c.stroke([(180, y), (480, y + 6), (760, y)], brush=B.PALETTE_KNIFE.sized(64), pressure=pressure, seed=7 + k)
+    save(c, "knife_drag.png", light=RAKING)
+
+
+def knife_study(c, x0, y0, w, h, rng):
+    """A small field of flowers under a summer sky, all knife work."""
+    W, Y, O, R = P.TITANIUM_WHITE, P.CADMIUM_YELLOW, P.CADMIUM_ORANGE, P.CADMIUM_RED
+
+    def seed():
+        return int(rng.integers(1 << 30))
+    horizon = y0 + 0.45 * h
+    # sky, first layer: long overlapping pulls, firm pressure, deep blue above to pale at the horizon
+    rows = np.arange(y0 + 10, horizon - 5, 16)
+    for y in rows:
+        t = (y - y0) / (horizon - y0)
+        x = x0 - rng.uniform(20, 80)
+        while x < x0 + w:
+            L = rng.uniform(120, 240)
+            tint = Paint.mix((P.CERULEAN_BLUE, 1), (P.ULTRAMARINE_BLUE, 0.4 * (1 - t)), (W, 0.6 + 4.0 * t + rng.uniform(0, 0.6)))
+            yy = y + rng.normal(0, 3)
+            c.stroke([(x, yy), (x + L / 2, yy + rng.normal(0, 3)), (x + L, yy + rng.normal(0, 4))], paint=tint, amount=22,
+                     brush=B.KNIFE_STRAIGHT.sized(rng.uniform(40, 56)), pressure=[0.6, 0.5, 0.7], seed=seed())
+            x += L * rng.uniform(0.6, 0.9)
+    # clouds: thick white turned and twisted under the knife, light pressure, lifted off
+    for k in range(int(w / 80)):
+        cx, cy = x0 + rng.uniform(0, w), y0 + rng.uniform(0.15, 0.65) * (horizon - y0)
+        for j in range(5):
+            x, y = cx + rng.normal(0, 28), cy + rng.normal(0, 7)
+            L = rng.uniform(25, 55)
+            turn = rng.normal(0, 40)
+            c.stroke([(x, y), (x + L * 0.5, y - rng.uniform(2, 8)), (x + L, y + rng.normal(0, 3))],
+                     paint=[(Paint.mix((W, 8), (O, 0.2)), 26), (Paint.mix((W, 3), (P.CERULEAN_BLUE, 1)), 10, "right")],
+                     brush=B.PALETTE_KNIFE.sized(rng.uniform(28, 40)), angle=lambda u, t=turn: t * u,
+                     pressure=[0.2, 0.35, 0.5], lift=0.9, seed=seed())
+    # distant hills
+    for k in range(int(w / 25)):
+        x = x0 + rng.uniform(-60, w)
+        c.stroke([(x, horizon - rng.uniform(0, 10)), (x + rng.uniform(80, 160), horizon + rng.uniform(0, 10))],
+                 paint=Paint.mix((P.ULTRAMARINE_BLUE, 1), (W, 2.5 + rng.uniform(0, 1)), (P.SAP_GREEN, 1)), amount=25,
+                 brush=B.KNIFE_STRAIGHT.sized(44), angle=50, pressure=0.6, seed=seed())
+    # the field: a first layer pulled flat along the horizon, then curved overlapping pulls,
+    # pale and thin far away, rich and thick in front
+    for y in np.arange(horizon - 4, horizon + 60, 14):
+        x = x0 - rng.uniform(20, 80)
+        while x < x0 + w:
+            L = rng.uniform(100, 200)
+            green = Paint.mix((P.SAP_GREEN, 2), (Y, rng.uniform(0.5, 1.5)), (W, 1.0))
+            c.stroke([(x, y), (x + L, y + rng.normal(0, 3))], paint=green, amount=22, brush=B.KNIFE_STRAIGHT.sized(44),
+                     pressure=0.6, seed=seed())
+            x += L * rng.uniform(0.6, 0.9)
+    for k in range(int(w / 6)):
+        near = rng.uniform(0, 1) ** 0.8
+        y = horizon + (y0 + h - horizon) * near
+        x = x0 + rng.uniform(-60, w)
+        green = Paint.mix((P.SAP_GREEN, 2), (Y, rng.uniform(0.2, 1.8)), (P.VIRIDIAN, rng.uniform(0, 0.8)),
+                          (W, 1.2 * (1 - near) ** 2), (P.BURNT_UMBER, 0.3 * near * rng.uniform(0, 1)))
+        L = rng.uniform(50, 120) * (0.5 + near)
+        bend = rng.normal(0, 6)
+        c.stroke([(x, y), (x + L / 2, y + bend), (x + L, y + rng.normal(0, 3))], paint=[(green, 28), (Y, 5, "left")],
+                 brush=B.KNIFE_TROWEL.sized(26 + 30 * near), angle=rng.normal(25, 20),
+                 pressure=[0.65 - 0.3 * near, 0.5, 0.75], seed=seed())
+    # grass and stems: the loaded edge of a straight knife touched to the canvas
+    edge = B.KNIFE_STRAIGHT.with_(aspect=0.035, name="knife edge")
+    for k in range(int(w / 3)):
+        near = rng.uniform(0, 1) ** 0.6
+        x, y = x0 + rng.uniform(0, w), horizon + 20 + (y0 + h - horizon - 20) * near
+        green = Paint.mix((P.SAP_GREEN, 1), (Y, rng.uniform(0.3, 2.0)), (W, 0.4 * rng.uniform(0, 1)))
+        c.stroke([(x, y)], paint=green, amount=120, brush=edge.sized(10 + 40 * near), angle=90 + rng.normal(0, 14),
+                 follow_path=False, pressure=0.5, seed=seed())
+    # flowers: poppies (small trowel petals pulled in towards the centre) and daisies (pear)
+    for k in range(int(w / 60)):
+        near = rng.uniform(0, 1) ** 0.7
+        cx, cy = x0 + rng.uniform(30, w - 30), horizon + 40 + (y0 + h - horizon - 60) * near
+        size = 0.45 + 0.75 * near
+        poppy = rng.uniform() < 0.7
+        n = 5 if poppy else 9
+        for j in range(n):
+            a = j * 2 * np.pi / n + rng.uniform(0, 1)
+            r0, r1 = (24 if poppy else 30) * size, 5 * size
+            c.stroke([(cx + r0 * np.cos(a), cy + 0.7 * r0 * np.sin(a)), (cx + r1 * np.cos(a), cy + 0.7 * r1 * np.sin(a))],
+                     paint=[(R, 10), (O, 4, "left")] if poppy else [(W, 10), (Y, 3, "right")],
+                     brush=(B.KNIFE_SMALL.sized(30 * size) if poppy else B.KNIFE_PEAR.sized(24 * size)),
+                     angle=60 if poppy else 90, pressure=[0.3, 0.5], seed=seed())
+        c.stroke([(cx, cy)], paint=P.IVORY_BLACK if poppy else Y, amount=40, brush=B.KNIFE_SPOON.sized(11 * size),
+                 pressure=0.3, seed=seed())
+
 if __name__ == "__main__":
     for fn in (mixing_chart, strokes, blending, glazing, landscape, brush_rack, brush_uses, surface_sampler,
-               multi_loading, manipulations):
+               multi_loading, manipulations, impasto, knives, knife_drag):
         t0 = time.time()
         fn()
         print(f"  {fn.__name__}: {time.time() - t0:.1f}s")

@@ -34,6 +34,10 @@ DIOXAZINE_PURPLE = Paint("#4a2066", opacity=0.3, strength=2.0, name="Dioxazine P
 
 #: Clear oil medium: no pigment. Mix it in to thin a paint into a glaze, e.g.
 #: ``Paint.mix((ALIZARIN_CRIMSON, 1), (MEDIUM, 3))``.
-MEDIUM = Paint.from_optics(np.zeros(N_BANDS), 0.0, name="Glazing Medium")
+MEDIUM = Paint.from_optics(np.zeros(N_BANDS), 0.0, name="Glazing Medium", body=0.05)
+#: Clear impasto medium (a stiff gel or cold wax): extends paint and makes it
+#: stiffer, so it holds sharp ridges and peaks. ``Paint.mix((CADMIUM_RED, 2),
+#: (IMPASTO_MEDIUM, 1))`` is a slightly more transparent, much stiffer red.
+IMPASTO_MEDIUM = Paint.from_optics(np.zeros(N_BANDS), 0.4, name="Impasto Medium", body=1.0)
 
 ALL = [v for v in list(globals().values()) if isinstance(v, Paint)]

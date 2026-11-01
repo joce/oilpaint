@@ -23,6 +23,16 @@ def _scatter_factor(luminance: float) -> float:
 
 ColorLike = Union[str, Sequence[float], "Paint"]
 
+#: Body (stiffness) of paint straight from the tube.
+DEFAULT_BODY = 0.7
+
+
+def _check_body(body) -> float:
+    body = float(body)
+    if not 0.0 <= body <= 1.0:
+        raise ValueError("body must be between 0 (fluid) and 1 (very stiff)")
+    return body
+
 
 class Paint:
     """A paint, described by how it looks and how it behaves.
@@ -41,21 +51,29 @@ class Paint:
         shift in a mixture (phthalo blue is a famously strong tinter).
     name:
         Optional label.
+    body:
+        0..1: how stiff the paint is. Tube oil paint (~0.7) holds the marks
+        of the brush or knife: ridges, peaks, bristle grooves. Paint thinned
+        with medium (low body) flows and levels out smooth; impasto medium or
+        cold wax (body 1) holds sharp peaks. Stiff paint also stacks up
+        thicker when a brush is overloaded.
 
     Internally a paint is a Kubelka-Munk pigment: an absorption spectrum
     ``K`` and a scattering coefficient ``S`` per unit volume. Mixing paints
     adds those, weighted by volume.
     """
 
-    __slots__ = ("K", "S", "name", "_color")
+    __slots__ = ("K", "S", "name", "_color", "body")
 
     def __init__(self, color: ColorLike, opacity: float = 1.0, strength: float = 1.0,
-                 name: str | None = None):
+                 name: str | None = None, body: float | None = None):
         if isinstance(color, Paint):
             self.K, self.S = color.K.copy(), color.S
             self.name = name or color.name
             self._color = color._color
+            self.body = color.body if body is None else _check_body(body)
             return
+        self.body = DEFAULT_BODY if body is None else _check_body(body)
         srgb = sp.parse_color(color)
         target = sp.linear_rgb_to_reflectance(sp.srgb_to_linear(srgb))
         lum = float(sp.LUMINANCE @ sp.srgb_to_linear(srgb))
@@ -69,7 +87,7 @@ class Paint:
 
     # ------------------------------------------------------------------
     @classmethod
-    def from_optics(cls, K, S, name: str | None = None) -> "Paint":
+    def from_optics(cls, K, S, name: str | None = None, body: float = None) -> "Paint":
         """Build a paint directly from absorption spectrum K (per band, sampled
         at :data:`oilpaint.spectral.WAVELENGTHS`) and scattering S (scalar),
         both per unit volume. Handy for measured pigment data."""
@@ -78,7 +96,12 @@ class Paint:
         p.S = float(S)
         p.name = name
         p._color = None
+        p.body = DEFAULT_BODY if body is None else _check_body(body)
         return p
+
+    def with_body(self, body: float) -> "Paint":
+        """The same paint, stiffer or more fluid."""
+        return Paint(self, body=body)
 
     @classmethod
     def mix(cls, *parts: Union["Paint", Tuple[ColorLike, float]], name: str | None = None) -> "Paint":
@@ -90,16 +113,18 @@ class Paint:
         """
         K = np.zeros(sp.N_BANDS)
         S = 0.0
+        body = 0.0
         total = 0.0
         for part in parts:
             paint, vol = (part, 1.0) if isinstance(part, Paint) else part
             paint = as_paint(paint)
             K += vol * paint.K
             S += vol * paint.S
+            body += vol * paint.body
             total += vol
         if total <= 0:
             raise ValueError("mix needs a positive total volume")
-        return cls.from_optics(K / total, S / total, name=name)
+        return cls.from_optics(K / total, S / total, name=name, body=body / total)
 
     # ------------------------------------------------------------------
     def reflectance(self, thickness: float = 1.0, over: ColorLike = "#ffffff") -> np.ndarray:
