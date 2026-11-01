@@ -880,7 +880,7 @@ def test_old_canvas_pickles_without_paint_body_still_render():
     c.stroke([(5, 20), (55, 20)], paint="#336699", amount=5, width=12)
     state = c.__getstate__()
     state["top"], state["und"] = state["top"][..., :-1].copy(), state["und"][..., :-1].copy()
-    for name in ("_floor", "_peaks_fine", "_peaks_wide"):
+    for name in ("_floor", "_hollows", "_peaks_fine", "_peaks_wide"):
         del state[name]
     old = Canvas.__new__(Canvas)
     old.__setstate__(pickle.loads(pickle.dumps(state)))
@@ -947,3 +947,41 @@ def test_a_dry_knife_drags_white_out_over_purple():
     assert gain(240) > 0.15 and gain(240) > gain(300) > gain(380) > -0.02
     assert abs(float(after[150:165, 260:300].mean() - before[150:165, 260:300].mean())) < 0.01   # untouched
     assert c.thickness.sum() + knife.volume == pytest.approx(total, rel=2e-3)
+
+
+def _wet_knife_field(n=6, width=600):
+    purple = Paint.mix((P.DIOXAZINE_PURPLE, 2), (P.QUINACRIDONE_MAGENTA, 1), (P.TITANIUM_WHITE, 1))
+    c = Canvas(width, 200, seed=4)
+    for k in range(n):
+        y = 30 + 30 * k
+        c.stroke([(20, y), (width - 20, y + 3)], paint=purple, amount=200, brush=brushes.KNIFE_STRAIGHT.sized(60),
+                 pressure=0.35, seed=k + 1)
+    return c
+
+
+def _ripple_along_x(surface, rows, cols):
+    band = surface[rows, cols].mean(axis=0)
+    return float((band - np.convolve(band, np.ones(21) / 21, mode="same"))[15:-15].std())
+
+
+def test_overlapping_wet_knife_slabs_are_smooth():
+    # a knife laid over the edge of a wet slab doesn't leave a bead at every step
+    c = _wet_knife_field(n=2)
+    surface = (c._floor + c.top_v + c.und_v)[86:100, 120:480]
+    ripple = surface - np.apply_along_axis(lambda r: np.convolve(r, np.ones(15) / 15, mode="same"), 1, surface)
+    assert ripple[:, 10:-10].std() < 0.12
+
+
+def test_a_clean_knife_drag_leaves_no_ribs():
+    c = _wet_knife_field()
+    c.stroke([(100, 100), (300, 103), (500, 100)], brush=brushes.PALETTE_KNIFE.sized(60), pressure=0.6, seed=8)
+    surface = c._floor + c.top_v + c.und_v
+    assert _ripple_along_x(surface, slice(90, 112), slice(150, 450)) < 0.3
+
+
+def test_moved_paint_is_fully_covered():
+    # paint dragged or merged into a pixel must not leave it looking part-covered (light specks)
+    c = _wet_knife_field(n=3)
+    lum = c.render(lighting=False).mean(-1)
+    core = lum[50:105, 60:540]
+    assert core.max() - np.median(core) < 0.1

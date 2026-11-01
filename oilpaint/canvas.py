@@ -102,8 +102,8 @@ class Canvas:
                 body = (DEFAULT_BODY * layer[..., IB - 1])[..., None]
                 self.__dict__[name] = np.concatenate([layer, body.astype(layer.dtype)], axis=-1)
         self._make_views()
-        if not hasattr(self, "_floor"):
-            self._update_tooth()
+        if not all(hasattr(self, n) for n in ("_floor", "_hollows", "_peaks_fine", "_peaks_wide")):
+            self._update_tooth()        # maps derived from the surface, added in later versions
 
     # ------------------------------------------------------------------
     # painting
@@ -156,6 +156,10 @@ class Canvas:
         # high points: the tops of the threads (a flexible blade) or the
         # highest ridges around (a stiff one).
         self._floor = (WEAVE_DEPTH * self.texture * self.grain + self.dry_height).astype(np.float32)
+        # How far each point lies below the local average surface (the hollows
+        # of the weave and of dried paint): thick wet paint fills these first.
+        r_mean = max(2, int(round(self.surface.scale)))
+        self._hollows = (_box_blur(self._floor, r_mean) - self._floor).astype(np.float32)
         r_fine = max(1, int(round(0.5 * self.surface.scale)))
         self._peaks_fine = _box_blur(_max_filter(self._floor, r_fine), 1)
         self._peaks_wide = _box_blur(_max_filter(self._floor, 3 * r_fine + 3), 2)
@@ -230,17 +234,19 @@ class Canvas:
         return out
 
     def surface_height(self, relief: float = 1.0) -> np.ndarray:
-        """Height of the painted surface in pixels (the canvas weave plus all
-        the paint), as used for lighting."""
-        paint_h = self.top_v + self.und_v + self.dry_height
-        # thin paint follows the weave; thick paint fills it in and buries it
-        weave = 0.4 * self.texture * self.grain * np.exp(-paint_h / 0.7)
+        """Height of the painted surface in pixels, as used for lighting: the
+        same surface the paint is pushed around on (the canvas weave, dried
+        paint and wet paint)."""
+        paint = self.top_v + self.und_v + self.dry_height
+        surface = self._floor + self.top_v + self.und_v
         # Thin strokes thin out towards their edges (soft shoulders, low
-        # relief); impasto keeps every ridge, groove and sharp edge.
-        broad = _box_blur(_box_blur(paint_h, 2), 2)
-        fine = _smooth121(paint_h)
+        # relief); impasto keeps every ridge, groove and sharp edge, and bare
+        # canvas its weave.
+        broad = _box_blur(_box_blur(surface, 2), 2)
+        fine = _smooth121(surface)
         detail = 0.4 + 0.6 * _smoothstep(0.6, 2.0, _box_blur(np.abs(fine - broad), 2))
-        return weave + (HEIGHT_PX * relief) * (broad + detail * (fine - broad))
+        detail = np.maximum(detail, np.exp(-paint / 0.3))
+        return (HEIGHT_PX * relief) * (broad + detail * (fine - broad))
 
     def _light(self, lin, light, relief, gloss, matte=None):
         h = self.surface_height(relief)
@@ -289,7 +295,7 @@ HEIGHT_PX = 0.6
 
 #: Height of the canvas weave, in units of paint thickness: paint about this
 #: thick fills the valleys between the threads.
-WEAVE_DEPTH = 1.0
+WEAVE_DEPTH = 0.7
 
 #: Paint thinner than this cannot form a continuous film; it is rendered as
 #: partial coverage of a film this thick (dry-brush specks, stroke edges).

@@ -77,8 +77,8 @@ Useful members:
 | `follow_path` | `True`: the angle turns with the stroke. `False`: the angle is fixed on the canvas, like a calligraphy nib. |
 | `roll`     | Round brushes only: how far the brush is rolled between the fingers, in degrees, same forms as `width`. Rolling turns a different side of the bundle to the canvas (see `Brush`). |
 | `mixing`   | How readily the stroke stirs into the wet paint below. |
-| `pickup`   | How much wet paint the brush lifts and carries along. |
-| `drag`     | How much wet paint the brush pushes ahead. |
+| `pickup`   | How much wet paint the brush lifts and carries along (brushes; a knife drags wet paint instead). |
+| `drag`     | How much wet paint the brush pushes ahead (brushes). |
 | `smear`    | How long picked-up color lingers on the brush tip, roughly in widths. |
 | `blending` | How readily the paints loaded on the brush merge into each other during the stroke. |
 | `streaks`  | Brush-hair streak texture, 0..1. |
@@ -533,23 +533,27 @@ at a level above the canvas. For bristles, that's about the thickness they
 lay, lower along the hair lines. For a knife, it's the blade resting on the
 highest points below it (thread tops, dry ridges, and wet paint from
 earlier strokes, which it sinks into under pressure), plus a gap set by
-pressure, and no higher than the paint film under it. Wet paint standing
-above that level is shifted:
+pressure, and no higher than the paint film under it. The blade is rigid
+along the direction it moves, so its height varies only along its length.
+Wet paint standing above that level is shifted:
 
-* partly onto the tool;
 * partly out past the edges, into ridges with anti-aliased edges;
-* the rest ahead of the tool, where it piles up when the tool lifts.
+* the rest ahead of the tool, where it piles up when the tool lifts;
+* for brushes, partly onto the brush (pickup).
 
 A tool carrying more paint than it holds squeezes the extra out at its edges,
 more under pressure. A knife then fills the space under its blade up to that
-level. After each stroke the paint settles: wherever it is steeper than its
-body can hold, it flows downhill.
+level. Thick brush paint likewise fills the hollows of the weave under it
+rather than coating them evenly. After each stroke the paint settles:
+wherever it is steeper than its body can hold, it flows downhill.
 
 **Under a knife, wet paint flows.** The blade drags the wet paint it touches,
 as a thin film between the moving blade and the still canvas. Paint near the
 blade travels almost with it, paint at the canvas hardly moves, and paint
-above the blade is bulldozed ahead. A share also spills out at the sides
-and a little sticks to the blade.
+above the blade is bulldozed ahead. A share also spills out at the sides.
+A knife doesn't pick wet paint up as it goes (the flow carries it), so it
+doesn't get dirty the way a brush does: the scraped paint is left where the
+knife lifts.
 
 * **Layers keep their order.** Each wet layer moves at its own speed, so
   white dragged over purple stays on top of it.
@@ -572,8 +576,9 @@ and its twisted ribbons.
 ![blending](examples/output/blending.png)
 ![strokes](examples/output/strokes.png)
 
-**Light.** Rendering builds a height map from the canvas weave and the
-paint. Thin strokes get soft shoulders; impasto keeps every ridge and groove.
+**Light.** Rendering lights the same surface the paint is pushed around on:
+the canvas weave, dried paint and wet paint. Thin strokes get soft
+shoulders; impasto keeps every ridge and groove.
 It then shades it with the light, casts shadows from ridges onto the paint
 behind them, darkens deep hollows, and adds the gloss of oil, sharper while
 it's wet.
