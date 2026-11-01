@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from oilpaint import Bezier, Canvas, Paint, brushes as B, palette as P, surfaces as S  # noqa: E402
+from oilpaint import Bezier, Brush, Canvas, Paint, brushes as B, palette as P, surfaces as S  # noqa: E402
 from oilpaint import spectral as sp  # noqa: E402
 from oilpaint.png import write_png  # noqa: E402
 
@@ -335,8 +335,68 @@ def surface_sampler():
     print("wrote", path)
 
 
+# ---------------------------------------------------------------------------
+# 9. Loading a brush with several paints
+# ---------------------------------------------------------------------------
+def multi_loading():
+    c = Canvas(1300, 760, seed=5)
+    W, R, Y, GR = P.TITANIUM_WHITE, P.CADMIUM_RED, P.CADMIUM_YELLOW, P.SAP_GREEN
+    # double-loaded soft flat: a ribbon with a light edge
+    br = Brush(B.FLAT_SABLE.sized(34)).load(R, 10).load(W, 4, across="left")
+    c.stroke([(40, 90), (140, 40), (240, 120), (340, 60)], brush=br, seed=1)
+    # the same load, twisted half a turn along the stroke: the colours change sides (a folded ribbon)
+    br = Brush(B.FLAT_SABLE.sized(34)).load(R, 10).load(W, 4, across="left")
+    c.stroke([(400, 80), (520, 60), (640, 100)], brush=br, angle=lambda u: 180 * u, seed=2)
+    # one-stroke petals: a double-loaded flat pulled out from the centre
+    for k in range(7):
+        a = k * 2 * np.pi / 7
+        cx, cy = 820, 90
+        br = Brush(B.FLAT_SABLE.sized(30)).load(P.QUINACRIDONE_MAGENTA, 3).load(W, 2, across="right")
+        pts = [(cx + 8 * np.cos(a), cy + 8 * np.sin(a)), (cx + 40 * np.cos(a + 0.25), cy + 40 * np.sin(a + 0.25)),
+               (cx + 62 * np.cos(a), cy + 62 * np.sin(a))]
+        c.stroke(pts, brush=br, pressure=[0.6, 0.7, 0.2], seed=10 + k)
+    # tip loading: a green round touched into yellow; each leaf starts yellow and turns green
+    for k in range(6):
+        br = Brush(B.ROUND_SABLE.sized(16)).load(GR, 5).load(Y, 0.6, depth="tip")
+        x0 = 960 + 50 * k
+        c.stroke([(x0, 140), (x0 + 20, 90), (x0 + 10, 40)], brush=br, pressure=[0.8, 0.6, 0.15], seed=20 + k)
+    # triple-loaded wide flat: a sky gradient in a single stroke
+    br = (Brush(B.FLAT_HOG.sized(70)).load(P.COBALT_BLUE, 6, across=(0.0, 0.34)).load(W, 6, across=(0.33, 0.67))
+          .load(P.CADMIUM_ORANGE, 6, across=(0.66, 1.0)).work(0.5))
+    c.stroke([(40, 230), (360, 220), (640, 240)], brush=br, seed=30)
+    # paints picked up together, partly mixed: mixing 0.15, 0.45, 1.0
+    for k, mix in enumerate((0.15, 0.45, 1.0)):
+        br = Brush(B.FILBERT_HOG.sized(40)).load_mix([(R, 1), (Y, 1), (W, 1)], 10, mixing=mix, seed=40 + k)
+        y = 320 + 70 * k
+        c.stroke([(40, y), (330, y - 15), (620, y + 5)], brush=br, seed=40 + k)
+    # how long two paints stay apart on the brush: blending 0.05, 0.4, 1.0
+    for k, blend in enumerate((0.05, 0.4, 1.0)):
+        br = Brush(B.FLAT_HOG.sized(36).with_(blending=blend)).load(R, 14, across="left").load(Y, 14, across="right")
+        y = 300 + 70 * k
+        c.stroke([(700, y), (1270, y)], brush=br, pressure=0.7, seed=50 + k)
+    # stroking the brush on the palette first: 0, 2 and 6 passes
+    for k, passes in enumerate((0, 2, 6)):
+        br = Brush(B.FLAT_SABLE.sized(36)).load(P.VIRIDIAN, 8, across="left").load(Y, 8, across="right").work(passes)
+        y = 540 + 60 * k
+        c.stroke([(40, y), (330, y)], brush=br, seed=60 + k)
+    # a double-loaded hog fan flicked upward: light and dark blades in every flick
+    rng = np.random.default_rng(7)
+    for k in range(16):
+        br = Brush(B.FAN_HOG.sized(34)).load(GR, 2).load(P.LEMON_YELLOW, 1.2, across="left")
+        x = 420 + 26 * k + rng.normal(0, 5)
+        c.stroke([(x, 740), (x + rng.normal(0, 14), 560)], brush=br, pressure=[0.6, 0.1], seed=70 + k)
+    # a double-loaded palette knife: a two-tone slab
+    br = Brush(B.PALETTE_KNIFE.sized(60)).load(P.ULTRAMARINE_BLUE, 12).load(W, 10, across="right")
+    c.stroke([(900, 560), (1250, 545)], brush=br, pressure=0.6, seed=80)
+    # a dirty brush: only its lower side crosses wet red, so only that side carries red on
+    c.stroke([(990, 690), (1010, 690)], R, amount=20, brush=B.FLAT_HOG.sized(30), angle=90, seed=90)
+    c.stroke([(900, 672), (1250, 672)], W, amount=14, brush=B.FLAT_HOG.sized(36), seed=91)
+    save(c, "multi_loading.png")
+
+
 if __name__ == "__main__":
-    for fn in (mixing_chart, strokes, blending, glazing, landscape, brush_rack, brush_uses, surface_sampler):
+    for fn in (mixing_chart, strokes, blending, glazing, landscape, brush_rack, brush_uses, surface_sampler,
+               multi_loading):
         t0 = time.time()
         fn()
         print(f"  {fn.__name__}: {time.time() - t0:.1f}s")

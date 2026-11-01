@@ -17,6 +17,12 @@ On the canvas, each pixel has a dry ground plus two wet sublayers: ``under``
 stroke). Brush pressure stirs the two together; that is the difference between
 laying color *over* wet paint and churning it *into* wet paint.
 
+Paint on the brush is held in narrow bristle *columns* across its width
+(:data:`COLUMNS`), each with its own tip and belly. That lets a brush carry
+several paints side by side (double loading), one paint on its tip and
+another in its belly, or paints only partly mixed; the columns blend into
+each other as the brush is worked, at a rate set by :attr:`BrushType.blending`.
+
 Paint quantities are stored *packed*: a vector of the absorption spectrum K
 (N_BANDS values), then scattering S, then volume V, all extensive (summed over
 the paint present). Mixing paint is then just adding vectors.
@@ -46,6 +52,11 @@ _EDGE_PX = 1.5
 _VOLUME_PER_AMOUNT = 0.9
 # Paint a brush holds on to and never releases (in width squares).
 _RESIDUAL = 0.03
+#: Number of bristle columns across a brush. Each holds its own paint.
+COLUMNS = 24
+_COL_X = (np.arange(COLUMNS) + 0.5) / COLUMNS          # column centres, 0 = left edge, 1 = right edge
+# Diffusion between neighbouring columns per brush width of travel, at blending 1 and full pressure.
+_BLEND_RATE = 2.3
 
 
 def _deposit_thickness(load: float) -> float:
@@ -54,7 +65,7 @@ def _deposit_thickness(load: float) -> float:
     Roughly 1 (a normal, covering layer) for a well-loaded brush, thicker for a
     heavily loaded one (impasto), thinning out as the brush runs dry.
     """
-    free = max(load - _RESIDUAL, 0.0)
+    free = np.maximum(load - _RESIDUAL, 0.0)
     return free / (free + 0.3) * (1.0 + 0.3 * np.log1p(free / 6.0))
 
 
@@ -126,6 +137,12 @@ class BrushType:
         soft blenders); 0 = crisp.
     deposits:
         False for tools that only lift paint (a rag wiping back to the ground).
+    blending:
+        0..1: how readily different paints loaded on the brush merge into each
+        other as it is used. Low (soft synthetic flats) keeps a double-loaded
+        brush crisply two-toned for a long stroke; high (scrubby hog) blends
+        them within a few widths. Pressure speeds it up. Default: derived from
+        stiffness.
     taper:
         Default feathered ends for strokes made with this brush.
     streaks, pickup, drag, mixing, rough:
@@ -146,6 +163,7 @@ class BrushType:
     slant: float = 0.0
     softness: float = 0.0
     deposits: bool = True
+    blending: Optional[float] = None
     taper: float = 0.0
     streaks: Optional[float] = None
     pickup: Optional[float] = None
@@ -182,6 +200,8 @@ class BrushType:
             override = getattr(self, key)
             derived[key] = float(np.clip(override if override is not None else derived[key], 0.0, 2.0))
         derived["smear"] = max(self.capacity, 0.05)
+        blend = self.blending if self.blending is not None else 0.4 + 0.5 * st
+        derived["blending"] = float(np.clip(blend, 0.0, 1.0))
         derived["ridge"] = 0.3 + 0.4 * st          # paint squeezed to the edges by pressure
         return derived
 
@@ -189,50 +209,214 @@ class BrushType:
 DEFAULT_BRUSH = BrushType(name="round")
 
 
+def _across_weights(across) -> np.ndarray:
+    """Share of a load that goes into each bristle column (sums to 1).
+
+    ``across`` says where on the brush the paint goes, left to right as seen
+    looking along the stroke: ``None``/``"all"``, ``"left"``, ``"right"``,
+    ``"center"``, ``"edges"``; ``("left", 0.3)`` = the leftmost 30%;
+    ``(a, b)`` = from a to b (0 = left edge, 1 = right edge); a function of
+    x in 0..1; or one weight per column.
+    """
+    x = _COL_X
+    soft = 0.06
+
+    def band(a, b):
+        return _smoothstep(a - soft, a + soft, x) * _smoothstep(b + soft, b - soft, x)
+
+    if across is None or (isinstance(across, str) and across == "all"):
+        w = np.ones(COLUMNS)
+    elif isinstance(across, str):
+        named = {"left": (0.0 - 1, 0.5), "right": (0.5, 1.0 + 1), "center": (0.3, 0.7), "middle": (0.3, 0.7)}
+        if across == "edges":
+            w = band(-1, 0.25) + band(0.75, 2)
+        elif across in named:
+            w = band(*named[across])
+        else:
+            raise ValueError(f"unknown side {across!r}; use left, right, center, edges or all")
+    elif callable(across):
+        w = np.asarray([float(across(v)) for v in x])
+    elif isinstance(across, tuple) and len(across) == 2 and isinstance(across[0], str):
+        side, frac = across[0], float(across[1])
+        if side == "left":
+            w = band(-1, frac)
+        elif side == "right":
+            w = band(1.0 - frac, 2)
+        else:
+            raise ValueError("use ('left', fraction) or ('right', fraction)")
+    else:
+        arr = np.asarray(across, dtype=np.float64).reshape(-1)
+        if arr.size == 2:
+            w = band(float(arr[0]), float(arr[1]))
+        elif arr.size == COLUMNS:
+            w = arr
+        else:
+            raise ValueError(f"across: give (start, end) in 0..1 or {COLUMNS} column weights")
+    w = np.clip(w, 0.0, None)
+    if w.sum() <= 0:
+        raise ValueError("that part of the brush is empty: no column gets any paint")
+    return w / w.sum()
+
+
+def _diffuse(cols: np.ndarray, k: float) -> None:
+    """Spread paint between neighbouring columns (in place, conserving it)."""
+    if k <= 0:
+        return
+    n_sub = int(np.ceil(k / 0.24))
+    kk = k / n_sub
+    for _ in range(n_sub):
+        flow = np.diff(cols, axis=0)          # from column b+1 into b
+        cols[:-1] += kk * flow
+        cols[1:] -= kk * flow
+
+
+def _swap_layers(tip: np.ndarray, belly: np.ndarray, rate: float) -> None:
+    """Exchange paint between the tip and the belly of each column (in place)."""
+    if rate <= 0:
+        return
+    tv, bv = tip[:, IV], belly[:, IV]
+    e = rate * np.minimum(tv, bv)
+    ok = e > 0
+    if not ok.any():
+        return
+    ft = np.where(ok, e / np.where(tv > 0, tv, 1.0), 0.0)[:, None]
+    fb = np.where(ok, e / np.where(bv > 0, bv, 1.0), 0.0)[:, None]
+    from_tip, from_belly = tip * ft, belly * fb
+    tip += from_belly - from_tip
+    belly += from_tip - from_belly
+
+
 class Brush:
-    """A brush that keeps its paint (and its dirt) between strokes.
+    """A brush with paint on it, which it keeps (with any dirt) between strokes.
 
-    You only need this if you want continuity between strokes, e.g. painting
-    several strokes without reloading, or a brush that stays dirty::
+    Paint sits in bristle columns across the brush, so a brush can carry
+    several paints at once::
 
-        brush = Brush(brushes.FILBERT_HOG)
-        brush.load("#2b4c9a", amount=6)
-        canvas.stroke(path1, brush=brush)
-        canvas.stroke(path2, brush=brush)   # continues with what's left
+        brush = Brush(brushes.FLAT_SABLE)
+        brush.load(P.CADMIUM_RED, amount=6)                      # the whole brush
+        brush.load(P.TITANIUM_WHITE, amount=2, across="left")    # double-load one side
+        brush.load(P.CADMIUM_YELLOW, amount=0.5, depth="tip")    # just the tips
+        brush.work(1)                                            # stroke it on the palette
+        canvas.stroke(path, brush=brush)
+        canvas.stroke(path2, brush=brush)                        # continues with what's left
         brush.clean()
     """
 
     def __init__(self, type: Optional[BrushType] = None):
         self.type = type or DEFAULT_BRUSH
-        self.reservoir = np.zeros(PACKED)
-        self.tip = np.zeros(PACKED)
+        self.reservoir = np.zeros((COLUMNS, PACKED))   # the belly of each column
+        self.tip = np.zeros((COLUMNS, PACKED))         # paint at the tips of each column
         self.width = float(self.type.width)
         self.wet = 0.0          # how coated the bristles are from recent wet contact
 
-    def load(self, paint: ColorLike, amount: float, width: Optional[float] = None) -> "Brush":
-        """Add ``amount`` of paint (same units as :attr:`Stroke.amount`)."""
+    # ------------------------------------------------------------------ loading
+    def load(self, paint: ColorLike, amount: float, width: Optional[float] = None, across=None,
+             depth: str = "belly") -> "Brush":
+        """Add ``amount`` of paint (same units as :attr:`Stroke.amount`).
+
+        ``across`` puts it on part of the brush: ``"left"``, ``"right"``,
+        ``"center"``, ``"edges"``, ``("left", 0.3)``, ``(0.2, 0.6)``, a
+        function of x in 0..1 (left to right), or column weights. Left and
+        right are the brush's own sides, as seen looking along the stroke.
+        ``depth`` is ``"belly"`` (dipped in: the bulk of the load) or
+        ``"tip"`` (just touched to the paint: comes off first).
+        """
         if width is not None:
             self.width = float(width)
         volume = max(float(amount), 0.0) * _VOLUME_PER_AMOUNT * self.width ** 2
-        self.reservoir += _pack(as_paint(paint), volume)
+        if volume <= 0:
+            return self
+        layer = self._layer(depth)
+        layer += _across_weights(across)[:, None] * _pack(as_paint(paint), volume)[None, :]
+        return self
+
+    def load_mix(self, parts, amount: float, mixing: float = 0.5, across=None, depth: str = "belly",
+                 seed: Optional[int] = None, width: Optional[float] = None) -> "Brush":
+        """Pick up several paints at once, only partly mixed on the palette.
+
+        ``parts`` is a list of ``(paint, proportion)``. ``mixing`` = 1 gives a
+        uniform mixture (like :meth:`Paint.mix`); lower values leave each
+        paint in irregular streaks across the bristles, so the stroke comes
+        out marbled; 0 = barely touched together.
+        """
+        if width is not None:
+            self.width = float(width)
+        paints = [as_paint(p) for p, _ in parts]
+        props = np.array([max(float(w), 0.0) for _, w in parts])
+        if props.sum() <= 0:
+            raise ValueError("load_mix needs positive proportions")
+        props = props / props.sum()
+        mixing = float(np.clip(mixing, 0.0, 1.0))
+        rng = np.random.default_rng(seed)
+        cell = COLUMNS / (2.0 + 5.0 * (1.0 - mixing))         # less mixed: more, narrower streaks
+        noise = np.stack([value_noise_1d(COLUMNS, cell, rng) for _ in paints])
+        logits = np.log(props)[:, None] + 12.0 * (1.0 - mixing) * (noise - 0.5)
+        w = np.exp(logits - logits.max(axis=0, keepdims=True))
+        w /= w.sum(axis=0, keepdims=True)
+        for _ in range(20):      # keep each paint's overall share while keeping the streaks
+            w *= (props * COLUMNS / np.maximum(w.sum(axis=1), 1e-12))[:, None]
+            w /= w.sum(axis=0, keepdims=True)
+        w = mixing * props[:, None] + (1.0 - mixing) * w
+        volume = max(float(amount), 0.0) * _VOLUME_PER_AMOUNT * self.width ** 2
+        col_vol = volume * _across_weights(across)
+        layer = self._layer(depth)
+        for i, paint in enumerate(paints):
+            layer += (w[i] * col_vol)[:, None] * _pack(paint, 1.0)[None, :]
+        return self
+
+    def work(self, passes: float = 1.0, pressure: float = 0.5) -> "Brush":
+        """Stroke the brush back and forth on the palette without painting:
+        the paints on it blend into each other (side to side, and tip with
+        belly) as they would over a few widths of real strokes."""
+        blend = self.type.physics()["blending"]
+        widths = 3.0 * max(float(passes), 0.0)
+        _diffuse(self.reservoir, _BLEND_RATE * blend * (0.2 + pressure) ** 2 * widths)
+        _diffuse(self.tip, _BLEND_RATE * blend * (0.2 + pressure) ** 2 * widths)
+        for _ in range(int(np.ceil(widths))):
+            _swap_layers(self.tip, self.reservoir, min(0.375 * blend, 0.5))
         return self
 
     def clean(self) -> "Brush":
         self.__init__(self.type)
         return self
 
+    def _layer(self, depth):
+        if depth == "belly":
+            return self.reservoir
+        if depth == "tip":
+            return self.tip
+        raise ValueError("depth must be 'belly' or 'tip'")
+
+    # ------------------------------------------------------------------ inspection
+    @property
+    def volume(self) -> float:
+        """Total paint volume on the brush."""
+        return float(self.reservoir[:, IV].sum() + self.tip[:, IV].sum())
+
     @property
     def amount(self) -> float:
         """Paint left on the brush, in the units of :attr:`Stroke.amount`."""
-        return (self.reservoir[IV] + self.tip[IV]) / (_VOLUME_PER_AMOUNT * self.width ** 2)
+        return self.volume / (_VOLUME_PER_AMOUNT * self.width ** 2)
 
     @property
     def paint(self) -> Optional[Paint]:
-        """The current (possibly contaminated) mix of paint on the brush."""
-        total = self.reservoir + self.tip
+        """The overall mixture of paint on the brush."""
+        total = self.reservoir.sum(axis=0) + self.tip.sum(axis=0)
         if total[IV] <= 0:
             return None
         return Paint.from_optics(total[:N] / total[IV], total[IS] / total[IV])
+
+    def colors(self, depth: str = "all") -> list:
+        """Hex colour of each bristle column, left to right (None where empty).
+        ``depth`` is ``"tip"``, ``"belly"`` or ``"all"``."""
+        cols = {"tip": self.tip, "belly": self.reservoir, "all": self.tip + self.reservoir}[depth]
+        out = []
+        for c in cols:
+            if c[IV] <= 1e-9:
+                out.append(None)
+            else:
+                out.append(Paint.from_optics(c[:N] / c[IV], c[IS] / c[IV]).hex)
+        return out
 
 
 @dataclass
@@ -250,7 +434,9 @@ class Stroke:
     paint:
         A :class:`Paint`, or a plain color (``"#rrggbb"`` / RGB triple).
         ``None`` paints with a clean (or the given) brush without loading
-        paint, which just drags and blends the wet paint.
+        paint, which just drags and blends the wet paint. A *list* loads
+        several paints: each item is ``(paint, amount[, across[, depth]])``
+        as in :meth:`Brush.load`, e.g. ``[(red, 6), (white, 2, "left")]``.
     amount:
         Paint loaded on the brush, measured in *brush-width squares at normal
         thickness*. Roughly: ``amount=6`` paints about 6 brush widths of
@@ -285,13 +471,17 @@ class Stroke:
     smear:
         How long paint picked up from the canvas persists on the brush tip,
         roughly in brush widths.
+    blending:
+        How readily the paints on the brush merge into each other during the
+        stroke (see :attr:`BrushType.blending`).
     taper:
         Fraction of the stroke length over which the brush is lowered at the
         start and lifted at the end (narrower, feathered ends). A number, or
         a (start, end) pair. 0 gives full ends.
 
-        ``mixing``, ``pickup``, ``drag``, ``streaks``, ``smear`` and ``taper``
-        default to values derived from the brush type.
+        ``mixing``, ``pickup``, ``drag``, ``streaks``, ``smear``,
+        ``blending`` and ``taper`` default to values derived from the brush
+        type.
     seed:
         Random seed for the stroke's texture.
     """
@@ -309,6 +499,7 @@ class Stroke:
     drag: Optional[float] = None
     streaks: Optional[float] = None
     smear: Optional[float] = None
+    blending: Optional[float] = None
     taper: object = None
     seed: Optional[int] = None
 
@@ -323,7 +514,7 @@ def _resolve(stroke: Stroke):
     bt = brush.type
     phys = bt.physics()
     eff = {k: (getattr(stroke, k) if getattr(stroke, k) is not None else phys[k])
-           for k in ("mixing", "pickup", "drag", "streaks", "smear")}
+           for k in ("mixing", "pickup", "drag", "streaks", "smear", "blending")}
     eff["rough"] = phys["rough"]
     eff["ridge"] = phys["ridge"]
     eff["width"] = stroke.width if stroke.width is not None else bt.width
@@ -402,17 +593,35 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
                                np.linspace(0, max(path.n_knots - 1, 0), n_probe), path.n_knots)
     w_typ = max(float(np.mean(w_probe)), 1.0)
     spacing = float(np.clip(0.25 * w_typ, 0.5, 8.0))
-    pts, _, u, knot = path.sample(spacing)
-    widths = evaluate_profile(eff["width"], u, knot, path.n_knots)
     taper = eff["taper"]
     t0, t1 = (taper, taper) if np.isscalar(taper) else taper
-    if t0 > 0:
-        widths = widths * (0.25 + 0.75 * _smoothstep(0.0, t0, u))
-    if t1 > 0:
-        widths = widths * (0.25 + 0.75 * _smoothstep(1.0, 1.0 - t1, u))
-    widths = np.maximum(widths, 1.0)
-    pressure = np.clip(evaluate_profile(stroke.pressure, u, knot, path.n_knots), 0.0, 1.0)
-    angles = np.radians(evaluate_profile(eff["angle"], u, knot, path.n_knots))
+    circle = bt.shape == "round" and abs(bt.aspect - 1.0) < 1e-6
+
+    def sample(spacing):
+        pts, _, u, knot = path.sample(spacing)
+        widths = evaluate_profile(eff["width"], u, knot, path.n_knots)
+        if t0 > 0:
+            widths = widths * (0.25 + 0.75 * _smoothstep(0.0, t0, u))
+        if t1 > 0:
+            widths = widths * (0.25 + 0.75 * _smoothstep(1.0, 1.0 - t1, u))
+        widths = np.maximum(widths, 1.0)
+        pressure = np.clip(evaluate_profile(stroke.pressure, u, knot, path.n_knots), 0.0, 1.0)
+        angles = np.radians(evaluate_profile(eff["angle"], u, knot, path.n_knots))
+        return pts, widths, pressure, angles
+
+    pts, widths, pressure, angles = sample(spacing)
+    if not circle and len(pts) > 2:
+        # An elongated footprint that turns between two steps leaves a thin
+        # wedge uncovered at the outside of the turn. Step finely enough that
+        # no turn moves the brush's edge by more than about half a pixel.
+        seg = np.diff(pts, axis=0)
+        heading = np.arctan2(seg[:, 1], seg[:, 0])
+        turn = np.abs(np.angle(np.exp(1j * np.diff(heading))))
+        twist = np.abs(np.diff(angles))[1:] if len(angles) > 2 else 0.0
+        reach_px = 0.5 * float(widths.max()) * (1.0 + bt.spread)
+        gap = float(np.max(turn + twist)) * reach_px
+        if gap > 0.5:
+            pts, widths, pressure, angles = sample(max(spacing * 0.5 / gap, 0.35))
     is_dab = len(pts) == 1
     if is_dab:  # a dab: press the brush down with a tiny movement
         pts = np.vstack([pts[0] - [0.05 * widths[0], 0], pts[0] + [0.05 * widths[0], 0]])
@@ -421,7 +630,15 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
         angles = np.repeat(angles, 2)
 
     brush.width = float(np.mean(widths))
-    if stroke.paint is not None:
+    if isinstance(stroke.paint, list):          # several paints: [(paint, amount[, across[, depth]]), ...]
+        for item in stroke.paint:
+            if isinstance(item, dict):
+                brush.load(**item)
+            else:
+                item = tuple(item)
+                brush.load(item[0], item[1], across=item[2] if len(item) > 2 else None,
+                           depth=item[3] if len(item) > 3 else "belly")
+    elif stroke.paint is not None:
         brush.load(stroke.paint, stroke.amount)
 
     # Hair streaks: a fixed 1-D pattern across the brush (in units of its
@@ -437,7 +654,6 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
     if is_dab:   # bristle tips pressed straight down: a blotchy 2-D pattern (stippling)
         tex2 = fractal_noise_2d(96, 96, 96 / (9.0 * density), rng, octaves=2)
         tex2 = (tex2 - tex2.min()) / max(np.ptp(tex2), 1e-9)
-    circle = bt.shape == "round" and abs(bt.aspect - 1.0) < 1e-6
     aspect = 1.0 if circle else bt.aspect
     reach = 1.0 if circle else float(np.hypot(1.0, aspect))
     streaks, rough, ridge = eff["streaks"], eff["rough"], eff["ridge"]
@@ -445,6 +661,7 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
     # brush half-width at every sample: size, a slow wobble, and how far the
     # hairs splay under pressure (a pointed round paints thin with a light touch)
     radii = 0.5 * widths * (1.0 + 0.06 * wobble)
+    nominal = radii.copy()               # the bristle bundle's size; pressure only splays it
     if bt.spread > 0:
         radii = radii * ((1.0 - bt.spread) + bt.spread * (np.maximum(pressure, 0.02) / 0.5) ** 0.8)
     arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
@@ -470,9 +687,11 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
         r = 0.5 * (r0 + r1)
         rmax = max(r0, r1)
         Wd = 2.0 * r
+        Wn = float(nominal[i - 1] + nominal[i])      # how loaded the brush is is relative to its real size
         # orientation of the brush's long side relative to the stroke's cross direction
         ang = 0.5 * (angles[i] + angles[i - 1])
         phi = ang if eff["follow_path"] else ang - np.arctan2(tx, -ty)
+        side = 1.0 if np.cos(phi) >= 0 else -1.0      # a brush turned past 90 degrees has its sides swapped
         phi = (phi + np.pi / 2) % np.pi - np.pi / 2
 
         # --- footprint geometry on a window around the swept segment -------
@@ -492,10 +711,10 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
         lat = lat_px / r_px                        # signed, in brush half-widths
         if circle:
             lmax = 1.0
-            ucoord = lat
+            ucoord = lat * side
         else:
             grid, c_tab, h_tab, lmax = _chord_table(bt.shape, aspect, phi)
-            ucoord = lat / _signed_floor(np.cos(phi), aspect)       # position across the bristles
+            ucoord = side * lat / _signed_floor(np.cos(phi), aspect)       # position across the bristles
         hair = np.interp(ucoord, tex_x, tex)       # 0..1
         if is_dab:
             ix = np.clip(((ucoord + 1.3) / 2.6 * 95).astype(int), 0, 95)
@@ -578,39 +797,59 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
             f = eff["drag"] * f_drag * (0.5 + p) * profile * np.clip(overlap / ds, 0.0, 1.0)
             _drag(canvas, f, x0, y0, tx * ds, ty * ds, p)
 
-        # 1) refill the tip from the reservoir; slow exchange between the two
+        # Which bristle column is above each pixel (linear blend between the two nearest).
+        colf = (np.clip(ucoord[wsl], -1.0, 1.0) + 1.0) * 0.5 * (COLUMNS - 1)
+        b0 = np.minimum(colf.astype(int), COLUMNS - 2)
+        fb = (colf - b0).astype(np.float64)
+        b1 = b0 + 1
+        npx = b0.size
+        assign = np.zeros((COLUMNS, npx))                       # pixel -> column weights
+        flat_i = np.arange(npx)
+        assign[b0.ravel(), flat_i] = 1.0 - fb.ravel()
+        assign[b1.ravel(), flat_i] += fb.ravel()
+
+        # 1) refill each column's tip from its belly; slow exchange between the
+        #    two; the paints on the brush blend sideways as the bristles work
         capacity = max(eff["smear"], 0.05) * 0.8 * Wd * Wd
         _refill(brush, capacity)
-        _exchange(brush, 0.15 * ds / Wd)
+        blend = eff["blending"]
+        _swap_layers(brush.tip, brush.reservoir, 0.375 * blend * ds / Wd)
+        k = _BLEND_RATE * blend * (0.2 + p) ** 2 * ds / Wd
+        _diffuse(brush.tip, k)
+        _diffuse(brush.reservoir, k)
 
         # 2) pick up wet paint. Bristles plough through it: they lift paint
         #    along the hair lines and leave it between them (brush marks).
-        #    Thick fresh paint shields the older layer below.
+        #    Thick fresh paint shields the older layer below. What is lifted
+        #    goes into the bristles that touched it.
         plough = expo_c * np.clip(2.0 - streak_c, 0.0, None)
         a_top = 1.0 - np.exp(-eff["pickup"] * 1.2 * plough * f_pick)
         a_und = (1.0 - np.exp(-eff["pickup"] * 1.2 * p * plough * f_pick)) * np.exp(-top[..., IV] / 1.5)
         for layer, a in ((top, a_top), (und, a_und)):
             lifted = a.astype(np.float32)[..., None] * layer
-            brush.tip += lifted.sum(axis=(0, 1))
+            brush.tip += assign @ lifted.reshape(npx, PACKED).astype(np.float64)
             layer -= lifted
 
-        # 3) deposit from the tip
-        load = (brush.reservoir[IV] + brush.tip[IV]) / (Wd * Wd)
+        # 3) deposit from the tips. Each column's load sets how thick its
+        #    paint goes on and when it starts to run dry.
+        load = (brush.reservoir[:, IV].sum() + brush.tip[:, IV].sum()) / (Wn * Wn)
         thick = _deposit_thickness(load) * (0.5 + p)
-        fill = np.clip((load - _RESIDUAL) / 0.6, 0.0, 1.0)
+        col_load = (brush.reservoir[:, IV] + brush.tip[:, IV]) * COLUMNS / (Wn * Wn)
+        col_thick = _deposit_thickness(col_load) * (0.5 + p)
+        col_fill = np.clip((col_load - _RESIDUAL) / 0.6, 0.0, 1.0)
         # Bristles that were just in wet paint are coated and keep laying a
         # continuous smear for a short distance, even with little load.
         wet_contact = _smoothstep(0.05, 0.35, top[..., IV] + und[..., IV])
         wet_frac = float((contact * wet_contact).sum()) / max(float(contact.sum()), 1e-12)
         brush.wet = max(wet_frac, brush.wet * np.exp(-ds / Wd))
-        fill = max(fill, 0.9 * brush.wet)
+        fill = np.maximum((1.0 - fb) * col_fill[b0] + fb * col_fill[b1], 0.9 * brush.wet)
         # Dry brush: only the canvas tooth (and hair lines) catch paint. Over
         # wet paint the bristles are in full contact anyway.
         thr = 1.5 * (1.0 - fill) ** 0.8 - 0.35
         # a toothy surface breaks up a lightly pressed stroke even when the brush
         # is loaded (paint only touches the tops of the threads: scumbling)
         rough_t = surf.tooth - 0.5
-        thr += (3.2 if rough_t > 0 else 0.6) * rough_t * (1.0 - p) ** 1.2
+        thr = thr + (3.2 if rough_t > 0 else 0.6) * rough_t * (1.0 - p) ** 1.2
         tooth = tooth_w * canvas._tooth[sl] + (1.0 - tooth_w) * hair[wsl]
         catch = np.maximum(_smoothstep(thr - 0.08, thr + 0.08, tooth), wet_contact)
         q = contact * catch
@@ -618,25 +857,42 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
         # instead of staying on the brush (so the brush still empties)...
         caught = float(q.sum()) / max(float(contact.sum()), 1e-12)
         q /= max(caught, 0.2)
-        # ...and once effectively dry, the rest stays in the bristles until a
-        # real reload (e.g. dragging through wet paint).
-        dry = caught < (0.12 if dry else 0.04)
-        tip_v = brush.tip[IV]
-        if not dry and tip_v > 0 and bt.deposits:
-            d = thick * q * f_dep        # absorbent / toothy grounds pull paint off the brush
+        # ...and once the brush as a whole is effectively dry, the rest stays
+        # in the bristles until a real reload (e.g. dragging through wet paint).
+        fill_all = max(float(np.clip((load - _RESIDUAL) / 0.6, 0.0, 1.0)), 0.9 * brush.wet)
+        thr_all = 1.5 * (1.0 - fill_all) ** 0.8 - 0.35 + (thr - (1.5 * (1.0 - fill) ** 0.8 - 0.35))
+        catch_all = np.maximum(_smoothstep(thr_all - 0.08, thr_all + 0.08, tooth), wet_contact)
+        caught_all = float((contact * catch_all).sum()) / max(float(contact.sum()), 1e-12)
+        dry = caught_all < (0.12 if dry else 0.04)
+        tip_v = brush.tip[:, IV]
+        if not dry and tip_v.sum() > 0 and bt.deposits:
+            px_thick = (1.0 - fb) * col_thick[b0] + fb * col_thick[b1]
+            d = px_thick * q * f_dep      # absorbent / toothy grounds pull paint off the brush
+            # each column can only give what it holds
+            demand = assign @ d.ravel()
+            give = np.where(demand > tip_v, tip_v / np.maximum(demand, 1e-30), 1.0)
+            w0 = (1.0 - fb) * give[b0]
+            w1 = fb * give[b1]
+            comp = brush.tip / np.where(tip_v > 0, tip_v, 1.0)[:, None]     # paint per unit volume
+            d_px = d * (w0 + w1)
+            if d_px.sum() > 0:
+                dep = (d * w0)[..., None] * comp[b0] + (d * w1)[..., None] * comp[b1]
+                _deposit(canvas, sl, dep, d_px, stroke_id, cover[wsl])
+                used = (np.bincount(b0.ravel(), (d * w0).ravel(), COLUMNS)
+                        + np.bincount(b1.ravel(), (d * w1).ravel(), COLUMNS))
+                brush.tip -= used[:, None] * comp
+                np.maximum(brush.tip[:, IV], 0.0, out=brush.tip[:, IV])
             off_canvas = thick * float((expo * streak).sum() - contact.sum())
-            total = float(d.sum()) + off_canvas
-            if total > tip_v:
-                d *= tip_v / total
-                off_canvas *= tip_v / total
-            if d.sum() > 0:
-                _deposit(canvas, sl, brush, d, stroke_id, cover[wsl])
-            if off_canvas > 0:
-                brush.tip *= max(1.0 - off_canvas / brush.tip[IV], 0.0)
+            left = brush.tip[:, IV].sum()
+            if off_canvas > 0 and left > 0:
+                brush.tip *= max(1.0 - off_canvas / left, 0.0)
 
-        # 4) overflow back into the reservoir (this is how the brush gets dirty)
-        if brush.tip[IV] > capacity:
-            moved = brush.tip * ((brush.tip[IV] - capacity) / brush.tip[IV])
+        # 4) overflow back into the belly (this is how the brush gets dirty)
+        cap_col = capacity / COLUMNS
+        over = brush.tip[:, IV] - cap_col
+        if (over > 0).any():
+            frac = np.where(over > 0, over / np.maximum(brush.tip[:, IV], 1e-30), 0.0)[:, None]
+            moved = brush.tip * frac
             brush.tip -= moved
             brush.reservoir += moved
 
@@ -659,36 +915,29 @@ def _smoothstep(e0, e1, x):
 
 def _use_paint_off_canvas(brush, Wd, ds, p):
     """Painting past the edge of the canvas still uses up paint."""
-    load = (brush.reservoir[IV] + brush.tip[IV]) / (Wd * Wd)
-    used = _deposit_thickness(load) * (0.5 + p) * ds * Wd * 0.9
-    total = brush.reservoir[IV] + brush.tip[IV]
-    if total > 0:
-        g = max(1.0 - used / total, 0.0)
-        brush.tip *= g
-        brush.reservoir *= g
+    total = brush.volume
+    if total <= 0:
+        return
+    used = _deposit_thickness(total / (Wd * Wd)) * (0.5 + p) * ds * Wd * 0.9
+    g = max(1.0 - used / total, 0.0)
+    brush.tip *= g
+    brush.reservoir *= g
 
 
 def _refill(brush, capacity):
-    need = capacity - brush.tip[IV]
-    if need <= 0 or brush.reservoir[IV] <= 0:
+    """Top up each column's tip from its own belly."""
+    need = capacity / COLUMNS - brush.tip[:, IV]
+    have = brush.reservoir[:, IV]
+    f = np.where((need > 0) & (have > 0), np.minimum(need / np.where(have > 0, have, 1.0), 1.0), 0.0)
+    if not f.any():
         return
-    moved = brush.reservoir * min(need / brush.reservoir[IV], 1.0)
+    moved = brush.reservoir * f[:, None]
     brush.tip += moved
     brush.reservoir -= moved
 
 
-def _exchange(brush, rate):
-    e = rate * min(brush.tip[IV], brush.reservoir[IV])
-    if e <= 0:
-        return
-    from_tip = brush.tip * (e / brush.tip[IV])
-    from_res = brush.reservoir * (e / brush.reservoir[IV])
-    brush.tip += from_res - from_tip
-    brush.reservoir += from_tip - from_res
-
-
-def _deposit(canvas, sl, brush, d, stroke_id, cover):
-    d = d.astype(np.float32)
+def _deposit(canvas, sl, dep, d, stroke_id, cover):
+    """Lay paint ``dep`` (packed, per pixel; volume ``d``) on top of the canvas."""
     top, und = canvas.top[sl], canvas.und[sl]
     top_a, und_a = canvas.top_a[sl], canvas.und_a[sl]
     # Paint from an earlier stroke stops being "top" once new paint covers it.
@@ -703,9 +952,7 @@ def _deposit(canvas, sl, brush, d, stroke_id, cover):
         ids[old] = stroke_id
     top_a += np.where(touched, cover, 0.0).astype(np.float32)
     np.minimum(top_a, 1.0, out=top_a)
-    per_volume = (brush.tip / brush.tip[IV]).astype(np.float32)
-    top += d[..., None] * per_volume
-    brush.tip *= 1.0 - float(d.sum()) / brush.tip[IV]
+    top += dep.astype(np.float32)
 
 
 def _stir(top, und, m, top_a=None, und_a=None):

@@ -62,7 +62,7 @@ Useful members:
 | parameter  | meaning |
 |------------|---------|
 | `path`     | List of `(x, y)` points: a smooth Catmull-Rom spline passes through them. Or a `CatmullRom`, `Bezier` (anchor, handle, handle, anchor, …) or `Polyline`. One point makes a dab. |
-| `paint`    | A `Paint` or a color. `None` uses a clean brush (blending), or the given `brush`. |
+| `paint`    | A `Paint` or a color. `None` uses a clean brush (blending), or the given `brush`. A list loads several paints: `[(paint, amount[, across[, depth]]), ...]` (see `Brush`). |
 | `amount`   | Paint on the brush, in "brush widths of solid stroke": `amount=6` covers about 6 widths before the brush runs dry and starts to break up. A bigger load also gives thicker paint (impasto). Small brushes need bigger amounts to go as far. |
 | `brush`    | The tool: a `BrushType` (e.g. `brushes.FLAT_HOG`, see below), or a `Brush` that keeps leftover paint and dirt between strokes. Default: a medium round. |
 | `width`    | Brush width in px; defaults to the brush's own size. A number, one value per control point, or `f(u)` with `u` in 0..1 along the stroke. |
@@ -73,6 +73,7 @@ Useful members:
 | `pickup`   | How much wet paint the brush lifts and carries along. |
 | `drag`     | How much wet paint the brush pushes ahead. |
 | `smear`    | How long picked-up color lingers on the brush tip, roughly in widths. |
+| `blending` | How readily the paints loaded on the brush merge into each other during the stroke. |
 | `streaks`  | Brush-hair streak texture, 0..1. |
 | `taper`    | Feathered ends: fraction of the length where the brush is lowered/lifted. |
 | `seed`     | Seed for the stroke's texture. |
@@ -134,6 +135,7 @@ custom = BrushType(shape="filbert", width=26, aspect=0.45, stiffness=0.6, capaci
 | `softness` | Feathered edges and ends (mops, blenders). |
 | `taper` | Default feathered ends for strokes made with it. |
 | `deposits` | `False` for tools that only lift paint (the rag). |
+| `blending` | How readily different paints loaded on the brush merge as it is used. |
 | `streaks`, `pickup`, `drag`, `mixing`, `rough` | Explicit overrides of the behavior otherwise derived from stiffness and bristles. |
 
 `brushes.make(shape, width, hair, length)` picks sensible values from the
@@ -220,19 +222,73 @@ in on absorbent grounds), an ochre patch wiped back with the `RAG` tool (clean
 on copper and oil-primed linen, a stain on gesso and paper), and a palette-knife
 slab.*
 
-### `Brush`
+### `Brush`: loading one or several paints
 
 A `Brush` is one physical brush with paint on it: a `BrushType` plus its
-current load and dirt.
+current load and dirt. Paint sits in narrow bristle columns across the brush,
+each with a tip and a belly, so a brush can carry several paints at once:
+side by side, tip over belly, or only partly mixed. It keeps them (and any
+paint it picks up) between strokes.
 
 ```python
-from oilpaint import Brush, brushes, palette
+from oilpaint import Brush, brushes, palette as P
 
-brush = Brush(brushes.FILBERT_HOG).load(palette.TITANIUM_WHITE, amount=8)
-canvas.stroke(path1, brush=brush)   # drags through wet red: brush turns pinkish
-canvas.stroke(path2, brush=brush)   # still pinkish, with what's left
+brush = Brush(brushes.FLAT_SABLE)
+brush.load(P.CADMIUM_RED, amount=8)                        # the whole brush
+brush.load(P.TITANIUM_WHITE, amount=3, across="left")      # double-load one side
+brush.load(P.CADMIUM_YELLOW, amount=0.5, depth="tip")      # touch the tips into yellow
+brush.work(1)                                              # stroke it on the palette to soften the join
+canvas.stroke(path1, brush=brush)
+canvas.stroke(path2, brush=brush)                          # carries on with what's left
 brush.clean()
+
+# or in one call
+canvas.stroke(path, brush=brushes.FLAT_SABLE,
+              paint=[(P.CADMIUM_RED, 8), (P.TITANIUM_WHITE, 3, "left"), (P.CADMIUM_YELLOW, 0.5, None, "tip")])
+
+# several paints picked up together, only partly mixed: a marbled stroke
+Brush(brushes.FILBERT_HOG).load_mix([(P.CADMIUM_RED, 1), (P.TITANIUM_WHITE, 2)], amount=8, mixing=0.3)
 ```
+
+| method / setting | meaning |
+|---|---|
+| `load(paint, amount, across=None, depth="belly")` | `across` says where on the brush: `"left"`, `"right"`, `"center"`, `"edges"`, `("left", 0.3)` (leftmost 30%), `(0.2, 0.6)` (a band, 0 = left edge, 1 = right edge), a function of x in 0..1, or one weight per column. Left and right are the brush's own sides, as seen looking along the stroke. `depth`: `"belly"` (dipped in: the bulk of the load) or `"tip"` (just touched: comes off first). |
+| `load_mix(parts, amount, mixing=0.5)` | Several paints picked up together. `mixing` 1 = fully mixed (like `Paint.mix`), lower = left in streaks across the bristles, so the stroke comes out marbled. |
+| `work(passes, pressure=0.5)` | Stroke the brush back and forth on the palette without painting: its paints blend side to side, and tip with belly. |
+| `BrushType.blending` / `Stroke(blending=...)` | How readily the paints on the brush merge as it is used (0..1). Low keeps a double-loaded brush crisply two-toned for a long stroke (soft synthetic flats); high blends within a few widths (scrubby hog). Pressure speeds it up. Default: from stiffness. |
+| `brush.colors(depth="all")` | The colour of each bristle column, left to right: what is on the brush now. |
+
+What painters do with it:
+
+* **Double loading** (one-stroke painting): a flat loaded with a dark on one
+  side and a light on the other models a form in a single stroke: petals,
+  leaves, ribbons, folds of cloth, the lit and shaded side of a branch.
+  Twisting the brush half a turn (`angle` from 0 to 180) flips which colour
+  leads: a folded ribbon or a curling leaf.
+* **Triple loading**: three bands across a wide flat for skies, sunsets and
+  water in one sweep.
+* **Tip loading**: dip the tip in a second colour for strokes that start with
+  one colour and change into another: leaves with yellow tips, highlights that
+  melt into the local colour.
+* **Brush mixing / broken colour**: pick up two or three paints without fully
+  mixing them (`load_mix`, low `mixing`): marbled, vibrating strokes, as in
+  Sargent or the Impressionists.
+* **Softening the join**: `work()` on the palette, a higher `blending`, or more
+  pressure, from a crisp edge to a smooth gradient across the stroke.
+* **Dirty brush**: not cleaning between strokes carries colour from one area
+  into the next for colour harmony; paint picked up from the canvas stays on
+  the side of the brush that touched it.
+* **Fans and knives**: a double-loaded hog fan puts light and dark blades in
+  every flick of grass; a double-loaded palette knife lays two-tone slabs.
+
+![multi loading](examples/output/multi_loading.png)
+
+*Top: a double-loaded flat (red with a white edge), the same twisted half a
+turn, one-stroke petals, tip-loaded leaves. Then a triple-loaded sky stroke;
+partly mixed pickups at mixing 0.15, 0.45 and 1.0 (left); the same red/yellow
+double load at blending 0.05, 0.4 and 1.0 (right); a viridian/yellow load
+worked 0, 2 and 6 times on the palette; double-loaded fan grass; a two-tone
+knife slab; and a white stroke whose lower side picked up wet red.*
 
 ## How it works
 

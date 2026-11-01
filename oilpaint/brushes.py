@@ -113,7 +113,8 @@ FAN_SOFT = make("fan", 40, "sable", length=0.7, clumps=16, streaks=0.2, name="Fa
 #: Palette knife: a thin steel blade. Lays flat, smooth, thick slabs of paint
 #: with sharp edges and ridges; no brush marks.
 PALETTE_KNIFE = BrushType(shape="flat", width=36, aspect=0.04, stiffness=1.0, bristles=1.0, capacity=0.6,
-                          streaks=0.0, rough=0.0, drag=0.6, pickup=0.25, mixing=0.15, name="Palette knife")
+                          streaks=0.0, rough=0.0, drag=0.6, pickup=0.25, mixing=0.15, blending=0.12,
+                          name="Palette knife")
 
 # --- other tools -------------------------------------------------------------
 #: A rag: lifts wet paint without putting any back, to wipe out lights or

@@ -115,7 +115,7 @@ def test_paths_resample_evenly():
 
 
 def _brush_volume(brush):
-    return brush.tip[-1] + brush.reservoir[-1]
+    return brush.volume
 
 
 def test_stroke_puts_paint_along_its_path_only():
@@ -467,7 +467,7 @@ def test_rag_only_lifts_paint():
     before = c.thickness.sum()
     rag = c.stroke([(10, 40), (190, 40)], brush=brushes.RAG, paint="#00ff00", amount=5, width=30)
     assert c.thickness.sum() < 0.7 * before                  # paint was lifted ...
-    assert rag.reservoir[-1] + rag.tip[-1] > 0               # ... into the rag, and none laid down
+    assert rag.volume > 0                                     # ... into the rag, and none laid down
 
 
 # --------------------------------------------------------------------------
@@ -504,3 +504,114 @@ def test_old_canvas_pickles_without_coverage_still_render():
     old = Canvas.__new__(Canvas)
     old.__setstate__(pickle.loads(pickle.dumps(state)))
     assert np.isfinite(old.render()).all() and old.render(lighting=False).std() > 0.01
+
+
+# --------------------------------------------------------------------------
+# loading several paints on one brush
+
+from oilpaint.brush import COLUMNS  # noqa: E402
+
+
+def _rgb_rows(c, x0, x1):
+    return c.render(lighting=False)[:, x0:x1].mean(axis=1)
+
+
+def test_side_loading_puts_each_paint_on_its_side():
+    c = Canvas(300, 100, seed=21, texture=0)
+    brush = Brush(brushes.FLAT_SABLE.sized(40)).load("#c8201e", 10).load("#f6f5f0", 8, across="left")
+    c.stroke([(20, 50), (280, 50)], brush=brush)            # moving right: the brush's left is up
+    rows = _rgb_rows(c, 60, 200)
+    upper, lower = rows[36:46].mean(axis=0), rows[54:64].mean(axis=0)
+    assert upper.sum() > lower.sum() + 0.3                   # the white side is the lighter one
+    assert lower[0] > lower[1] + 0.3                         # the other side stays red
+
+
+def test_turning_a_flat_past_90_degrees_swaps_its_sides():
+    def lighter_side(angle):
+        c = Canvas(300, 100, seed=22, texture=0)
+        brush = Brush(brushes.FLAT_SABLE.sized(40)).load("#c8201e", 10).load("#f6f5f0", 8, across="left")
+        c.stroke([(20, 50), (280, 50)], brush=brush, angle=angle)
+        rows = _rgb_rows(c, 60, 200).sum(axis=1)
+        return "up" if rows[36:46].mean() > rows[54:64].mean() else "down"
+    assert lighter_side(0) == "up" and lighter_side(180) == "down"
+
+
+def test_tip_loading_comes_off_first():
+    c = Canvas(400, 80, seed=23, texture=0)
+    brush = Brush(brushes.ROUND.sized(24)).load("#4f6b25", 12).load("#f7c600", 1.0, depth="tip")
+    c.stroke([(20, 40), (380, 40)], brush=brush)
+    img = c.render(lighting=False)
+    start, later = img[36:44, 22:32].mean(axis=(0, 1)), img[36:44, 200:260].mean(axis=(0, 1))
+    assert start[0] > later[0] + 0.12                        # yellow first, then green
+
+
+def test_partly_mixed_loads_are_marbled():
+    def streakiness(mixing):
+        c = Canvas(300, 100, seed=24, texture=0)
+        brush = Brush(brushes.FILBERT_SABLE.sized(50)).load_mix([("#c8201e", 1), ("#f7c600", 1)], 12,
+                                                                mixing=mixing, seed=1)
+        c.stroke([(20, 50), (280, 50)], brush=brush, streaks=0.0)
+        return _rgb_rows(c, 60, 160)[35:65, 1].std()       # green channel varies with the red/yellow share
+    assert streakiness(0.1) > 3 * streakiness(1.0)
+
+
+def test_blending_controls_how_long_two_paints_stay_apart():
+    def contrast(blending):
+        c = Canvas(700, 100, seed=25, texture=0)
+        b = Brush(brushes.FLAT_HOG.sized(40).with_(blending=blending))
+        b.load("#c8201e", 30, across="left").load("#f7c600", 30, across="right")
+        c.stroke([(20, 50), (680, 50)], brush=b, pressure=0.7)
+        rows = _rgb_rows(c, 550, 650)
+        return float(np.abs(rows[36:44, 1].mean() - rows[56:64, 1].mean()))
+    assert contrast(0.05) > 2 * contrast(1.0)
+
+
+def test_working_the_brush_blends_its_columns():
+    b = Brush(brushes.FLAT_SABLE).load("#c8201e", 5, across="left").load("#f7c600", 5, across="right")
+    def blended_columns(brush):          # columns that are neither the red nor the yellow
+        g = np.array([int(h[3:5], 16) for h in brush.colors()])
+        return int(((g > 50) & (g < 180)).sum())
+    before = blended_columns(b)
+    v = b.volume
+    b.work(4)
+    assert blended_columns(b) >= before + 4 and abs(b.volume - v) < 1e-6 * v
+
+
+def test_contamination_stays_on_the_side_that_touched():
+    c = Canvas(300, 120, seed=26)
+    c.stroke([(140, 75), (160, 75)], "#c8201e", amount=20, brush=brushes.FLAT_HOG.sized(30), angle=90)
+    b = Brush(brushes.FLAT_HOG.sized(40)).load("#f6f5f0", 14)
+    c.stroke([(20, 60), (280, 60)], brush=b)               # only its lower (right) side crosses the red
+    reds = [int(h[1:3], 16) - int(h[5:7], 16) for h in b.colors()]
+    assert np.mean(reds[-6:]) > np.mean(reds[:6]) + 3
+
+
+def test_multi_load_conserves_paint():
+    c = Canvas(300, 120, seed=27)
+    b = Brush(brushes.FLAT_HOG.sized(30))
+    b.load("#c8201e", 6).load("#f6f5f0", 3, across="left").load("#f7c600", 1, depth="tip")
+    b.load_mix([("#1b3fa0", 1), ("#f6f5f0", 2)], 4, mixing=0.3, across="right", seed=2)
+    loaded = b.volume
+    c.stroke([(20, 60), (150, 40), (280, 70)], brush=b, angle=lambda u: 120 * u)
+    assert c.thickness.sum() + b.volume == pytest.approx(loaded, rel=1e-3)
+
+
+def test_stroke_accepts_a_list_of_paints():
+    c = Canvas(200, 80, seed=28, texture=0)
+    c.stroke([(10, 40), (190, 40)], paint=[("#c8201e", 8), ("#f6f5f0", 4, "left"), ("#f7c600", 0.5, None, "tip")],
+             brush=brushes.FLAT_SABLE.sized(30))
+    assert c.thickness.sum() > 0
+
+
+def test_across_options_and_errors():
+    from oilpaint.brush import _across_weights
+    for across in (None, "all", "left", "right", "center", "edges", ("left", 0.3), ("right", 0.2), (0.2, 0.6),
+                   lambda x: x, np.ones(COLUMNS)):
+        w = _across_weights(across)
+        assert w.shape == (COLUMNS,) and abs(w.sum() - 1) < 1e-9 and w.min() >= 0
+    assert _across_weights("left")[:4].sum() > 0.1 and _across_weights("left")[-4:].sum() < 1e-6
+    for bad in ("top", ("up", 0.5), (2.0, 3.0), [1, 2, 3]):
+        with pytest.raises(ValueError):
+            _across_weights(bad)
+    with pytest.raises(ValueError):
+        Brush().load("#ffffff", 1, depth="handle")
