@@ -537,7 +537,11 @@ covered, computed from the exact footprint, so stroke edges and lines thinner
 than a pixel are anti-aliased: an edge pixel is half covered by a normal
 layer of paint rather than fully covered by an impossibly thin one. Paint too
 thin to form a film (dry-brush specks, smears) also renders as partial
-coverage.
+coverage. A new stroke only buries the wet paint under it where it lays a
+covering film: along the feathered edge of a soft brush, a faint trace of
+paint stirs into the wet layer instead. So white scrubbed over white on a wet
+blue sky stays white where the strokes overlap; it doesn't leave a blue ring
+at every soft edge.
 
 ![glazing](examples/output/glazing.png)
 
@@ -627,10 +631,11 @@ it's wet.
   dries, and wet paint settles right after each stroke rather than over
   minutes.
 * Each pixel keeps two wet layers (the latest one and everything wet beneath
-  it). A third wet layer is merged into one of them: new paint always goes on
-  top, while paint that is only pushed around merges with the layer it is
-  most like. Very complex wet layering (three different colours stacked, then
-  scraped) loses some of its structure.
+  it). A third wet layer is merged into one of them: new paint goes on top
+  where it covers (a faint trace stirs into the top layer instead), while
+  paint that is only pushed around merges with the layer it is most like.
+  Very complex wet layering (three different colours stacked, then scraped)
+  loses some of its structure.
 * Wet paint under a knife flows as a thin film along the knife's direction of
   travel only, and brushes still move paint by simpler rules (pickup, smear,
   bow wave). Paint folding over itself or swirling sideways (marbling) isn't

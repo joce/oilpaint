@@ -50,6 +50,17 @@ PACKED = N + 3
 
 # Two paints this alike (see _alike) count as much the same paint.
 _SAME_PAINT = 0.6
+# A new film of paint this thick covers the wet paint under it about two-thirds
+# of the way: it buries that much of it (see _deposit) ...
+_COVERING_FILM = 0.15
+# ... and once it would bury this much, it buries it all (see _Pending).
+_BURIED = 0.9
+# Where the body of a brush passes over (a full pass at this much of its
+# full-strength profile), even a light touch lays its paint on top.
+_BODY = (0.5, 0.8)
+# Two wet layers this alike look the same mixed or one over the other (a sky
+# worked in several strokes: ~0.1; white over that sky: ~0.4 and up).
+_SAME_LAYER = 0.2
 # Paint thinner than this can't form a continuous film (as canvas.MIN_FILM).
 _MIN_FILM = 0.15
 # Width of the footprint's soft (anti-aliased) edge in pixels. Kept narrow:
@@ -778,10 +789,20 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
     """
     run = _Run(canvas, stroke)
     step = _knife_step if run.bt.rigid else _brush_step
-    for i in range(1, len(run.pts)):
-        s = run.footprint(i)
-        if s is not None:
-            step(run, s)
+    pending = None
+    if not run.bt.rigid:
+        y0, y1, x0, x1 = run.bounds()
+        if y0 < y1 and x0 < x1:
+            pending = canvas._pending = _Pending(canvas, run.stroke_id, y0, y1, x0, x1)
+    try:
+        for i in range(1, len(run.pts)):
+            s = run.footprint(i)
+            if s is not None:
+                step(run, s)
+    finally:
+        canvas._pending = None
+    if pending is not None:
+        pending.settle()
     run.settle()
     return run.brush
 
@@ -1114,13 +1135,19 @@ class _Run:
         s.taps = taps
 
     # ------------------------------------------------------------------
-    def settle(self):
-        """The paint settles: fluid paint levels out, sheer edges of thick paint slump."""
+    def bounds(self):
+        """(y0, y1, x0, x1): the part of the canvas the stroke can reach."""
         canvas, pts = self.canvas, self.pts
         H, W = canvas.height, canvas.width
         pad = float(self.radii.max()) * self.reach + self.margin + 2.0
         bx0, by0 = int(max(np.floor(pts[:, 0].min() - pad), 0)), int(max(np.floor(pts[:, 1].min() - pad), 0))
         bx1, by1 = int(min(np.ceil(pts[:, 0].max() + pad) + 1, W)), int(min(np.ceil(pts[:, 1].max() + pad) + 1, H))
+        return by0, by1, bx0, bx1
+
+    def settle(self):
+        """The paint settles: fluid paint levels out, sheer edges of thick paint slump."""
+        canvas = self.canvas
+        by0, by1, bx0, bx1 = self.bounds()
         if bx0 < bx1 and by0 < by1:
             region = (slice(by0, by1), slice(bx0, bx1))
             _level(canvas, region)
@@ -1246,7 +1273,7 @@ def _brush_step(run: _Run, s: _Step) -> None:
         thick_px = s.at_pixels(col_thick)
         d *= np.clip(1.0 + _smoothstep(0.3, 2.0, thick_px) * canvas._hollows[s.sl] / np.maximum(thick_px, 1e-6),
                      0.0, None)
-        _lay(run, s, d, s.cover[wsl])
+        _lay(run, s, d, s.cover[wsl], by_film=True, reach=s.expo_c)
         # the sides of the brush brush past the canvas edge
         off_canvas = thick * float((s.expo * s.streak).sum() - s.contact.sum())
         left = brush.tip[:, IV].sum()
@@ -1559,7 +1586,8 @@ class _Ridges:
                 e_c = np.interp(el, s.grid, s.c_tab) * e_r
                 e_h = np.interp(el, s.grid, s.h_tab, left=0.0, right=0.0) * e_r
                 e_ring = np.maximum(e_side, np.abs(e_along - e_c) - e_h)
-            _spread(canvas, esl, tent(e_ring, w)[ewsl], self.ring, run.stroke_id, run.brush, geo(e_ring, w)[ewsl])
+            _spread(canvas, esl, tent(e_ring, w)[ewsl], self.ring, run.stroke_id, run.brush, geo(e_ring, w)[ewsl],
+                    by_film=not run.bt.rigid)
         if self.left[IV] > 0 or self.right[IV] > 0:
             w = float(np.clip(0.24 * s.r * s.lmax, 0.6, margin - 1.0))   # scales with the mark's width
             ce = 0.0 if circle else np.where(e_lat > 0, s.c_tab[-1], s.c_tab[0]) * e_r
@@ -1569,12 +1597,13 @@ class _Ridges:
             box = _smoothstep(-s.ds - ramp, -s.ds + ramp, rel_e) * _smoothstep(ramp, -ramp, rel_e)
             band, g = tent(e_side, w) * box, geo(e_side, w) * box
             for pk, mask in ((self.left, e_lat < 0), (self.right, e_lat > 0)):
-                _spread(canvas, esl, (band * mask)[ewsl], pk, run.stroke_id, run.brush, (g * mask)[ewsl])
+                _spread(canvas, esl, (band * mask)[ewsl], pk, run.stroke_id, run.brush, (g * mask)[ewsl],
+                        by_film=not run.bt.rigid)
 
 
-def _lay(run, s, d, cover_px, moved=False):
+def _lay(run, s, d, cover_px, moved=False, by_film=False, reach=None):
     """Lay volume ``d`` per pixel from the tips of the columns above it;
-    each column can only give what it holds."""
+    each column can only give what it holds. ``by_film``, ``reach``: see :func:`_deposit`."""
     brush = run.brush
     tip_v = brush.tip[:, IV]
     demand = s.assign @ d.ravel()
@@ -1584,7 +1613,7 @@ def _lay(run, s, d, cover_px, moved=False):
     d_px = sum(v for _, v in parts)
     if d_px.sum() > 0:
         dep = sum(v[..., None] * comp[idx] for idx, v in parts)
-        _deposit(run.canvas, s.sl, dep, d_px, run.stroke_id, cover_px, moved=moved)
+        _deposit(run.canvas, s.sl, dep, d_px, run.stroke_id, cover_px, moved=moved, by_film=by_film, reach=reach)
         used = sum(np.bincount(idx.ravel(), v.ravel(), COLUMNS) for idx, v in parts)
         brush.tip -= used[:, None] * comp
         np.maximum(brush.tip[:, IV], 0.0, out=brush.tip[:, IV])
@@ -1641,7 +1670,7 @@ def _alike(a, b):
     return np.abs(fa - fb).mean(axis=-1)
 
 
-def _deposit(canvas, sl, dep, d, stroke_id, cover, moved=False):
+def _deposit(canvas, sl, dep, d, stroke_id, cover, moved=False, by_film=False, reach=None):
     # ``moved`` may also be a per-pixel mask
     """Lay paint ``dep`` (packed, per pixel; volume ``d``) on top of the canvas.
 
@@ -1649,7 +1678,19 @@ def _deposit(canvas, sl, dep, d, stroke_id, cover, moved=False):
     joins the layer below. Paint that is only being shoved around (``moved``:
     pushed ahead of a knife, squeezed into a ridge) instead merges with
     whichever layer it is most like, so that, say, white pushed over white
-    stays a white skin over the purple beneath it."""
+    stays a white skin over the purple beneath it.
+
+    With ``by_film``, how much of the old top goes under depends on how well
+    the new paint covers it (:func:`_buries`): a covering film buries it, a
+    faint trace (the feathered edge of a soft brush) only stirs into it.
+    Buried, it would mix with the layer below and show through the faint new
+    film: white over wet blue would turn blue along every soft edge. Where the
+    body of the brush passes over (``reach``: this step's share of a full pass
+    at full strength), even a thin film goes on top: a light touch lays paint
+    over wet paint. (Where the two old layers are much the same paint it goes
+    under anyway.) During a brushstroke this waits until the stroke has passed
+    (see :class:`_Pending`): a pixel first grazed by the edge of a looping
+    stroke may later get its body."""
     top, und = canvas.top[sl], canvas.und[sl]
     top_a, und_a = canvas.top_a[sl], canvas.und_a[sl]
     # Paint from an earlier stroke stops being "top" once new paint covers it.
@@ -1671,11 +1712,25 @@ def _deposit(canvas, sl, dep, d, stroke_id, cover, moved=False):
             d = np.where(keep, 0.0, d)
             touched = d > 1e-7
             old = touched & (ids != stroke_id)
+    pending = getattr(canvas, "_pending", None)
+    if by_film and not np.any(moved) and pending is not None and old.any():
+        dep, d, cover, touched, old = pending.hold(sl, dep, d, cover, old, reach)
     if old.any():
-        und[old] += top[old]
-        und_a[old] = np.maximum(und_a[old], top_a[old])
-        top[old] = 0
-        top_a[old] = 0
+        if not by_film:
+            und[old] += top[old]
+            und_a[old] = np.maximum(und_a[old], top_a[old])
+            top[old] = 0
+            top_a[old] = 0
+        else:
+            k = _buries(d[old])
+            if reach is not None:
+                k = np.maximum(k, _smoothstep(*_BODY, np.broadcast_to(reach, d.shape)[old]))
+            k = np.where(_harmless(top[old], und[old]), 1.0, k).astype(np.float32)
+            going = k[:, None] * top[old]
+            und[old] += going
+            und_a[old] = np.where(k > 0.01, np.maximum(und_a[old], top_a[old]), und_a[old])
+            top[old] -= going
+            top_a[old] *= 1.0 - k
         ids[old] = stroke_id
     # The tool covers what it passes over with this stroke's paint, also where it
     # adds nothing new in this step (it already laid paint there).
@@ -1685,7 +1740,112 @@ def _deposit(canvas, sl, dep, d, stroke_id, cover, moved=False):
     top += dep.astype(np.float32)
 
 
-def _spread(canvas, sl, w, pk, stroke_id, brush, cover):
+def _buries(film):
+    """How much of the wet top layer a new film of paint this thick buries (see
+    :func:`_deposit`): a covering film all of it, a faint trace hardly any."""
+    return 1.0 - np.exp(-np.asarray(film) / _COVERING_FILM)
+
+
+def _harmless(top, und):
+    """Where burying the top layer changes nothing you could see: the layer
+    below is much the same paint (or there is none)."""
+    return (und[..., IV] < 1e-4) | (_alike(np.maximum(top, 0.0), np.maximum(und, 0.0)) < _SAME_LAYER)
+
+
+class _Pending:
+    """New paint from the brushstroke in progress, held back where it lands on
+    wet paint from earlier strokes until we know how well the stroke covers it.
+
+    Once the body of the brush has passed over a pixel, or the stroke has
+    laid a covering film on it, the old top layer goes under and the held
+    paint becomes the new top. Pixels only ever grazed by the brush's
+    feathered edge are settled when the stroke ends: the old top keeps its
+    place, the share the faint new film would bury (:func:`_buries`) goes
+    under, and the new paint stirs into the rest."""
+
+    def __init__(self, canvas, stroke_id, y0, y1, x0, x1):
+        self.canvas, self.stroke_id = canvas, stroke_id
+        self.y0, self.y1, self.x0, self.x1 = y0, y1, x0, x1
+        h, w = y1 - y0, x1 - x0
+        self.paint = np.zeros((h, w, PACKED), np.float32)
+        self.cover = np.zeros((h, w), np.float32)
+        self.reach = np.zeros((h, w), np.float32)
+        self.on = np.zeros((h, w), bool)
+
+    def hold(self, sl, dep, d, cover, old, reach=None):
+        """Take this step's paint at pixels with an earlier top layer. Returns
+        (dep, d, cover, touched, old) for what is left to lay down now."""
+        canvas = self.canvas
+        ys, xs = sl
+        # the part of the window inside the held area
+        wy0, wy1 = max(ys.start, self.y0), min(ys.stop, self.y1)
+        wx0, wx1 = max(xs.start, self.x0), min(xs.stop, self.x1)
+        if wy0 >= wy1 or wx0 >= wx1:
+            return dep, d, cover, d > 1e-7, old
+        win = (slice(wy0 - ys.start, wy1 - ys.start), slice(wx0 - xs.start, wx1 - xs.start))
+        mine = (slice(wy0 - self.y0, wy1 - self.y0), slice(wx0 - self.x0, wx1 - self.x0))
+        top = canvas.top[sl][win]
+        # an earlier top layer worth keeping out of the layer below
+        h = old[win] & (top[..., IV] > 1e-4)
+        if h.any():
+            h[h] = ~_harmless(top[h], canvas.und[sl][win][h])
+        if not h.any():
+            return dep, d, cover, d > 1e-7, old
+        here = np.zeros_like(old)
+        here[win] = h
+        cover = np.broadcast_to(np.asarray(cover, np.float32), d.shape)
+        paint, pcov, on = self.paint[mine], self.cover[mine], self.on[mine]
+        paint[h] += dep[win][h].astype(np.float32)
+        pcov[h] += cover[win][h]
+        rch = self.reach[mine]
+        if reach is not None:
+            rch[h] += np.broadcast_to(reach, d.shape)[win][h]
+        on[h] = True
+        # the body of the brush has been over these, or it laid a covering film: bury the old top now
+        done = h & (self.buried(paint[..., IV], rch) >= _BURIED)
+        if done.any():
+            und, top_a = canvas.und[sl][win], canvas.top_a[sl][win]
+            und_a, ids = canvas.und_a[sl][win], canvas.top_id[sl][win]
+            und[done] += top[done]
+            und_a[done] = np.maximum(und_a[done], top_a[done])
+            top[done] = paint[done]
+            top_a[done] = np.minimum(pcov[done], 1.0)
+            ids[done] = self.stroke_id
+            paint[done] = 0.0
+            pcov[done] = 0.0
+            rch[done] = 0.0
+            on[done] = False
+        # nothing more to lay at the held pixels in this step
+        dep = np.where(here[..., None], 0.0, dep)
+        d = np.where(here, 0.0, d)
+        return dep, d, cover, d > 1e-7, old & ~here
+
+    @staticmethod
+    def buried(film, reach):
+        """How much of the old top layer goes under: all of it where the body of
+        the brush went over it or it laid a covering film, less elsewhere."""
+        return np.maximum(_buries(film), _smoothstep(*_BODY, reach))
+
+    def settle(self):
+        """The stroke has passed: settle the pixels its edge only grazed."""
+        on = self.on
+        if not on.any():
+            return
+        canvas = self.canvas
+        sl = (slice(self.y0, self.y1), slice(self.x0, self.x1))
+        top, und = canvas.top[sl], canvas.und[sl]
+        top_a, und_a, ids = canvas.top_a[sl], canvas.und_a[sl], canvas.top_id[sl]
+        k = self.buried(self.paint[on][:, IV], self.reach[on])
+        k = np.where(_harmless(top[on], und[on]), 1.0, k).astype(np.float32)
+        going = k[:, None] * top[on]
+        und[on] += going
+        und_a[on] = np.where(k > 0.01, np.maximum(und_a[on], top_a[on]), und_a[on])
+        top[on] += self.paint[on] - going
+        top_a[on] = np.maximum(top_a[on] * (1.0 - k), np.minimum(self.cover[on], 1.0))
+        ids[on] = self.stroke_id
+
+
+def _spread(canvas, sl, w, pk, stroke_id, brush, cover, by_film=False):
     """Lay the packed paint ``pk`` over the window ``sl`` in proportion to the
     weights ``w`` (a squeezed-out ridge covering ``cover`` of each pixel). If
     none of it lands on the canvas, it stays on the tool."""
@@ -1697,7 +1857,7 @@ def _spread(canvas, sl, w, pk, stroke_id, brush, cover):
         return
     share = w / tot
     d = share * pk[IV]
-    _deposit(canvas, sl, share[..., None] * pk[None, None, :], d, stroke_id, cover, moved=True)
+    _deposit(canvas, sl, share[..., None] * pk[None, None, :], d, stroke_id, cover, moved=True, by_film=by_film)
 
 
 def _layer_speed(z0, z1, gap, slip):
@@ -1789,7 +1949,8 @@ def _place(canvas, pk, x0, y0, sx, sy, stroke_id):
     if d.max() <= 0:
         return
     # moved paint doesn't change how much of each pixel is covered
-    _deposit(canvas, (slice(ry0, ry1), slice(rx0, rx1)), moved, d, stroke_id, np.zeros_like(d), moved=True)
+    _deposit(canvas, (slice(ry0, ry1), slice(rx0, rx1)), moved, d, stroke_id, np.zeros_like(d), moved=True,
+             by_film=True)
 
 
 def _lift_off(canvas, sl, under, amp, cell, direction, rng):

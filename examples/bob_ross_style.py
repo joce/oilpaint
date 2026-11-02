@@ -295,12 +295,17 @@ def cloud(puffs, base, size=50, seed=0):
 
 
 def wisp(x0, x1, y, width, seed=0):
-    """A thin streak of cloud, low in the sky: a little white on a very soft
-    brush, pulled across barely touching, lowered in and lifted off at the ends."""
+    """A thin streak of cloud, low in the sky: a few passes of a very soft
+    brush with hardly any white on it, barely touching, each a little shorter
+    or higher than the last, so they melt into one ragged, fading streak."""
     r = np.random.default_rng(seed)
-    path = np.stack([np.linspace(x0, x1, 5), y + r.normal(0, width * 0.03, 5)], 1)
-    b = loaded(CLOUD_BRUSH.sized(width).with_(softness=0.95), thin(TITANIUM_WHITE), 0.25 * path_length(path) / width)
-    st(path, None, brush=b, pressure=lambda u: 0.15 * np.sin(np.pi * u) ** 0.7, pickup=0.15, taper=0.3)
+    length = x1 - x0
+    for _ in range(5):
+        a, b = x0 + length * r.uniform(0.0, 0.25), x1 - length * r.uniform(0.0, 0.25)
+        w = width * r.uniform(0.6, 1.0)
+        path = np.stack([np.linspace(a, b, 5), y + r.normal(0, width * 0.05) + r.normal(0, w * 0.03, 5)], 1)
+        brush = loaded(CLOUD_BRUSH.sized(w).with_(softness=0.95), thin(TITANIUM_WHITE), 0.12 * path_length(path) / w)
+        st(path, None, brush=brush, pressure=lambda u: 0.1 * np.sin(np.pi * u) ** 0.7, pickup=0.2)
 
 
 # puffs (x, y, radius) of each cloud, and its base
@@ -316,9 +321,9 @@ def paint_clouds():
     cloud(*LEFT_CLOUD, size=42, seed=2)
     cloud(*SMALL_CLOUD, size=28, seed=3)
     # and a few thin streaks low in the sky, just above the far mountains
-    wisp(740, 970, 290, 46, seed=4)
-    wisp(850, 1040, 262, 34, seed=5)
-    wisp(160, 330, 308, 40, seed=6)
+    wisp(740, 970, 290, 82, seed=4)
+    wisp(850, 1040, 262, 60, seed=5)
+    wisp(160, 330, 308, 70, seed=6)
 
 
 # ===========================================================================

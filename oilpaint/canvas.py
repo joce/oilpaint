@@ -87,7 +87,7 @@ class Canvas:
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        for name in ("top_k", "top_s", "top_v", "und_k", "und_s", "und_v"):
+        for name in ("top_k", "top_s", "top_v", "und_k", "und_s", "und_v", "_pending"):
             state.pop(name, None)
         return state
 

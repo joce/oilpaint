@@ -1016,3 +1016,19 @@ def test_a_scraper_leaves_no_outline_on_bare_canvas():
     w = wet[:, 150:400]
     inside = (w > 0.5) & (np.roll(w, 2, 0) > 0.5) & (np.roll(w, -2, 0) > 0.5)
     assert (lum[inside] > 0.6).sum() == 0
+
+
+def test_soft_strokes_overlapping_on_a_wet_ground_leave_no_ring():
+    # white over white on wet blue: the soft edge of the second stroke must not
+    # bury the first one's white in the blue and leave a bluish ring
+    c = Canvas(400, 220, seed=5)
+    for y in range(20, 220, 40):
+        c.stroke([(-30, y), (430, y)], paint=P.PHTHALO_BLUE, amount=14, brush=brushes.FLAT_HOG.sized(60),
+                 pressure=0.5, seed=y)
+    soft = brushes.make("round", 60, "squirrel", softness=0.85)
+    for k, y in enumerate((95, 125)):
+        c.stroke([(60, y), (340, y)], brush=Brush(soft).load(P.TITANIUM_WHITE, 12), pressure=0.35, seed=40 + k)
+    img = c.render(lighting=False)
+    blueness = (img[..., 2] - img[..., 0])[60:160, 120:280].mean(axis=1)    # down the middle of the strokes
+    between = blueness[95 - 60:125 - 60 + 1]
+    assert between.max() - max(between[0], between[-1]) < 0.03
