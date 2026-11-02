@@ -19,7 +19,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from oilpaint import Brush, Canvas, Paint, brushes, palette as P  # noqa: E402
+from oilpaint import Brush, Canvas, Paint, brushes, palette as P, surfaces  # noqa: E402
 
 W, H = 1500, 1060
 rng = np.random.default_rng(1565)
@@ -32,9 +32,16 @@ def pick(seq):
 # ===========================================================================
 # Palette: lead white, bone black, the earths, a copper green, some vermilion
 # ===========================================================================
-WHITE, BLACK = P.TITANIUM_WHITE, P.IVORY_BLACK
-RAW_UMBER, BURNT_UMBER, OCHRE, SIENNA = P.RAW_UMBER, P.BURNT_UMBER, P.YELLOW_OCHRE, P.BURNT_SIENNA
-GREEN, BLUE, RED, MEDIUM = P.VIRIDIAN, P.ULTRAMARINE_BLUE, P.CADMIUM_RED, P.MEDIUM
+# Bruegel painted thinly and smoothly on panel: the colours are ground in oil
+# and let down with a little medium, so they flow out flat; lead white has a
+# little more body (the lights on snow), but nothing stands up as impasto.
+# Mixes average the body.
+THIN = 0.45
+WHITE, BLACK = P.TITANIUM_WHITE.with_body(0.6), P.IVORY_BLACK.with_body(THIN)
+RAW_UMBER, BURNT_UMBER = P.RAW_UMBER.with_body(THIN), P.BURNT_UMBER.with_body(THIN)
+OCHRE, SIENNA = P.YELLOW_OCHRE.with_body(THIN), P.BURNT_SIENNA.with_body(THIN)
+GREEN, BLUE, RED = P.VIRIDIAN.with_body(THIN), P.ULTRAMARINE_BLUE.with_body(THIN), P.CADMIUM_RED.with_body(THIN)
+MEDIUM = P.MEDIUM
 
 
 def mix(*parts):
@@ -103,8 +110,30 @@ EARTH = mix((RAW_UMBER, 1), (BURNT_UMBER, 0.5), (WHITE, 0.25))
 # ===========================================================================
 # Low-level helpers. Everything ends up as canvas.stroke(...)
 # ===========================================================================
-canvas = Canvas(W, H, ground="#efe8d8", texture=0.25, weave=2.5, seed=1565)
+# An oak panel with a chalk ground, sized and primed (so it barely drinks the
+# oil) and a thin warm imprimatura; the grain of the wood and the brushmarks of
+# the priming show faintly under thin paint.
+PANEL = surfaces.GESSO_PANEL.with_(absorbency=0.15, relief=0.3, priming_marks=0.35, ground="#efe8d8",
+                                   toning="#c9a66b", toning_strength=0.12, name="primed oak panel")
+canvas = Canvas(W, H, surface=PANEL, seed=1565)
 N_STROKES = [0]
+
+# The brushes: soft hair throughout (sable, squirrel), as a panel painter used.
+DETAIL = brushes.make("round", 2, "sable", length=0.75, spread=0.2, name="detail sable")    # drawing, twigs
+ROUND = brushes.make("round", 8, "sable", length=0.6, spread=0.3, name="round sable")        # small forms
+FILBERT = brushes.make("filbert", 24, "sable", length=0.6, spread=0.12, name="filbert sable")  # areas
+BROAD = brushes.make("flat", 50, "squirrel", length=0.8, softness=0.15, spread=0.05, name="broad")
+
+
+def tool_for(width):
+    """The brush a painter would pick for a mark this wide."""
+    return DETAIL if width < 3 else ROUND if width < 11 else FILBERT if width < 40 else BROAD
+
+
+# Paint the hair holds, in brush widths (smaller brushes hold more for their
+# size). A longer stroke is painted in several loads.
+HOLD = 8.0
+pr = np.random.default_rng(15652)       # for seeds of the paint on the brush
 
 
 def length(pts):
@@ -112,17 +141,60 @@ def length(pts):
     return float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum()) if len(pts) > 1 else 0.0
 
 
-def st(pts, paint, width, amount=None, pressure=0.35, **kw):
-    """One stroke; by default the brush holds enough paint for the whole path."""
+def st(pts, paint, width, amount=None, pressure=0.35, tool=None, broken=0.0, **kw):
+    """One stroke with a brush suited to its width. The brush is loaded with as
+    much paint as it holds; a long stroke is painted in several loads, each
+    picking up where the last one ran thin. With ``broken`` > 0 the brush
+    picks up the paint together with a warmer and a cooler variant of it,
+    only partly mixed: broken colour, as in real paint."""
     pts = [tuple(map(float, p)) for p in pts]
     w = float(np.mean(width)) if np.ndim(width) else float(width)
-    if amount is None:
-        amount = 2.5 + 1.25 * length(pts) / max(w, 1.0)
+    if paint is None or "brush" in kw:       # blending passes, or an explicitly loaded brush
+        N_STROKES[0] += 1
+        return canvas.stroke(pts, paint=paint, amount=amount or 0, width=width, pressure=pressure, **kw)
+    tool = tool or tool_for(w)
+    L = length(pts)
+    need = amount if amount is not None else 2.5 + 1.25 * L / max(w, 1.0)
+    cap = HOLD * max(1.0, 20.0 / max(w, 0.5)) ** 1.5
+    loads = 1 if (amount is not None or need <= cap or len(pts) < 2) else int(np.ceil(need / cap))
+    if loads == 1:
+        return _one(pts, paint, width, need, pressure, tool, broken, kw)
+    # several loads: split the path by arc length, overlapping a little
+    P_ = np.asarray(pts)
+    d = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(P_, axis=0), axis=1))])
+    def along(profile):     # a width/pressure profile as (arc positions, values), as the engine reads it
+        if not np.ndim(profile):
+            return None
+        v = np.asarray(profile, float)
+        return (d if v.size == len(pts) else np.linspace(0.0, d[-1], v.size)), v
+    widths, press = along(width), along(pressure)
+    taper = kw.pop("taper", 0.0)
+    t0, t1 = (taper, taper) if np.isscalar(taper) else taper
+    for k in range(loads):
+        a = max(0.0, d[-1] * k / loads - 0.6 * w)
+        b = min(d[-1], d[-1] * (k + 1) / loads)
+        n = max(2, int((b - a) / 30) + 2)
+        t = np.linspace(a, b, n)
+        sub = list(zip(np.interp(t, d, P_[:, 0]), np.interp(t, d, P_[:, 1])))
+        wk = list(np.interp(t, *widths)) if widths is not None else width
+        pk = list(np.interp(t, *press)) if press is not None else pressure
+        tk = (t0 * loads if k == 0 else 0.0, t1 * loads if k == loads - 1 else 0.0)
+        _one(sub, paint, wk, need / loads + 1.0, pk, tool, broken, dict(kw, taper=tuple(min(x, 0.5) for x in tk)))
+
+
+def _one(pts, paint, width, amount, pressure, tool, broken, kw):
     N_STROKES[0] += 1
-    return canvas.stroke(pts, paint=paint, amount=amount, width=width, pressure=pressure, **kw)
+    if broken > 0 and isinstance(paint, Paint):
+        warm = mix((paint, 1), (OCHRE, 0.03 * broken), (SIENNA, 0.008 * broken))
+        cool = mix((paint, 1), (GREEN, 0.025 * broken), (BLUE, 0.01 * broken), (BLACK, 0.004 * broken))
+        brush = Brush(tool).load_mix([(paint, 3), (warm, 1), (cool, 1)], amount, mixing=0.45,
+                                     seed=int(pr.integers(1 << 31)))
+        return canvas.stroke(pts, width=width, pressure=pressure, brush=brush, **kw)
+    return canvas.stroke(pts, paint=paint, amount=amount, width=width, pressure=pressure, brush=tool, **kw)
 
 
 def dab(x, y, paint, size, **kw):
+    kw.setdefault("tool", DETAIL if size < 3 else ROUND)
     st([(x, y), (x + 0.01, y)], paint, size, **kw)
 
 
@@ -141,7 +213,7 @@ def inside(poly, x, y):
 
 
 def fill(poly, paint_at, width, spacing, angle=0.0, seg_len=(120, 220), wobble=2.0, overrun=0.3,
-         pressure=0.4, **kw):
+         pressure=0.4, broken=1.6, **kw):
     """Cover a polygon with roughly parallel strokes at `angle` (radians).
     `paint_at` is a Paint or a function (x, y) -> Paint."""
     get = paint_at if callable(paint_at) else (lambda x, y: paint_at)
@@ -166,7 +238,8 @@ def fill(poly, paint_at, width, spacing, angle=0.0, seg_len=(120, 220), wobble=2
                     yy = yl + rng.normal(0, wobble, n)
                     world = np.stack([xx, yy], -1) @ rot
                     mid = world[len(world) // 2]
-                    st(world, get(*mid), width * rng.uniform(0.9, 1.1), pressure=pressure, **kw)
+                    st(world, get(*mid), width * rng.uniform(0.9, 1.1), pressure=pressure,
+                       broken=broken if width >= 4 else 0.0, **kw)
                 x += ln * rng.uniform(0.55, 0.8)
 
 
@@ -508,8 +581,11 @@ def paint_terrain():
         x, y = rng.uniform(600, 1450), rng.uniform(HORIZON + 30, 760)
         sc = 0.3 + 0.7 * (1 - depth_at(y))
         ln = rng.uniform(60, 160) * sc
-        st([(x, y), (x + ln * 0.5, y - 4 * sc), (x + ln, y + 2 * sc)], mix((SNOW, 2), (SNOW_SHADOW, 1)),
-           rng.uniform(4, 9) * sc, pressure=0.3, mixing=0.6, taper=(0.1, 0.6))
+        # one stroke models the mound: the brush carries snow on its upper side
+        # (its left, moving right) and the cool shadow on its lower side
+        st([(x, y), (x + ln * 0.5, y - 4 * sc), (x + ln, y + 2 * sc)],
+           [(SNOW_WARM, 3, "left"), (mix((SNOW, 1), (SNOW_SHADOW, 2)), 3, "right")],
+           rng.uniform(5, 11) * sc, pressure=0.3, mixing=0.4, taper=(0.1, 0.6))
     # trodden paths: a trampled band with cart ruts and footprints
     trodden = mix((SNOW, 4), (SNOW_SHADOW, 1), (EARTH, 0.2))
     rut = mix((EARTH, 1), (SNOW_SHADOW, 3))
@@ -1592,8 +1668,9 @@ def paint_hill():
         x = rng.uniform(600, W)
         y = rng.uniform(hill_edge_y(x) + 30, H)
         ln = rng.uniform(60, 200)
-        st([(x, y), (x + ln * 0.5, y - ln * 0.18), (x + ln, y - ln * 0.4)], mix((SNOW, 3), (SNOW_SHADOW, 1)),
-           rng.uniform(10, 24), pressure=0.3, mixing=0.7, taper=0.45)
+        st([(x, y), (x + ln * 0.5, y - ln * 0.18), (x + ln, y - ln * 0.4)],
+           [(SNOW_WARM, 4, "left"), (mix((SNOW, 1), (SNOW_SHADOW, 2)), 4, "right")],
+           rng.uniform(10, 24), pressure=0.3, mixing=0.4, taper=0.45)
     canvas.dry()
     for _ in range(120):    # dry grasses, brambles and stones poking through along the lip
         x = rng.uniform(560, W)
@@ -1852,7 +1929,7 @@ def main(out):
     for name in STAGES:
         globals()[name]()
     stage("varnish")
-    canvas.save(out, relief=0.55, gloss=0.5)
+    canvas.save(out, relief=0.3, gloss=0.5)       # a smooth, varnished panel
     print(f"wrote {out}: {N_STROKES[0]} strokes in {time.time() - t0:.0f}s")
 
 
