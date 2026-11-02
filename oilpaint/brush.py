@@ -1133,12 +1133,13 @@ class _Run:
                 c0 = np.clip(np.floor(colf), 0, COLUMNS - 2).astype(int)
                 fr = np.clip(colf - c0, 0.0, 1.0)
                 taps += [(c0, (1.0 - fr) / nsub), (c0 + 1, fr / nsub)]
-        s.npx = u_px.size
-        s.assign = np.zeros((COLUMNS, s.npx))                   # pixel -> column weights
-        flat_i = np.arange(s.npx)
-        for idx, wt in taps:
-            s.assign[idx.ravel(), flat_i] += wt.ravel()
+        s.npx = npx = u_px.size
+        flat_i = np.arange(npx)
+        cells = np.concatenate([idx.ravel() * npx + flat_i for idx, _ in taps])
+        weights = np.concatenate([np.broadcast_to(wt, idx.shape).ravel() for idx, wt in taps])
+        s.assign = np.bincount(cells, weights, COLUMNS * npx).reshape(COLUMNS, npx)    # pixel -> column weights
         s.taps = taps
+        s.win_shape = u_px.shape
 
     # ------------------------------------------------------------------
     def bounds(self):
@@ -1172,7 +1173,7 @@ class _Step:
 
     def at_pixels(self, per_column):
         """A per-column quantity, as seen at each pixel under the brush."""
-        return sum(wt * per_column[idx] for idx, wt in self.taps)
+        return (per_column @ self.assign).reshape(self.win_shape)
 
 
 # ----------------------------------------------------------------------------
@@ -1490,7 +1491,8 @@ def _work_load(run, s, capacity):
     _swap_layers(brush.reservoir, brush.heel, 0.1 * blend * s.ds / s.Wd)
     k = _BLEND_RATE * blend * (0.2 + p) ** 2 * s.ds / s.Wd
     for layer in (brush.tip, brush.reservoir, brush.heel):
-        _diffuse(layer, k, ring=brush.ring)
+        if layer[:, IV].any():          # (an empty layer, often the heel, has nothing to spread)
+            _diffuse(layer, k, ring=brush.ring)
 
 
 def _pick_up(run, s):
@@ -1621,12 +1623,12 @@ def _lay(run, s, d, cover_px, moved=False, by_film=False, reach=None):
     demand = s.assign @ d.ravel()
     give = np.where(demand > tip_v, tip_v / np.maximum(demand, 1e-30), 1.0)
     comp = brush.tip / np.where(tip_v > 0, tip_v, 1.0)[:, None]     # paint per unit volume
-    parts = [(idx, d * wt * give[idx]) for idx, wt in s.taps]       # volume from each column
-    d_px = sum(v for _, v in parts)
+    parts = s.assign * give[:, None] * d.reshape(1, -1)              # volume from each column, at each pixel
+    d_px = parts.sum(axis=0).reshape(d.shape)
     if d_px.sum() > 0:
-        dep = sum(v[..., None] * comp[idx] for idx, v in parts)
+        dep = (parts.T @ comp).reshape(d.shape + (PACKED,))
         _deposit(run.canvas, s.sl, dep, d_px, run.stroke_id, cover_px, moved=moved, by_film=by_film, reach=reach)
-        used = sum(np.bincount(idx.ravel(), v.ravel(), COLUMNS) for idx, v in parts)
+        used = parts.sum(axis=1)
         brush.tip -= used[:, None] * comp
         np.maximum(brush.tip[:, IV], 0.0, out=brush.tip[:, IV])
 
@@ -1737,7 +1739,11 @@ def _deposit(canvas, sl, dep, d, stroke_id, cover, moved=False, by_film=False, r
             k = _buries(d[old])
             if reach is not None:
                 k = np.maximum(k, _smoothstep(*_BODY, np.broadcast_to(reach, d.shape)[old]))
-            k = np.where(_harmless(top[old], und[old]), 1.0, k).astype(np.float32)
+            partial = k < 1.0            # (where it all goes under anyway, no need to ask)
+            if partial.any():
+                ot, ou = top[old], und[old]
+                k[partial] = np.where(_harmless(ot[partial], ou[partial]), 1.0, k[partial])
+            k = k.astype(np.float32)
             going = k[:, None] * top[old]
             und[old] += going
             und_a[old] = np.where(k > 0.01, np.maximum(und_a[old], top_a[old]), und_a[old])
@@ -1848,7 +1854,10 @@ class _Pending:
         top, und = canvas.top[sl], canvas.und[sl]
         top_a, und_a, ids = canvas.top_a[sl], canvas.und_a[sl], canvas.top_id[sl]
         k = self.buried(self.paint[on][:, IV], self.reach[on])
-        k = np.where(_harmless(top[on], und[on]), 1.0, k).astype(np.float32)
+        partial = k < 1.0
+        if partial.any():
+            k[partial] = np.where(_harmless(top[on][partial], und[on][partial]), 1.0, k[partial])
+        k = k.astype(np.float32)
         going = k[:, None] * top[on]
         und[on] += going
         und_a[on] = np.where(k > 0.01, np.maximum(und_a[on], top_a[on]), und_a[on])
@@ -2031,6 +2040,7 @@ def _level(canvas, region, iters: int = 12):
     top, und, crit = top[y0:y1, x0:x1], und[y0:y1, x0:x1], crit[y0:y1, x0:x1]
     base = canvas.dry_height[region][y0:y1, x0:x1]
     for _ in range(iters):
+        flowed = False
         for axis in (0, 1):
             V = top[..., IV] + und[..., IV]
             S = base + V
@@ -2040,13 +2050,21 @@ def _level(canvas, region, iters: int = 12):
             # downhill flow beyond what the paint can hold; onto bare canvas only from a sheer edge
             qa = np.clip(dS - crit[a], 0.0, None) * ((V[b] > 0.1) | (dS > 2.0))
             qb = np.clip(-dS - crit[b], 0.0, None) * ((V[a] > 0.1) | (-dS > 2.0))
-            fa = np.clip(0.25 * qa / np.maximum(V[a], 1e-6), 0.0, 0.25)
-            fb = np.clip(0.25 * qb / np.maximum(V[b], 1e-6), 0.0, 0.25)
+            # (paint only flows at a few steep spots: move it just there)
+            ya, xa = np.nonzero((qa > 0) | (qb > 0))
+            if not ya.size:
+                continue
+            flowed = True
+            yb, xb = (ya + 1, xa) if axis == 0 else (ya, xa + 1)
+            fa = np.clip(0.25 * qa[ya, xa] / np.maximum(V[ya, xa], 1e-6), 0.0, 0.25)
+            fb = np.clip(0.25 * qb[ya, xa] / np.maximum(V[yb, xb], 1e-6), 0.0, 0.25)
             for layer in (top, und):
-                ma = layer[a] * fa[..., None]
-                mb = layer[b] * fb[..., None]
-                layer[a] += mb - ma
-                layer[b] += ma - mb
+                ma = layer[ya, xa] * fa[:, None]
+                mb = layer[yb, xb] * fb[:, None]
+                layer[ya, xa] += mb - ma
+                layer[yb, xb] += ma - mb
+        if not flowed:          # it has settled: nothing more will move
+            break
 
 
 def _stir(top, und, m, top_a=None, und_a=None):
