@@ -140,6 +140,20 @@ def to_hex(srgb) -> str:
     return "#{:02x}{:02x}{:02x}".format(*c)
 
 
+_RGB_TO_XYZ = np.array([[0.4124564, 0.3575761, 0.1804375],
+                        [0.2126729, 0.7151522, 0.0721750],
+                        [0.0193339, 0.1191920, 0.9503041]])
+_D65 = np.array([0.95047, 1.0, 1.08883])
+
+
+def srgb_to_lab(srgb) -> np.ndarray:
+    """sRGB (..., 3) in 0..1 -> CIELAB (D65): L* 0..100, where a difference
+    of ~2.3 is just noticeable."""
+    xyz = srgb_to_linear(srgb) @ _RGB_TO_XYZ.T / _D65
+    f = np.where(xyz > (6 / 29) ** 3, np.cbrt(np.maximum(xyz, 0.0)), xyz / (3 * (6 / 29) ** 2) + 4 / 29)
+    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], axis=-1)
+
+
 # --------------------------------------------------------------------------
 # sRGB -> reflectance (Scott Burns' least hyperbolic tangent slope squared)
 # --------------------------------------------------------------------------

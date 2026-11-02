@@ -36,7 +36,7 @@ canvas.save("painting.png")
 Run `python examples/demo.py` to regenerate all the images in `examples/output/`,
 and `pytest tests` to run the tests.
 
-## Two paintings made with it
+## Three paintings made with it
 
 Each is a single script where every mark is a `canvas.stroke(...)`; numpy only
 decides where the strokes go.
@@ -52,9 +52,21 @@ decides where the strokes go.
   evergreens built with the fan brush from the top down; happy little bushes
   tapped dark and then highlighted; water lines cut with the knife edge
   (~10 minutes).
+* `examples/rembrandt_self_portrait.py`: a study after Rembrandt's
+  *Self-Portrait* of 1659 (National Gallery of Art, Washington; public
+  domain), painted from a reproduction (`examples/reference`) the way he
+  worked: a warm brown ground; a monochrome "dead colouring" left to dry; the
+  background, coat and beret brushed in thin and fluid, then softened with a
+  mop; the head worked up wet-into-wet from big brushes to small, each stroke
+  following the form (`Reference.trace`) in a colour mixed from his palette
+  (`palette.match` with `palette.OLD_MASTER`); the lights piled up in stiff
+  lead white; curls scratched into the wet hair with the brush handle;
+  transparent glazes over the dried shadows (about 22,000 strokes, ~20 minutes;
+  `REMBRANDT_SCALE=0.5` for a quick half-size version).
 
 ![bruegel](examples/output/bruegel_winter.png)
 ![bob ross style](examples/output/bob_ross_style.png)
+![after rembrandt](examples/output/rembrandt_self_portrait.png)
 
 ## API
 
@@ -82,6 +94,26 @@ Useful members:
   stiff gel that makes paint hold sharp ridges: `Paint.mix((CADMIUM_RED, 2),
   (IMPASTO_MEDIUM, 1))`. Mixing averages the body by volume;
   `paint.with_body(0.9)` gives a stiffer copy.
+* `palette.OLD_MASTER` is a 17th-century Dutch palette: `LEAD_WHITE` (warmer,
+  more translucent and much stiffer than titanium white: it holds thick,
+  broken lights), `LEAD_TIN_YELLOW`, `YELLOW_OCHRE`, `RED_OCHRE`, `VERMILION`,
+  `RED_LAKE` (a transparent crimson), `RAW_UMBER`, `BURNT_UMBER`,
+  `CASSEL_EARTH` (a transparent brown for glazing shadows), `BONE_BLACK` and
+  `SMALT` (a weak, greyish blue).
+* `palette.match(color, paints, max_paints=3, thickness=1.0, over="#ffffff")`
+  mixes the given paints to match a colour, the way a painter does on the
+  palette, with the same pigment physics as the canvas. It returns the mixed
+  `paint`, the recipe `parts` and the `error` (CIELAB delta E):
+
+  ```python
+  m = palette.match("#c89070", palette.OLD_MASTER, over="#5a4532")
+  m.parts     # [(Lead White, 1.0), (Lead-Tin Yellow, 1.6), (Red Lake, 3.9)]
+  m.error     # 0.6
+  ```
+
+  Match over the colour you will paint on: a transparent mix that only looks
+  right over white won't be chosen then. Offering fewer paints (the ones you
+  would use for flesh, say) gives more painterly recipes.
 
 ### `canvas.stroke(path, paint, amount=6, width=None, pressure=0.5, brush=None, **options)`
 
@@ -131,6 +163,7 @@ dataclass with the same fields and call `canvas.paint(stroke1, stroke2, ...)`.
 | `FAN_HOG`, `FAN_SOFT` | Separate bristle clumps: grass, hair, foliage, or feathering. |
 | `PALETTE_KNIFE`, `KNIFE_…`, `SCRAPER` | Painting knives: rigid steel blades of different shapes (see **Knives** below). |
 | `RAG` | Lifts wet paint without laying any down: wipe out lights or correct mistakes. |
+| `BRUSH_HANDLE` | The other end of the brush, scratched through wet paint (sgraffito): a groove down to the paint beneath, deeper with more pressure. |
 
 ```python
 from oilpaint import BrushType, brushes
@@ -163,6 +196,7 @@ custom = BrushType(shape="filbert", width=26, aspect=0.45, stiffness=0.6, capaci
 | `softness` | Feathered edges and ends (mops, blenders). |
 | `taper` | Default feathered ends for strokes made with it. |
 | `deposits` | `False` for tools that only lift paint (the rag). |
+| `dig` | 0..1: how deep a point cuts into the wet paint under it (1: down to the dry paint or canvas), pushing it aside into low ridges (the brush handle). |
 | `blending` | How readily different paints loaded on the brush merge as it is used. |
 | `streaks`, `pickup`, `drag`, `mixing`, `rough` | Explicit overrides of the behavior otherwise derived from stiffness and bristles. |
 
@@ -182,6 +216,31 @@ on the brush's edge, and a stroke that twists from broadside to edge-on.*
 *Calligraphy with a flat at a fixed angle, filbert leaves, hog-fan grass,
 deer-foot stippling, a mop blending two wet colors, palette-knife slabs, rigger
 branches, an angled flat cutting a corner, dagger strokes.*
+
+### Painting from a reference: `Reference(image, width, height, box=None)`
+
+A photo, a sketch or a painting to study, fitted to the canvas. It answers
+what a painter looks for before each stroke, at the scale of the brush:
+
+| method | answer |
+|--------|--------|
+| `color(x, y, scale=0)` | The sRGB colour there, softened over `scale` px (a big brush sees big shapes). |
+| `value(x, y, scale=0)` | The lightness there (CIE L*, 0..1). |
+| `direction(x, y, scale=4)` | `(angle, strength)`: which way the forms run there (along edges and lines of equal light), so strokes can follow the form, and how clear that is. |
+| `detail(x, y, scale=4)` | How busy it is there: a cue for a smaller brush. |
+| `trace(x, y, length, scale=4, tolerance=0.08, bend=1.0)` | A curved stroke path from the point, following the forms while the colour stays the same. |
+
+All of them take arrays of points as well.
+
+```python
+from oilpaint import Reference, palette
+
+ref = Reference("portrait.jpg", canvas.width, canvas.height)
+x, y = 420, 310
+path = ref.trace(x, y, length=60, scale=6)
+paint = palette.match(ref.color(x, y, 6), palette.OLD_MASTER, over="#5e4430").paint
+canvas.stroke(path, paint=paint, width=14)
+```
 
 ### `Canvas(width, height, ground=None, texture=None, weave=None, seed=None, surface=None)`
 

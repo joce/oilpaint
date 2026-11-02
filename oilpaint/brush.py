@@ -218,6 +218,11 @@ class BrushType:
         soft blenders); 0 = crisp.
     deposits:
         False for tools that only lift paint (a rag wiping back to the ground).
+    dig:
+        0..1: how deep a point cuts into the wet paint under it, as a share
+        of that paint (1: down to the dry paint or the canvas beneath), pushing
+        it aside into low ridges. The handle of a brush scratched through wet
+        paint (sgraffito); see :data:`oilpaint.brushes.BRUSH_HANDLE`.
     blending:
         0..1: how readily different paints loaded on the brush merge into each
         other as it is used. Low (soft synthetic flats) keeps a double-loaded
@@ -244,6 +249,7 @@ class BrushType:
     slant: float = 0.0
     softness: float = 0.0
     deposits: bool = True
+    dig: float = 0.0
     blending: Optional[float] = None
     taper: float = 0.0
     streaks: Optional[float] = None
@@ -1206,13 +1212,18 @@ def _brush_step(run: _Run, s: _Step) -> None:
     #    (ridges), the rest pushed ahead (left as a ridge where the brush lifts)
     ridges = _Ridges()
     hb = max(1.25 * thick, 3.5 * (1.15 - p) * (1.3 - 0.8 * bt.stiffness))
-    if float((top[..., IV] + und[..., IV]).max()) > (1.0 - 0.4 * eff["streaks"]) * hb:
-        level = s.floor + hb * (1.0 + 0.8 * eff["streaks"] * (s.hair[wsl] - 0.5))
+    digging = bt.dig > 0
+    if digging or float((top[..., IV] + und[..., IV]).max()) > (1.0 - 0.4 * eff["streaks"]) * hb:
         tv = np.where(canvas.top_id[s.sl] != run.stroke_id, top[..., IV], 0.0)
-        excess = np.clip(s.floor + tv + und[..., IV] - level, 0.0, None)
-        excess *= 1.0 - np.exp(-0.8 * bt.stiffness ** 2 * s.expo_c)     # shifted gradually as it passes
-        if run.is_dab:      # a light tap only touches with the bristle tips: it doesn't plough
-            excess *= _smoothstep(0.4, 0.8, p)
+        if digging:     # a point cut into the paint: a groove through a share of all of it
+            depth = bt.dig * _smoothstep(0.05, 0.6, p)
+            excess = (tv + und[..., IV]) * depth * (1.0 - np.exp(-6.0 * s.expo_c))
+        else:
+            level = s.floor + hb * (1.0 + 0.8 * eff["streaks"] * (s.hair[wsl] - 0.5))
+            excess = np.clip(s.floor + tv + und[..., IV] - level, 0.0, None)
+            excess *= 1.0 - np.exp(-0.8 * bt.stiffness ** 2 * s.expo_c)     # shifted gradually as it passes
+            if run.is_dab:      # a light tap only touches with the bristle tips: it doesn't plough
+                excess *= _smoothstep(0.4, 0.8, p)
         if excess.max() > 1e-3:
             moved = _take(top, und, excess, tv)
             share_pick = 0.5 * min(eff["pickup"], 1.0)
@@ -1221,9 +1232,10 @@ def _brush_step(run: _Run, s: _Step) -> None:
             if s.touchdown:
                 ridges.ring += moved.sum(axis=(0, 1))
             else:
-                to_side = 0.35 / (1.0 - share_pick)
+                to_side = 1.0 if digging else 0.35 / (1.0 - share_pick)     # a point pushes it all aside
                 ridges.add_sides(s, to_side * moved)
-                _place(canvas, (1.0 - to_side) * moved, s.cx0, s.cy0, s.tx * s.ds, s.ty * s.ds, run.stroke_id)
+                if to_side < 1.0:
+                    _place(canvas, (1.0 - to_side) * moved, s.cx0, s.cy0, s.tx * s.ds, s.ty * s.ds, run.stroke_id)
     _squeeze_out(run, s, ld, hold, ridges)
     ridges.lay(run, s)
 

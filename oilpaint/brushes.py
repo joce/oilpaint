@@ -172,6 +172,11 @@ SCRAPER = knife("straight", 110, flex=0.1, aspect=0.25, name="Scraper")
 #: correct. It wipes clean on slick surfaces and leaves a stain on absorbent ones.
 RAG = BrushType(shape="round", width=40, aspect=0.8, stiffness=0.2, bristles=1.0, capacity=4.0, streaks=0.15,
                 pickup=1.2, drag=0.05, mixing=0.0, softness=0.3, deposits=False, name="Rag")
+#: The handle of a brush, scratched through wet paint (sgraffito): a groove
+#: down to the paint beneath, with low ridges either side. Rembrandt drew curls
+#: into wet hair this way. Pressure sets how deep it cuts.
+BRUSH_HANDLE = BrushType(shape="round", width=3.0, stiffness=1.0, bristles=1.0, streaks=0.0, pickup=0.0,
+                         drag=0.0, mixing=0.0, deposits=False, dig=1.0, name="Brush handle")
 
 ALL = {name: value for name, value in list(globals().items()) if isinstance(value, BrushType)}
 

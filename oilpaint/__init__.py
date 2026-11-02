@@ -11,15 +11,16 @@ Quick start::
     canvas.save("painting.png")
 """
 
-from . import brushes, palette, spectral, surfaces
+from . import brushes, palette, reference, spectral, surfaces
 from .brush import Brush, BrushType, Stroke
 from .canvas import Canvas
 from .paint import Paint, mix_colors
+from .reference import Reference
 from .spline import Bezier, CatmullRom, Polyline
 from .surface import Surface
 
 __all__ = [
     "Canvas", "Paint", "Stroke", "Brush", "BrushType", "CatmullRom", "Bezier", "Polyline",
-    "mix_colors", "brushes", "palette", "spectral", "Surface", "surfaces",
+    "mix_colors", "brushes", "palette", "reference", "Reference", "spectral", "Surface", "surfaces",
 ]
 __version__ = "0.1.0"

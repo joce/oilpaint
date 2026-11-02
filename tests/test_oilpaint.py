@@ -1032,3 +1032,40 @@ def test_soft_strokes_overlapping_on_a_wet_ground_leave_no_ring():
     blueness = (img[..., 2] - img[..., 0])[60:160, 120:280].mean(axis=1)    # down the middle of the strokes
     between = blueness[95 - 60:125 - 60 + 1]
     assert between.max() - max(between[0], between[-1]) < 0.03
+
+
+def test_palette_match_finds_a_close_mix_of_the_given_paints():
+    m = P.match("#c89070", P.OLD_MASTER, over="#5a4532")
+    assert m.error < 2.0
+    assert all(any(p is q for q in P.OLD_MASTER) for p, _ in m.parts)
+    assert len(m.parts) <= 3
+    # the mix it returns really looks like that over that ground
+    got = sp.srgb_to_lab(m.paint.appearance(1.0, over="#5a4532"))
+    assert np.linalg.norm(got - sp.srgb_to_lab(sp.parse_color("#c89070"))) < 2.0
+
+
+def test_reference_samples_colour_direction_and_detail():
+    from oilpaint.reference import Reference
+    H, W = 120, 160
+    yy, xx = np.mgrid[0:H, 0:W]
+    img = np.zeros((H, W, 3))
+    img[..., 0] = (xx > 80)                      # a vertical edge: black left, red right
+    ref = Reference(img, W, H)
+    assert ref.color(120, 60)[0] > 0.9 and ref.color(40, 60)[0] < 0.1
+    angle, strength = ref.direction(80, 60, scale=3)
+    assert abs(abs(np.sin(angle)) - 1.0) < 0.05 and strength > 0.8     # strokes run along the edge
+    assert ref.detail(80, 60, 4) > ref.detail(20, 60, 4) + 0.1
+    path = ref.trace(40, 60, length=60, scale=3)
+    assert np.all(path[:, 0] < 80)               # a trace doesn't cross into the red
+
+
+def test_a_brush_handle_scratches_down_to_the_ground():
+    c = Canvas(300, 120, surface=Surface(toning="#6a4a30"), seed=2)
+    c.stroke([(10, 60), (290, 60)], paint=P.LEAD_WHITE, amount=14, brush=brushes.FLAT_HOG.sized(60), seed=1)
+    before, total = float((c.top_v + c.und_v)[60, 150]), float((c.top_v + c.und_v).sum())
+    c.stroke([(150, 20), (150, 100)], brush=brushes.BRUSH_HANDLE.sized(5), pressure=0.9, seed=3)
+    wet = c.top_v + c.und_v
+    assert wet[60, 150] < 0.15 * before                      # the groove
+    assert abs(float(wet.sum()) - total) < 0.01 * total      # the paint is pushed aside, not lost
+    lum = c.render(lighting=False).mean(-1)
+    assert lum[60, 150] < lum[60, 120] - 0.2                 # the dark ground shows in the scratch
