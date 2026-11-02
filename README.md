@@ -36,6 +36,26 @@ canvas.save("painting.png")
 Run `python examples/demo.py` to regenerate all the images in `examples/output/`,
 and `pytest tests` to run the tests.
 
+## Two paintings made with it
+
+Each is a single script where every mark is a `canvas.stroke(...)`; numpy only
+decides where the strokes go.
+
+* `examples/bruegel_winter.py`: a winter village in the manner of Pieter
+  Bruegel the Elder, painted thinly on an oak panel with soft sable brushes,
+  back to front, letting layers dry (about 20,000 strokes, ~13 minutes).
+* `examples/bob_ross_style.py`: a mountain lake painted wet-on-wet in the
+  manner of Bob Ross, in the order he worked on the show: Liquid White over
+  the whole canvas; the sky in criss-cross strokes with a two-inch brush;
+  clouds scrubbed in and blended; the mountain cut in with the knife, its snow
+  laid on with almost no pressure so it breaks; a misty tree line tapped in;
+  evergreens built with the fan brush from the top down; happy little bushes
+  tapped dark and then highlighted; water lines cut with the knife edge
+  (~10 minutes).
+
+![bruegel](examples/output/bruegel_winter.png)
+![bob ross style](examples/output/bob_ross_style.png)
+
 ## API
 
 ### `Paint(color, opacity=1.0, strength=1.0, name=None, body=None)`
@@ -67,7 +87,7 @@ Useful members:
 
 | parameter  | meaning |
 |------------|---------|
-| `path`     | List of `(x, y)` points: a smooth Catmull-Rom spline passes through them. Or a `CatmullRom`, `Bezier` (anchor, handle, handle, anchor, …) or `Polyline`. One point makes a dab. |
+| `path`     | List of `(x, y)` points: a smooth Catmull-Rom spline passes through them. Or a `CatmullRom`, `Bezier` (anchor, handle, handle, anchor, …) or `Polyline`. One point makes a dab: pressed firmly, a solid mark; tapped lightly (pressure below about 0.4), only the bristle tips touch and the mark breaks into a stipple (bushes, foliage), and a soft brush gives a dab feathered all round. |
 | `paint`    | A `Paint` or a color. `None` uses a clean brush (blending), or the given `brush`. A list loads several paints: `[(paint, amount[, across[, depth]]), ...]` (see `Brush`). |
 | `amount`   | Paint on the brush, in "brush widths of solid stroke": `amount=6` covers about 6 widths before the brush runs dry and starts to break up. Small brushes need bigger amounts to go as far (they also hold more for their size). Loading a brush beyond what its hair holds (roughly `amount` 10 to 15 and up for a brush 20 px or wider, depending on the hair) puts a glob of paint on it that goes on thick: impasto. |
 | `brush`    | The tool: a `BrushType` (e.g. `brushes.FLAT_HOG`, see below), or a `Brush` that keeps leftover paint and dirt between strokes. Default: a medium round. |
@@ -77,7 +97,7 @@ Useful members:
 | `follow_path` | `True`: the angle turns with the stroke. `False`: the angle is fixed on the canvas, like a calligraphy nib. |
 | `roll`     | Round brushes only: how far the brush is rolled between the fingers, in degrees, same forms as `width`. Rolling turns a different side of the bundle to the canvas (see `Brush`). |
 | `mixing`   | How readily the stroke stirs into the wet paint below. |
-| `pickup`   | How much wet paint the brush lifts and carries along (brushes; a knife drags wet paint instead). |
+| `pickup`   | How much wet paint the brush lifts and carries along (brushes; a knife drags wet paint instead). A brush barely touching lifts much less than one pressed into the paint. |
 | `drag`     | How much wet paint the brush pushes ahead (brushes). |
 | `smear`    | How long picked-up color lingers on the brush tip, roughly in widths. |
 | `blending` | How readily the paints loaded on the brush merge into each other during the stroke. |
@@ -393,6 +413,10 @@ the blade is filled up to the blade and everything above it is pushed away, so:
   lips along the sides. Pressing hard scrapes close to the canvas: the
   blade rides on the tops of the threads and the paint is left only in the
   weave.
+* **Barely touching** (pressure below about 0.3), the blade skims: only the
+  bead of paint on its edge touches the high points of what is underneath,
+  in streaks along the blade's nicks and on the threads. That is how snow
+  goes on a mountain over the wet dark ("let it break").
 * **Running out.** As the paint under the blade runs low the blade sinks: the
   slab thins out and finally only catches the high points, tearing into a
   streaky tail with the canvas showing through. A smaller load gives a

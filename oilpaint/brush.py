@@ -48,6 +48,8 @@ N = sp.N_BANDS
 IS, IV, IB = N, N + 1, N + 2      # packed indices of scattering, volume and body (stiffness x volume)
 PACKED = N + 3
 
+# Two paints this alike (see _alike) count as much the same paint.
+_SAME_PAINT = 0.6
 # Paint thinner than this can't form a continuous film (as canvas.MIN_FILM).
 _MIN_FILM = 0.15
 # Width of the footprint's soft (anti-aliased) edge in pixels. Kept narrow:
@@ -97,6 +99,9 @@ _KNIFE_BAND_WANDER = 0.12
 # near (px): a narrow mark spills almost all of it, a wide scraper only at its ends.
 _KNIFE_SPILL = 0.3
 _KNIFE_SPILL_PX = 8.0
+# Below about this pressure a knife skims: only the bead of paint on its edge
+# touches the high points of the surface.
+_KNIFE_SKIM = 0.3
 # A knife rides no higher than this times the paint film under its blade.
 _KNIFE_FILM = 0.5
 # Radius (px) over which wet paint dragged by a blade moves together (viscosity).
@@ -975,7 +980,7 @@ class _Run:
         aa = s.aa = _smoothstep(-0.5 * _EDGE_PX, 0.5 * _EDGE_PX, edge_px)
         # Flat-topped profile; pressing harder squeezes paint into low ridges at the edges.
         falloff = aa
-        if bt.softness > 0:    # a long, feathery falloff that stays visible even under thick paint
+        if bt.softness > 0 and not self.is_dab:    # a long, feathery falloff that stays visible even under thick paint
             falloff = falloff * _smoothstep(1.0, 1.0 - bt.softness, lr) ** (1.0 + 4.0 * bt.softness)
         profile = falloff * (0.92 + ridge * p * _smoothstep(0.55, 0.95, lr))
         if bt.slant > 0:       # bias-cut bristles: the toe (u = -1) touches first
@@ -997,6 +1002,17 @@ class _Run:
             h = np.maximum(np.interp(lat, s.grid, s.h_tab) * r_px, 0.5)
         s.c, s.h = c, h
         rel = s.rel = along - c
+        if self.is_dab:
+            if bt.softness > 0:    # a soft brush pressed down: feathered all round, not just at its sides
+                # distance from the centre in footprint radii (exact for an ellipse)
+                rr = np.sqrt(lr * lr + np.clip(rel / h, -1.0, 1.0) ** 2 * np.clip(1.0 - lr * lr, 0.0, None))
+                profile = profile * _smoothstep(1.0, 1.0 - bt.softness, rr) ** (1.0 + 4.0 * bt.softness)
+            # Tapped lightly, only the tips of the bristles touch: a stippled,
+            # broken mark (pressed harder, the whole brush comes down)
+            tip_thr = 0.75 - 1.5 * p
+            if tip_thr > 0:
+                profile = profile * _smoothstep(tip_thr - 0.12, tip_thr + 0.12, hair)
+            s.profile = profile
         overlap = np.clip(np.minimum(0.0, rel + h) - np.maximum(-ds, rel - h), 0.0, None)
         # Pixels under the brush where it touches down / lifts off get topped
         # up to a full pass, so strokes have solid ends.
@@ -1168,6 +1184,8 @@ def _brush_step(run: _Run, s: _Step) -> None:
         tv = np.where(canvas.top_id[s.sl] != run.stroke_id, top[..., IV], 0.0)
         excess = np.clip(s.floor + tv + und[..., IV] - level, 0.0, None)
         excess *= 1.0 - np.exp(-0.8 * bt.stiffness ** 2 * s.expo_c)     # shifted gradually as it passes
+        if run.is_dab:      # a light tap only touches with the bristle tips: it doesn't plough
+            excess *= _smoothstep(0.4, 0.8, p)
         if excess.max() > 1e-3:
             moved = _take(top, und, excess, tv)
             share_pick = 0.5 * min(eff["pickup"], 1.0)
@@ -1292,7 +1310,9 @@ def _knife_step(run: _Run, s: _Step) -> None:
     # evenly along its length (tilt).
     film = s.at_pixels(brush.tip[:, IV] + brush.reservoir[:, IV]) * COLUMNS / max(run.area_unit * s.r * s.r, 1e-9)
     ride = np.minimum(gap, _KNIFE_FILM * film) if bt.clumps == 0 else gap
-    level = rest + ride * (1.0 + 0.25 * run.chatter[s.i] + 0.12 * (s.hair[wsl] - 0.5)
+    # (skimming, the blade glides: no chatter; its nicks still streak the paint)
+    chat = 0.25 * (1.0 - float(_smoothstep(_KNIFE_SKIM, 0.05, p)))
+    level = rest + ride * (1.0 + chat * run.chatter[s.i] + 0.12 * (s.hair[wsl] - 0.5)
                            + run.blade_tilt * np.clip(s.ucoord[wsl], -1.0, 1.0))
 
     # 4) Wet paint standing above the blade is bulldozed ahead by the flow (5);
@@ -1337,12 +1357,29 @@ def _knife_step(run: _Run, s: _Step) -> None:
     #    only reaches the high points (broken colour). If that makes three wet
     #    layers, the two most alike merge (white laid on white-over-purple joins
     #    the white; a new colour stays on top of the others).
+    #    Barely touching, the blade isn't spreading a film any more: only the
+    #    bead of paint on its edge reaches down, and it touches the high points
+    #    of the surface (thread tops, ridges of paint) and leaves paint on them,
+    #    nothing in the hollows: broken colour ("let it break").
     tip_v = brush.tip[:, IV]
     if tip_v.sum() > 0 and bt.deposits:
-        gap_px = np.clip(level - (floor + top[..., IV] + und[..., IV]), 0.0, None)
+        surf = floor + top[..., IV] + und[..., IV]
+        gap_px = np.clip(level - surf, 0.0, None)
         film = s.at_pixels(tip_v + brush.reservoir[:, IV]) * COLUMNS / max(run.area_unit * s.r * s.r, 1e-9)
         reach_f = _smoothstep(1.3, 0.7, gap_px / np.maximum(film, 1e-9))
-        _lay(run, s, gap_px * reach_f * (1.0 - np.exp(-4.0 * s.expo_c)), s.cover[wsl], moved=True)
+        d = gap_px * reach_f
+        skim = float(_smoothstep(_KNIFE_SKIM, 0.05, p))
+        if skim > 0 and bt.clumps == 0:
+            bead = np.minimum(film, 1.2)
+            touch = np.clip((surf - (level - bead)) / np.maximum(bead, 1e-6), 0.0, 1.0)
+            # the bead is uneven and the paint below still follows the threads
+            # of the canvas: barely touching, it catches in streaks along the
+            # blade's nicks and on the thread tops, the fewer the lighter the touch
+            grain = 0.55 * s.hair[wsl] + 0.45 * canvas._tooth[s.sl]
+            thr = 0.6 - 2.2 * p
+            touch = touch * _smoothstep(thr - 0.1, thr + 0.1, grain)
+            d = (1.0 - skim) * d + skim * bead * touch ** 0.7
+        _lay(run, s, d * (1.0 - np.exp(-4.0 * s.expo_c)), s.cover[wsl], moved=True)
     # A knife lifted off thick paint pulls it up into little peaks and torn ridges.
     if eff["lift"] > 0 and s.i == len(run.pts) - 1:
         under = (s.aa * np.clip((s.h - np.abs(s.rel)) / 1.5, 0.0, 1.0))[wsl]
@@ -1423,7 +1460,8 @@ def _pick_up(run, s):
     paint shields the older layer below. What is lifted goes into the
     columns that touched it."""
     plough = s.expo_c * np.clip(2.0 - s.streak_c, 0.0, None)
-    k = run.eff["pickup"] * 1.2 * plough * s.f_pick
+    # (a brush barely touching lifts much less than one pressed into the paint)
+    k = run.eff["pickup"] * 1.2 * plough * s.f_pick * (0.25 + 1.5 * min(s.p, 1.0))
     a_top = 1.0 - np.exp(-k)
     a_und = (1.0 - np.exp(-k * s.p)) * np.exp(-s.top[..., IV] / 1.5)
     for layer, a in ((s.top, a_top), (s.und, a_und)):
@@ -1622,9 +1660,12 @@ def _deposit(canvas, sl, dep, d, stroke_id, cover, moved=False):
         tv, uv = top[..., IV], und[..., IV]
         three = old & (tv > 1e-6) & (uv > 1e-6) & moved
         if three.any():
-            # three layers in two places: merge the two most alike
+            # three layers in two places: merge the two most alike. The new paint
+            # joins the top layer only if it really is much the same paint (white
+            # pushed onto white); a different colour stays on top of the others.
             keep = np.zeros_like(old)
-            keep[three] = _alike(top[three], dep[three]) < _alike(und[three], top[three])
+            near = _alike(top[three], dep[three])
+            keep[three] = (near < _SAME_PAINT) & (near < _alike(und[three], top[three]))
             top[keep] += dep[keep].astype(np.float32)
             dep = np.where(keep[..., None], 0.0, dep)
             d = np.where(keep, 0.0, d)
