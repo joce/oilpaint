@@ -9,13 +9,16 @@ Washington; public domain), painted the way he worked:
 * the head worked up wet-into-wet from his palette (lead white, ochres,
   vermilion, red lake, umbers, bone black, a little smalt for the cool half
   tones), the lights piled up thick with stiff lead white;
-* the curls drawn into the wet grey hair with the handle of the brush;
+* the grey hair in long thin strokes following the swirl of the curls, its
+  dark curls scratched into the wet paint with the handle of the brush and
+  its light ones drawn on with a fine liner;
 * thin transparent glazes deepening the shadows once it was dry; then the
   last touches: the glints of the gold chain, the lights in the eyes.
 
 The reproduction in ``examples/reference`` is used the way a copyist uses the
 original: to see where things are and how light or dark, warm or cool they
-are. Each stroke's paint is mixed from the old palette to match
+are; a close-up of the head shows the curls of the hair, which are too fine
+to survive in the whole picture at that size. Each stroke's paint is mixed from the old palette to match
 (:func:`oilpaint.palette.match`), and each stroke follows the forms
 (:class:`oilpaint.Reference`).
 
@@ -40,6 +43,9 @@ S = float(os.environ.get("REMBRANDT_SCALE", "1"))      # < 1: a quicker, smaller
 W, H = round(1000 * S), round(1296 * S)
 F = W / 960                     # the outlines below are drawn on a 960-pixel-wide reproduction
 ref = Reference(os.path.join(HERE, "reference", "rembrandt_self_portrait_1659.jpg"), W, H)
+# a closer look at the head, for the finest things in it (the curls of the hair)
+HEAD_BOX = (300, 100, 820, 620)               # where it is, on the 960-pixel-wide reproduction
+HEAD_FILE = os.path.join(HERE, "reference", "rembrandt_self_portrait_1659_head.jpg")
 rng = np.random.default_rng(1659)
 GROUND = surfaces.LINEN_FINE.with_(toning="#6b4f37", toning_strength=1.0, name="linen, warm brown ground")
 canvas = Canvas(W, H, surface=GROUND, seed=1659)
@@ -94,6 +100,7 @@ def mask(*polys, grow=0.0):
 
 M_FACE = mask(FACE)
 M_HAIR = mask(HAIR_RIGHT, HAIR_LEFT)
+M_HAIR_ONLY = M_HAIR & ~M_FACE
 M_HEAD = mask(FACE, HAIR_RIGHT, HAIR_LEFT, COLLAR, grow=10)
 M_HANDS = mask(HANDS, FUR, grow=8)
 M_HAND_FLESH = mask(HANDS)
@@ -107,7 +114,7 @@ FLESH_PAINTS = [P.LEAD_WHITE, P.YELLOW_OCHRE, P.RED_OCHRE, P.VERMILION, P.RED_LA
                 P.SMALT]
 EARTH_PAINTS = [P.LEAD_WHITE, P.YELLOW_OCHRE, P.RED_OCHRE, P.RAW_UMBER, P.BURNT_UMBER, P.CASSEL_EARTH, P.BONE_BLACK,
                 P.SMALT]
-GREY_PAINTS = [P.LEAD_WHITE, P.BONE_BLACK, P.RAW_UMBER, P.YELLOW_OCHRE, P.SMALT]
+GREY_PAINTS = [P.LEAD_WHITE, P.BONE_BLACK, P.RAW_UMBER, P.BURNT_UMBER, P.RED_OCHRE, P.YELLOW_OCHRE, P.SMALT]
 GLAZE_PAINTS = [P.CASSEL_EARTH, P.BONE_BLACK, P.RED_LAKE, P.RAW_UMBER]
 
 
@@ -320,7 +327,7 @@ def soften(where):
 FLESH = Piles(FLESH_PAINTS, over="#8a6a4c", thickness=1.4, step=2.5)
 HAND_FLESH = Piles(FLESH_PAINTS, over="#3a2a1e", thickness=1.0, step=2.5, body=0.35)    # thin and soft, in shadow
 EARTHS = Piles(EARTH_PAINTS, over="#3a2a1e", thickness=1.2, step=2.5, body=0.45)
-GREYS = Piles(GREY_PAINTS, over="#3a2a1e", thickness=1.2, step=2.5)
+GREYS = Piles(GREY_PAINTS, over="#3a2a1e", thickness=2.5, step=2.5, body=0.4)        # soft, fluid hair
 
 
 def piles_at(x, y):
@@ -341,7 +348,7 @@ def head():
     for size, thr, tool in ((16, 5.0, brushes.FILBERT_HOG), (10, 4.5, brushes.FILBERT_HOG),
                             (7, 4.5, brushes.ROUND_HOG), (5, 4.5, brushes.ROUND_HOG),
                             (4, 5.0, brushes.ROUND_SABLE), (3, 5.0, brushes.ROUND_SABLE)):
-        where = M_HEAD | M_HANDS if size >= 7 else M_HEAD
+        where = (M_HEAD | M_HANDS if size >= 7 else M_HEAD) & ~M_HAIR_ONLY      # the hair has its own stage
         n = paint_layer(size, where, tool, None, pick=piles_at, threshold=thr, length=2.5 if size > 4 else 2.0,
                         pressure=0.5, load=1.1, tolerance=0.08, bend=0.7)
         print(f"    {size}px: {n} strokes", flush=True)
@@ -360,34 +367,146 @@ def impasto():
 
 
 def hair():
-    """Grey curls laid along their own direction, then drawn into with the
-    handle of the brush while wet."""
+    """The grey hair: a soft mass brushed in along the swirl of the curls with
+    soft brushes and fluid paint, then the curls themselves, where the
+    subject has them: the dark ones scratched into the wet paint with the
+    handle of the brush, the light ones drawn on with a fine liner."""
     stage("hair and the brush handle")
-    for size in (6, 4):
-        n = paint_layer(size, M_HAIR, brushes.ROUND_HOG, GREYS, threshold=5.0, length=5.0, pressure=0.45, load=1.2,
-                        scale=1.5, tolerance=0.14, bend=0.9)
-        print(f"    {size}px: {n} strokes", flush=True)
-    # curls scratched into the wet paint: little loops and hooks, deepest
-    # where the hair catches the light
-    n = 0
-    for poly, count in ((HAIR_RIGHT, 70), (HAIR_LEFT, 25)):
-        m = mask(poly)
-        ys, xs = np.nonzero(m)
-        for _ in range(count):
-            i = rng.integers(len(xs))
-            cx, cy = xs[i], ys[i]
-            r = rng.uniform(4, 10) * S
-            a0 = rng.uniform(0, 2 * np.pi)
-            turn = rng.uniform(1.2, 2.2) * np.pi * rng.choice([-1, 1])
-            t = np.linspace(0, 1, 9)
-            pts = [(cx + r * (0.6 + 0.6 * u) * np.cos(a0 + turn * u), cy + r * (0.6 + 0.6 * u) * np.sin(a0 + turn * u))
-                   for u in t]
-            light = float(ref.value(cx, cy, 2.0 * S))
-            canvas.stroke(pts, brush=brushes.BRUSH_HANDLE.sized(max(rng.uniform(2.0, 3.2) * S, 1.5)),
-                          pressure=0.45 + 0.5 * np.clip((light - 0.3) / 0.3, 0, 1))
-            n += 1
-    N_STROKES[0] += n
-    print(f"    {n} scratches", flush=True)
+    # the tone of it first, then long thin strokes that follow the swirl of the
+    # curls everywhere, each in the colour of the hair just there, so the
+    # light and dark strands come out of the brushwork itself
+    n = paint_layer(8, M_HAIR_ONLY, brushes.FILBERT_SABLE, GREYS, threshold=4.0, length=3.0, pressure=0.4, load=1.0,
+                    tolerance=0.1, bend=0.9, straight=False)
+    print(f"    8px: {n} strokes", flush=True)
+    for size in (5, 3):         # (their colours from the close-up: the silver of single strands)
+        n = paint_layer(size, M_HAIR_ONLY, brushes.ROUND_SABLE, GREYS, threshold=0.0, length=6.0, pressure=0.35,
+                        load=1.0, scale=1.0, tolerance=0.16, bend=1.0, spacing=1.1, straight=False, correct=0.3,
+                        color_fn=close_up_color)
+        print(f"    strands {size}px: {n} strokes", flush=True)
+    light, dark = curl_lines()
+    curls = Piles([P.LEAD_WHITE, P.YELLOW_OCHRE, P.VERMILION, P.RAW_UMBER, P.BONE_BLACK, P.SMALT],
+                  over="#4a4038", thickness=1.0, step=3.0, body=0.8)
+    for path, rgb in dark:
+        canvas.stroke([tuple(q) for q in path], brush=brushes.BRUSH_HANDLE.sized(max(1.7 * S, 1.2)), pressure=0.6)
+    for path, rgb in light:
+        run = float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
+        w = max(1.2 * S, 1.0)
+        # a silvery line: lighter than the photograph shows it (a thin line is
+        # softened by the camera), and a little less yellow
+        silver = rgb + 0.35 * (1.0 - rgb)
+        silver = 0.75 * silver + 0.25 * silver.mean()
+        brush = Brush(brushes.LINER.sized(w)).load(curls(silver), 1.5 * run / w + 2.0)
+        canvas.stroke([tuple(q) for q in path], brush=brush, pressure=0.35)
+    N_STROKES[0] += len(light) + len(dark)
+    print(f"    curls: {len(dark)} scratched, {len(light)} drawn", flush=True)
+
+
+_CLOSE_UP = []
+
+
+def close_up():
+    """The close-up of the head, as a Reference, and its pixels per reproduction pixel."""
+    if not _CLOSE_UP:
+        from PIL import Image
+        img = Image.open(HEAD_FILE).convert("RGB")
+        _CLOSE_UP.append((Reference(img, img.width, img.height), img.width / (HEAD_BOX[2] - HEAD_BOX[0])))
+    return _CLOSE_UP[0]
+
+
+def close_up_color(xs, ys, scale):
+    """The subject's colour at canvas points, seen in the close-up of the head."""
+    href, k = close_up()
+    xs, ys = np.asarray(xs, np.float64), np.asarray(ys, np.float64)
+    rgb = href.color((xs / F - HEAD_BOX[0]) * k, (ys / F - HEAD_BOX[1]) * k, scale * k / F)
+    return seen(rgb, toe_map()[np.clip(ys.astype(int), 0, H - 1), np.clip(xs.astype(int), 0, W - 1)])
+
+
+def curl_lines(threshold=0.016, min_len=7):
+    """The curls of the hair, read off the close-up of the head: thin lines
+    lighter or darker than the hair around them, followed into stroke paths
+    (canvas coordinates), each with its colour. Returns (light, dark)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    href, k = close_up()                          # k: close-up pixels per reproduction pixel
+    n = href.width
+    m = Image.new("L", (n, n), 0)
+    d = ImageDraw.Draw(m)
+    for poly in (HAIR_RIGHT, HAIR_LEFT):
+        d.polygon([((x - HEAD_BOX[0]) * k, (y - HEAD_BOX[1]) * k) for x, y in poly], fill=255)
+    hair = np.asarray(m.filter(ImageFilter.MaxFilter(int(20 * k) // 2 * 2 + 1))) > 127
+    ys, xs = np.mgrid[0:n, 0:n]
+    diff = np.asarray(href.value(xs, ys, 0.8)) - np.asarray(href.value(xs, ys, 4.0))
+
+    def to_canvas(path):
+        pts = np.stack([(path[:, 1] / k + HEAD_BOX[0]) * F, (path[:, 0] / k + HEAD_BOX[1]) * F], axis=1)
+        run = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
+        idx = np.unique(np.r_[np.searchsorted(run, np.arange(0.0, run[-1], 2.0 * S)), len(pts) - 1])
+        return pts[idx]                                # a point every 2 px or so
+
+    out = []
+    for sign in (1.0, -1.0):
+        found = []
+        for path in _chains(hair & (sign * diff > threshold), sign * diff, min_len):
+            rgb = np.asarray(href.color(path[:, 1], path[:, 0], 0.7), np.float64).mean(axis=0)
+            found.append((to_canvas(path), rgb))
+        out.append(found)
+    return out[0], out[1]
+
+
+def _chains(line, strength, min_len, reach=3.0, eat=2.0):
+    """Follow the pixels of thin lines (a boolean mask) into paths, strongest
+    first: from each start, step to the strongest free line pixel nearby that
+    keeps going the same way, both ways."""
+    H_, W_ = line.shape
+    free = line.copy()
+    ys, xs = np.nonzero(line)
+    r = int(np.ceil(reach))
+    oy, ox = np.mgrid[-r:r + 1, -r:r + 1]
+    ring = (np.hypot(oy, ox) <= reach) & (np.hypot(oy, ox) >= 1.0)
+    oy, ox = oy[ring], ox[ring]
+    e = int(np.ceil(eat))
+    ey, ex = np.mgrid[-e:e + 1, -e:e + 1]
+    disc = np.hypot(ey, ex) <= eat
+    ey, ex = ey[disc], ex[disc]
+
+    def take(y, x):
+        free[np.clip(y + ey, 0, H_ - 1), np.clip(x + ex, 0, W_ - 1)] = False
+
+    paths = []
+    for i in np.argsort(-strength[ys, xs]):
+        y, x = ys[i], xs[i]
+        if not free[y, x]:
+            continue
+        take(y, x)
+        halves = []
+        for first in (True, False):
+            pts, cy, cx, d = [], y, x, None
+            if not first and halves[0]:              # set off the other way
+                d = -np.array([halves[0][0][0] - y, halves[0][0][1] - x], float)
+                d /= max(np.hypot(*d), 1e-9)
+            while True:
+                ny, nx = cy + oy, cx + ox
+                ok = (ny >= 0) & (ny < H_) & (nx >= 0) & (nx < W_)
+                ny, nx, dy, dx = ny[ok], nx[ok], oy[ok], ox[ok]
+                cand = free[ny, nx]
+                if not cand.any():
+                    break
+                ny, nx, dy, dx = ny[cand], nx[cand], dy[cand], dx[cand]
+                score = strength[ny, nx].astype(np.float64)
+                if d is not None:
+                    dot = (dy * d[0] + dx * d[1]) / np.hypot(dy, dx)
+                    score = np.where(dot > 0.2, score * (0.5 + dot), -1.0)
+                j = int(np.argmax(score))
+                if score[j] < 0:
+                    break
+                d = np.array([dy[j], dx[j]], float) / np.hypot(dy[j], dx[j])
+                cy, cx = ny[j], nx[j]
+                take(cy, cx)
+                pts.append((cy, cx))
+            halves.append(pts)
+        path = halves[1][::-1] + [(y, x)] + halves[0]
+        if len(path) >= min_len:
+            paths.append(np.array(path, float))
+    return paths
 
 
 def features():

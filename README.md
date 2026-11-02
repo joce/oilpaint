@@ -60,7 +60,9 @@ decides where the strokes go.
   mop; the head worked up wet-into-wet from big brushes to small, each stroke
   following the form (`Reference.trace`) in a colour mixed from his palette
   (`palette.match` with `palette.OLD_MASTER`); the lights piled up in stiff
-  lead white; curls scratched into the wet hair with the brush handle;
+  lead white; the hair in thin strokes following the swirl of its curls,
+  the curls themselves traced from a close-up of the head, scratched into the
+  wet paint with the brush handle or drawn on with a liner;
   transparent glazes over the dried shadows (about 22,000 strokes, ~20 minutes;
   `REMBRANDT_SCALE=0.5` for a quick half-size version).
 
