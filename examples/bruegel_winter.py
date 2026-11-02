@@ -492,6 +492,57 @@ def crag_planes(ridge, base, lit, shade, step=5, seed=0):
            pressure=0.3, mixing=0.4, taper=(0, 0.4))
 
 
+def crag_massif(ridge, base, far=0.0, seed=0):
+    """Alpine crags as a panel painter models them: each peak sends spurs
+    down its flanks, every spur one stroke with the lit colour on the side
+    facing the light and the shadow on the other; between the spurs, broad
+    planes of snow on the faces turned to the light and cool rock on those
+    turned away; snow caught on ledges; and the lower slopes lost in the
+    haze of the valley. ``far`` (0..1) pales everything into the distance."""
+    r = np.random.default_rng(seed)
+    xs, ys = ridge[:, 0], ridge[:, 1]
+    lit_snow = atmos(mix((WHITE, 8), (SKY_LOW, 1)), 0.25 + far)
+    lit_rock = atmos(mix((ROCK_LIGHT, 2), (WHITE, 1)), 0.35 + far)
+    shade_rock = atmos(mix((ROCK, 1), (ROCK_DARK, 2)), 0.12 + far)
+    haze = atmos(HAZE, 0.5 + far)
+
+    def toward_haze(p, y, top):
+        return lerp_paint(p, haze, float(np.clip((y - top) / max(base - top, 1.0), 0, 1)) ** 1.3 * 0.8)
+
+    # 1) the faces: wide strokes falling from the ridge down the slope, each one
+    #    modelled (lit on the side facing the light): ribs and gullies
+    slope = np.convolve(np.gradient(ys, xs), np.ones(9) / 9, mode="same")
+    for i in range(0, len(ridge), 2):
+        x, y = ridge[i]
+        h = base - y
+        if h < 8:
+            continue
+        lit = slope[i] < 0.0          # the ridge rising to the right: the face looks left, to the light
+        ang = np.pi / 2 + (-1 if lit else 1) * r.uniform(0.2, 0.45)
+        ln = h * r.uniform(0.45, 0.9)
+        w0 = r.uniform(10, 16) * (1 - 0.45 * far)
+        y0 = y + 0.3 * w0          # (starting just below the crest, thin, so the peaks stay sharp)
+        pts = [(x, y0), (x + 0.15 * ln * np.cos(ang), y0 + 0.15 * ln * np.sin(ang)),
+               (x + 0.5 * ln * np.cos(ang) + r.normal(0, 1.5), y0 + 0.5 * ln * np.sin(ang)),
+               (x + ln * np.cos(ang), y0 + ln * np.sin(ang))]
+        col = lerp_paint(lit_snow, lit_rock, r.uniform(0.0, 0.45)) if lit else shade_rock
+        contrast = 1.0 - 0.85 * far          # distance flattens the modelling
+        limb(pts, toward_haze(col, y + 0.45 * ln, y), [0.5 * w0, w0, w0 * 0.8, w0 * 0.45], lit=0.45 * contrast,
+             shade=0.3 * contrast)
+    # 2) snow caught on ledges of the faces
+    for _ in range(int(len(ridge) * 0.12 * (1 - 0.6 * far))):
+        x = r.uniform(xs.min() + 5, xs.max() - 5)
+        top = ridge_y(ridge, x)
+        if base - top < 20:
+            continue
+        y = top + (base - top) * r.uniform(0.08, 0.55)
+        ln = r.uniform(5, 14)
+        st([(x, y), (x + ln * 0.5, y + r.uniform(-1.5, 1)), (x + ln, y + r.uniform(0.5, 3))],
+           toward_haze(lit_snow, y, top), [r.uniform(1.5, 2.8), 1.0], pressure=0.2)
+    # 3) the crest itself: a crisp lit edge against the sky
+    st(ridge[::3] + [0, 0.8], lit_snow, 1.3 * (1 - 0.4 * far), pressure=0.2, mixing=0.2)
+
+
 def paint_mountains():
     stage("mountains")
     far = np.vstack([FAR_RANGE, [(FAR_RANGE[-1, 0], HORIZON + 12), (FAR_RANGE[0, 0], HORIZON + 12)]])
@@ -501,20 +552,9 @@ def paint_mountains():
     body = np.vstack([CRAGS, [(CRAGS[-1, 0], HORIZON + 22), (CRAGS[0, 0], HORIZON + 22)]])
     fill(body, HAZE, width=8, spacing=4, angle=0.25, wobble=0.4, seg_len=(50, 120))
     canvas.dry()
-    # broad planes of light snow and shaded rock, then a few crisp accents
-    crag_planes(FAR_RANGE, HORIZON, mix((WHITE, 2), (SKY_LOW, 3)), mix((ROCK_LIGHT, 1), (SKY_LOW, 3)), seed=20)
-    crag_planes(CRAGS, 330, mix((WHITE, 8), (SKY_LOW, 1)), mix((ROCK_DARK, 2), (ROCK, 1)), seed=21)
+    crag_massif(FAR_RANGE, HORIZON, far=0.95, seed=20)
+    crag_massif(CRAGS, 330, far=0.0, seed=21)
     canvas.dry()
-    hatch_range(CRAGS, 330, mix((WHITE, 5), (SKY_LOW, 1)), mix((ROCK_DARK, 1), (ROCK, 1)),
-                mix((WHITE, 4), (SKY_LOW, 1)), density=0.45, max_len=0.6, seed=22)
-    ys = CRAGS[:, 1]
-    for i in range(2, len(CRAGS) - 2, 4):     # dark clefts on the shaded flanks
-        if ys[i] < 280 and ys[i + 2] > ys[i] + 1.5 and rng.random() < 0.5:
-            x, y = CRAGS[i]
-            ln = (330 - y) * rng.uniform(0.2, 0.45)
-            st([(x + 1, y + 2), (x + 3 + rng.normal(0, 2), y + ln * 0.5), (x + 5 + rng.normal(0, 3), y + ln)],
-               ROCK_DARK, [2.0, 1.2, 0.5], pressure=0.25)
-    st(CRAGS[::2], mix((ROCK_DARK, 1), (ROCK, 2)), 1.0, pressure=0.2)
     # a castle on the highest crag, a ruined tower on a lower one
     cx = 338
     cy = ridge_y(CRAGS, cx) + 2
@@ -991,7 +1031,9 @@ def tree(x, y, height, base_w, lean=0.0, seed=0, paint=TRUNK, depth=5, snow_on=T
     r = np.random.default_rng(seed)
     perches, snow_lines = [], []
     twig_col = mix((paint, 1), (TWIG, 1))
-    lace = mix((twig_col, 1), (MEDIUM, lace_thin))
+    # the finest twigs: opaque, a little hazed by the air, so where many cross
+    # they don't build up into dark blots (the crown stays a fine lace)
+    lace = lerp_paint(twig_col, SKY_MID, 0.18 + 0.1 * min(lace_thin, 2.0))
 
     def grow(x0, y0, ang, ln, w0, level):
         n = 5
@@ -1001,25 +1043,25 @@ def tree(x, y, height, base_w, lean=0.0, seed=0, paint=TRUNK, depth=5, snow_on=T
             a += r.normal(0, 0.10) + 0.10 * (-np.pi / 2 - a) * (level / depth)     # tips turn upward
             px, py = pts[-1]
             pts.append((px + ln / (n - 1) * np.cos(a), py + ln / (n - 1) * np.sin(a)))
-        w1 = max(0.6, w0 * 0.45)
-        st(pts, paint if level < 3 else twig_col, [w0, (w0 + w1) / 2, w1], pressure=0.3)
+        w1 = max(0.5, w0 * 0.45)
+        st(pts, paint if level < 3 else twig_col, [w0, (w0 + w1) / 2, w1], pressure=0.3, taper=(0.0, 0.25))
         dirs = np.diff(np.asarray(pts), axis=0)
         horiz = abs(np.mean(dirs[:, 0])) / (np.mean(np.linalg.norm(dirs, axis=1)) + 1e-9)
         if snow_on and w0 > 2.6 and horiz > 0.5 and r.random() < 0.45:
             snow_lines.append(([(px, py - w0 * 0.45) for px, py in pts[: 3 + int(r.random() * 2)]], w0 * 0.5))
         if 2 <= level <= 3 and horiz > 0.4 and r.random() < 0.15:
             perches.append(pts[2])
-        if level >= depth or ln < 5:
+        if level >= depth or ln < 9:
             ex, ey = pts[-1]
-            for _ in range(int(r.integers(*fan))):     # a fan of fine twigs: the lace of the crown
-                ta = a + r.normal(0, 0.55)
-                tl = ln * r.uniform(0.4, 1.0)
+            for _ in range(min(int(r.integers(*fan)), 3)):     # a few fine twigs: the lace of the crown
+                ta = a + r.normal(0, 0.6)
+                tl = ln * r.uniform(0.6, 1.3)
                 mx, my = ex + tl * 0.5 * np.cos(ta), ey + tl * 0.5 * np.sin(ta)
                 tb = ta + r.normal(0, 0.25)
                 st([(ex, ey), (mx, my), (mx + tl * 0.5 * np.cos(tb), my + tl * 0.5 * np.sin(tb))], lace,
-                   [0.9, 0.6], pressure=0.2)
+                   [0.6, 0.3], pressure=0.2, taper=(0.0, 0.35))
             return
-        for _ in range(int(r.integers(2, 4))):
+        for _ in range(int(r.integers(2, 4) if level < 3 else r.integers(1, 3))):    # sparser towards the tips
             t = r.uniform(0.25, 0.95)
             i = min(int(t * (n - 1)), n - 2)
             f = t * (n - 1) - i
@@ -1037,10 +1079,8 @@ def tree(x, y, height, base_w, lean=0.0, seed=0, paint=TRUNK, depth=5, snow_on=T
         a = a0 + r.normal(0, 0.035) + 0.015 * np.sin(k)
         trunk.append((px + height / (n - 1) * np.cos(a), py + height / (n - 1) * np.sin(a)))
     widths = [base_w * (1.15 if k == 0 else (1 - k / n) ** 0.8) + 0.8 for k in range(n)]
-    st(trunk, paint, widths, pressure=0.35)
-    # bark: a lit edge on the left, dark furrows, snow banked at the root
-    st([(px - widths[k] * 0.32, py) for k, (px, py) in enumerate(trunk[:6])], TRUNK_LIGHT,
-       [max(1.0, w * 0.22) for w in widths[:6]], pressure=0.2)
+    limb(trunk, paint, widths, lit=0.3, shade=0.4)       # the trunk modelled round, lit on the left
+    # bark: dark furrows, snow banked at the root
     for _ in range(int(base_w * 1.5)):
         k = int(r.integers(0, 5))
         px, py = trunk[k]
@@ -1160,14 +1200,13 @@ def person(x, y, h, coat, legs=None, facing=1, pose="walk", hat="hood", hat_col=
         legs = C_BLACK if rng.random() < 0.45 else pick([C_GREY, C_RED, C_BROWN, C_WHITE, C_BLUE])
     if hat_col is None:
         hat_col = coat if hat == "hood" else pick([C_BLACK, C_RED, DARK, C_GREY])
-    dk_coat, lt_coat = shade_of(coat, 0.6), light_of(coat, 0.3)
     if shadow:
         st([(x - 8 * u, y + 1.5 * u), (x + 40 * u, y + 7 * u)], SNOW_SHADOW, [10 * u, 3 * u], pressure=0.2,
            mixing=0.3)
     hip = np.array([x + f * lean * 16 * u, y - 47 * u])
     sho = np.array([x + f * lean * 44 * u, y - 81 * u])
     head = sho + [f * (3 + lean * 9) * u, -12 * u]
-    # ---- legs and shoes
+    # ---- legs and shoes: sturdy, in hose, modelled round
     if pose == "walk":
         feet = [np.array([x + f * 11 * u, y]), np.array([x - f * 10 * u, y - 1 * u])]
     elif pose == "skate":
@@ -1177,52 +1216,16 @@ def person(x, y, h, coat, legs=None, facing=1, pose="walk", hat="hood", hat_col=
     else:
         feet = [np.array([x - 5 * u, y]), np.array([x + 5 * u, y])]
     if not skirt or pose == "skate":
-        for k, ft in enumerate(feet):
-            top = hip + [(4 if k == 0 else -4) * u * f, 2 * u]
+        for k, ft in enumerate(feet[::-1]):        # the far leg first
+            near = k == 1
+            top = hip + [(4 if near else -4) * u * f, 2 * u]
             knee = (top + ft) / 2 + [f * 4 * u, -2 * u]
-            leg_col = legs if k == 0 else shade_of(legs, 0.25)
-            st([top, knee, ft + [0, -3 * u]], leg_col, [10 * u, 7.5 * u, 6 * u], pressure=0.3)
-            if big:
-                st([top + [-f * 3 * u, 2 * u], knee + [-f * 3 * u, 0], ft + [-f * 2 * u, -4 * u]], shade_of(legs, 0.5),
-                   max(0.8, 2 * u), pressure=0.2)
+            limb([top, knee, ft + [0, -3 * u]], legs if near else shade_of(legs, 0.2), [10 * u, 8 * u, 6.5 * u])
             st([ft + [-f * 3 * u, -2.5 * u], ft + [f * 6 * u, -1.5 * u]], C_BLACK, max(1.0, 5.5 * u), pressure=0.25)
             if pose == "skate":
                 st([ft + [-f * 9 * u, 1 * u], ft + [f * 10 * u, 0.5 * u], ft + [f * 12 * u, -2 * u]], DARK,
                    max(0.7, 1.6 * u), pressure=0.2)
-    # ---- body: rounded, from overlapping tapered strokes
-    if skirt:
-        hem_y, hem_w = y - 3 * u, 48 * u
-    else:
-        hem_y, hem_w = hip[1] + 13 * u, 36 * u
-    hem_c = np.array([hip[0] + f * lean * 5 * u, hem_y])
-    for off in (-1, 0, 1):
-        top = sho + [off * 8 * u, 3 * u]
-        mid = hip + [off * 11 * u, 0]
-        bot = hem_c + [off * hem_w * 0.33, -2 * u]
-        col = coat if off != 1 else shade_of(coat, 0.15)
-        st([top, mid, bot], col, [14 * u, 15 * u, 16 * u if not skirt else 18 * u], pressure=0.3)
-    st([sho + [-13 * u, 5 * u], sho + [0, 1 * u], sho + [13 * u, 5 * u]], coat, [9 * u, 11 * u, 9 * u], pressure=0.3)
-    # light on the left, shade on the right, folds in the cloth
-    st([sho + [-10 * u, 6 * u], hip + [-11 * u, 0], hem_c + [-hem_w / 2 + 3 * u, -3 * u]], lt_coat,
-       max(0.8, 3.5 * u), pressure=0.2)
-    st([sho + [11 * u, 6 * u], hip + [11 * u, 0], hem_c + [hem_w / 2 - 3 * u, -3 * u]], dk_coat,
-       max(1.0, 5 * u), pressure=0.25)
-    if big:
-        for k in (-0.15, 0.2):
-            st([hip + [k * 20 * u, 4 * u], hem_c + [k * hem_w * 0.8, -3 * u]], shade_of(coat, 0.35),
-               max(0.8, 1.6 * u), pressure=0.2)
-    st([hem_c + [-hem_w / 2 + 2 * u, -2 * u], hem_c + [hem_w / 2 - 2 * u, -2 * u]],
-       C_RED if (skirt and rng.random() < 0.45) else shade_of(coat, 0.45), max(1, 3.5 * u), pressure=0.2)
-    st([hip + [-12 * u, -3 * u], hip + [12 * u, -3 * u]], C_BLACK, max(0.8, 2.8 * u), pressure=0.2)
-    if not skirt and big and rng.random() < 0.6:       # a pouch and a knife at the belt
-        dab(hip[0] - f * 9 * u, hip[1] + 2 * u, pick([C_BLACK, C_TAN, DARK]), max(1, 7 * u))
-        st([hip + [-f * 3 * u, 0], hip + [-f * 1 * u, 12 * u]], C_GREY, max(0.7, 1.5 * u))
-    if apron:
-        ax = hip[0] + f * 4 * u
-        st([(ax, hip[1] - 3 * u), (ax + f * 2 * u, (hip[1] + hem_y) / 2), (ax + f * 3 * u, hem_y - 4 * u)],
-           C_WHITE, [12 * u, 15 * u, 17 * u], pressure=0.25)
-        st([(ax + 5 * u, hip[1]), (ax + 6 * u, hem_y - 5 * u)], light_of(SNOW_SHADOW, 0.2), max(0.8, 1.5 * u))
-    # ---- arms
+    # ---- arms: where they hang or reach
     if arms is None:
         if pose == "walk":
             arms = [sho + [f * 12 * u, 36 * u], sho + [-f * 9 * u, 35 * u]]
@@ -1236,46 +1239,66 @@ def person(x, y, h, coat, legs=None, facing=1, pose="walk", hat="hood", hat_col=
         else:
             arms = [sho + [f * 8 * u, 34 * u], sho + [-f * 9 * u, 34 * u]]
     arms = [np.asarray(a, float) for a in arms]
-    for k, hand in enumerate(arms):
+
+    def arm(k):
+        hand = arms[k]
         side = f if k == 0 else -f
         s0 = sho + [side * 12 * u, 5 * u]
         elbow = (s0 + hand) / 2 + [side * 4 * u, 3 * u]
-        col = coat if k == 0 else shade_of(coat, 0.3)
-        st([s0, elbow, hand], col, [8.5 * u, 7 * u, 5.5 * u], pressure=0.25)
-        if big:
-            st([elbow + [side * 2.5 * u, 0], hand + [side * 1.5 * u, -1 * u]], shade_of(col, 0.4), max(0.8, 1.5 * u))
+        limb([s0, elbow, hand], coat if k == 0 else shade_of(coat, 0.2), [10 * u, 8.5 * u, 6.5 * u])
         dab(hand[0], hand[1], FLESH, max(1.0, 5.5 * u))
-    # ---- head and headgear
-    dab(head[0], head[1], FLESH, max(1.2, 16 * u))
-    if f != 0 and big:
-        dab(head[0] + f * 6 * u, head[1] + 1 * u, mix((FLESH, 1), (C_DULL_RED, 0.3)), max(1, 4 * u))      # nose
-        dab(head[0] + f * 2 * u, head[1] + 3 * u, mix((FLESH, 1), (C_DULL_RED, 0.25)), max(1, 5 * u))     # cheek
-    if hat == "round":
-        dab(head[0] - f * 1 * u, head[1] - 4 * u, hat_col, max(1, 13 * u))
-        st([head + [-11 * u, -3 * u], head + [11 * u, -4 * u]], hat_col, max(0.8, 3.5 * u), pressure=0.25)
-    elif hat == "hood":      # a hood over the head with a short cape on the shoulders
-        dab(head[0] - f * 2 * u, head[1] - 2 * u, hat_col, max(1.2, 17 * u))
-        st([head + [-f * 6 * u, 4 * u], sho + [-f * 12 * u, 7 * u], sho + [f * 9 * u, 6 * u]], hat_col,
-           [11 * u, 12 * u, 9 * u], pressure=0.25)
-        dab(head[0] + f * 3.5 * u, head[1] + 1.5 * u, FLESH, max(1, 8 * u))
+
+    arm(1)                                   # the far arm, behind the body
+    # ---- body: one heavy, bell-shaped mass of cloth, lit from the left
+    if skirt:
+        hem_y, hem_w = y - 3 * u, 50 * u
+    else:
+        hem_y, hem_w = hip[1] + 14 * u, 38 * u
+    hem_c = np.array([hip[0] + f * lean * 5 * u, hem_y])
+    limb([sho + [0, 1 * u], hip, hem_c], coat, [28 * u, 32 * u, hem_w])
+    limb([sho + [-14 * u, 7 * u], sho + [0, 0], sho + [14 * u, 7 * u]], coat, [10 * u, 13 * u, 10 * u], tool=ROUND)
+    if big:     # a couple of soft folds falling from the belt
+        for k in (-0.18, 0.22):
+            st([hip + [k * 22 * u, 5 * u], hem_c + [k * hem_w * 0.85, -4 * u]], shade_of(coat, 0.3),
+               [max(0.8, 2.4 * u), max(0.8, 1.2 * u)], pressure=0.2, mixing=0.5, taper=(0, 0.4))
+    st([hem_c + [-hem_w / 2 + 3 * u, -2 * u], hem_c + [hem_w / 2 - 3 * u, -2 * u]],
+       C_RED if (skirt and rng.random() < 0.45) else shade_of(coat, 0.35), max(1, 3 * u), pressure=0.2, mixing=0.3)
+    st([hip + [-13 * u, -3 * u], hip + [13 * u, -3 * u]], C_BLACK, max(0.8, 2.6 * u), pressure=0.2)
+    if not skirt and big and rng.random() < 0.6:       # a pouch and a knife at the belt
+        dab(hip[0] - f * 9 * u, hip[1] + 2 * u, pick([C_BLACK, C_TAN, DARK]), max(1, 7 * u))
+        st([hip + [-f * 3 * u, 0], hip + [-f * 1 * u, 12 * u]], C_GREY, max(0.7, 1.5 * u))
+    if apron:
+        ax = hip[0] + f * 4 * u
+        limb([(ax, hip[1] - 3 * u), (ax + f * 2 * u, (hip[1] + hem_y) / 2), (ax + f * 3 * u, hem_y - 4 * u)],
+             C_WHITE, [13 * u, 16 * u, 18 * u])
+    arm(0)                                   # the near arm, over the body
+    # ---- head and headgear, modelled like the rest
+    face = head + [f * 4 * u, 2 * u]
+    if hat == "hood":        # a hood drawn up round the head, its cape over the shoulders
+        limb([head + [-f * 2 * u, -4 * u], head + [-f * 2 * u, 2 * u]], hat_col, [17 * u, 18 * u], tool=ROUND)
+        limb([head + [-f * 6 * u, 6 * u], sho + [-f * 10 * u, 7 * u], sho + [f * 9 * u, 6 * u]], hat_col,
+             [12 * u, 13 * u, 10 * u], tool=ROUND)
         if big:
-            st([head + [f * 6 * u, -6 * u], head + [f * 7 * u, 6 * u]], shade_of(hat_col, 0.4), max(0.8, 1.8 * u))
-    elif hat == "cap":
-        dab(head[0] - f * 2 * u, head[1] - 1 * u, pick([DARK, C_BROWN, C_TAN]), max(1, 12 * u))      # hair
-        dab(head[0] + f * 3 * u, head[1] + 1.5 * u, FLESH, max(1, 9 * u))
-        st([head + [-7 * u, -6 * u], head + [7 * u, -7 * u]], hat_col, max(1, 7 * u), pressure=0.25)
-    elif hat == "kerchief":   # a crisp white headcloth: a squarish fold over the head, down to the nape
-        dab(head[0] - f * 1.5 * u, head[1] - 3 * u, C_WHITE, max(1.2, 18 * u))
-        st([head + [-f * 6 * u, -5 * u], head + [-f * 7 * u, 5 * u]], C_WHITE, max(1.2, 12 * u), pressure=0.25)
-        st([head + [-f * 9 * u, -4 * u], head + [-f * 10 * u, 5 * u]], mix((C_WHITE, 2), (SNOW_SHADOW, 2)),
-           max(0.8, 2.2 * u), pressure=0.2)
-        if big:
-            st([head + [-f * 1 * u, -11 * u], head + [-f * 5 * u, -2 * u]], mix((C_WHITE, 2), (SNOW_SHADOW, 2)),
-               max(0.8, 1.6 * u), pressure=0.2)
-        dab(head[0] + f * 4 * u, head[1] + 2 * u, FLESH, max(1, 8 * u))
-    elif hat == "fur":
-        dab(head[0] + f * 3 * u, head[1] + 1.5 * u, FLESH, max(1, 9 * u))
-        st([head + [-9 * u, -6 * u], head + [9 * u, -7 * u]], DARK, max(1, 11 * u), pressure=0.25)
+            limb([face + [0, -2 * u], face + [0, 2 * u]], FLESH, [7 * u, 7 * u], tool=ROUND)
+    else:
+        limb([head + [0, -5 * u], head + [0, 4 * u]], FLESH, [14 * u, 15 * u], tool=ROUND)
+        if f != 0 and big:
+            dab(face[0] + f * 3 * u, face[1], mix((FLESH, 1), (C_DULL_RED, 0.3)), max(1, 4 * u))      # nose
+        if hat == "round":
+            limb([head + [-f * 1 * u, -10 * u], head + [-f * 1 * u, -4 * u]], hat_col, [13 * u, 14 * u], tool=ROUND)
+            st([head + [-12 * u, -4 * u], head + [12 * u, -5 * u]], shade_of(hat_col, 0.2), max(0.8, 3.5 * u),
+               pressure=0.25)
+        elif hat == "cap":
+            limb([head + [-f * 3 * u, -4 * u], head + [-f * 3 * u, 3 * u]], pick([DARK, C_BROWN, C_TAN]),
+                 [10 * u, 9 * u], tool=ROUND)      # hair at the back of the head
+            st([head + [-7 * u, -7 * u], head + [7 * u, -8 * u]], hat_col, max(1, 7 * u), pressure=0.25)
+        elif hat == "kerchief":     # a crisp white headcloth, falling to the nape
+            limb([head + [-f * 1.5 * u, -6 * u], head + [-f * 3 * u, 3 * u], head + [-f * 5 * u, 9 * u]],
+                 C_WHITE, [17 * u, 18 * u, 13 * u], tool=ROUND)
+            if big:
+                limb([face + [0, -1 * u], face + [0, 3 * u]], FLESH, [6.5 * u, 6.5 * u], tool=ROUND)
+        elif hat == "fur":
+            limb([head + [-9 * u, -7 * u], head + [9 * u, -8 * u]], DARK, [11 * u, 11 * u], tool=ROUND)
     # ---- things carried
     for prop in props:
         if prop == "bundle":      # a faggot of sticks slung on the back
@@ -1319,6 +1342,24 @@ def person(x, y, h, coat, legs=None, facing=1, pose="walk", hat="hood", hat_col=
             hand = arms[0]
             st([hand + [-f * 14 * u, -14 * u], hand + [f * 16 * u, 16 * u]], WOOD, max(0.8, 2.2 * u))
             st([hand + [f * 14 * u, 14 * u], hand + [f * 24 * u, 22 * u]], WOOD, max(1, 8 * u))
+
+
+LIGHT_FROM = np.array([-0.6, -0.8]) / np.hypot(0.6, 0.8)     # the light comes from the upper left
+
+
+def limb(pts, colour, widths, lit=0.32, shade=0.55, tool=None):
+    """One stroke modelled round, as with a loaded brush: the lit tone on the
+    side of the brush that faces the light, the shadow on the other, the
+    colour itself between them, all blending as the stroke goes."""
+    p0, p1 = np.asarray(pts[0], float), np.asarray(pts[-1], float)
+    d = p1 - p0
+    lit_left = (d[1] * LIGHT_FROM[0] - d[0] * LIGHT_FROM[1]) > 0      # the brush's left side faces the light
+    w = float(np.mean(widths)) if np.ndim(widths) else float(widths)
+    a = 0.45 * (2.5 + 1.25 * length(pts) / max(w, 1.0))
+    bands = [(light_of(colour, lit), (0.0, 0.36)), (colour, (0.3, 0.7)), (shade_of(colour, shade), (0.64, 1.0))]
+    if not lit_left:
+        bands = [(pnt, (1.0 - b1, 1.0 - b0)) for pnt, (b0, b1) in bands]
+    st(pts, [(pnt, a, band) for pnt, band in bands], widths, pressure=0.3, tool=tool)
 
 
 def tiny_person(x, y, h, coat, facing=1, pose="walk", skirt=False):
