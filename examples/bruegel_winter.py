@@ -19,7 +19,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from oilpaint import Canvas, Paint, palette as P  # noqa: E402
+from oilpaint import Brush, Canvas, Paint, brushes, palette as P  # noqa: E402
 
 W, H = 1500, 1060
 rng = np.random.default_rng(1565)
@@ -171,7 +171,7 @@ def fill(poly, paint_at, width, spacing, angle=0.0, seg_len=(120, 220), wobble=2
 
 
 def blob(cx, cy, rx, ry, n=48, rough=0.08, seed=None, smooth=2):
-    r = np.random.default_rng(seed)
+    r = np.random.default_rng(seed) if seed is not None else rng     # (never unseeded: the picture must be reproducible)
     t = np.linspace(0, 2 * np.pi, n, endpoint=False)
     k = 1 + rough * (r.random(n) - 0.5) * 2
     for _ in range(smooth):
@@ -304,13 +304,69 @@ def ridge_y(ridge, x):
 # ===========================================================================
 # Sky and distance
 # ===========================================================================
-def paint_sky():
-    stage("sky")
+#: How the sky is painted: "broad" (a few wide sweeps of thin paint, blended
+#: smooth, as Bruegel did) or "bands" (the first version: rows of 34 px
+#: strokes softened with a clean brush). Set with the BRUEGEL_SKY environment
+#: variable. Either way the rest of the picture comes out the same.
+SKY_STYLE = os.environ.get("BRUEGEL_SKY", "broad")
+
+
+def sky_colour(y):
+    return ramp([SKY_TOP, SKY_MID, SKY_LOW, SKY_GLOW], (y + 10) / (HORIZON + 30))
+
+
+def sky_bands():
     sky = np.array([(-20, -20), (W + 20, -20), (W + 20, HORIZON + 30), (-20, HORIZON + 30)])
-    fill(sky, lambda x, y: ramp([SKY_TOP, SKY_MID, SKY_LOW, SKY_GLOW], (y + 10) / (HORIZON + 30)),
-         width=34, spacing=14, wobble=1.5, pressure=0.45, seg_len=(160, 300))
+    fill(sky, lambda x, y: sky_colour(y), width=34, spacing=14, wobble=1.5, pressure=0.45, seg_len=(160, 300))
     for y in np.arange(8, HORIZON + 20, 15):    # blend with a clean brush
         st([(-20, y), (W / 2, y + rng.normal(0, 2)), (W + 20, y)], None, 36, amount=0, pressure=0.3, pickup=0.2)
+
+
+def sky_broad():
+    """As Bruegel would: thin paint laid in a few broad horizontal sweeps
+    with a wide soft brush, then softened wet into wet with a clean blender:
+    a smooth gradient with almost no visible brushwork. Each sweep carries
+    the gradient across the brush (thin bands of the sky colour at each
+    height, softened together on the palette), so overlapping sweeps meet
+    without a step."""
+    r = np.random.default_rng(15651)
+    wd, bands = 150, 6
+    lay = brushes.make("flat", wd, "squirrel", length=0.8, softness=0.25, streaks=0.08, name="sky brush")
+
+    def thin(p):
+        return Paint.mix((p, 4), (MEDIUM, 1))
+
+    for y in np.arange(20, HORIZON + 60, 100):
+        brush = Brush(lay)
+        for k in range(bands):     # the brush's left side is the upper side of a stroke moving right
+            at = y + ((k + 0.5) / bands - 0.5) * wd
+            brush.load(thin(sky_colour(at)), 18 / bands, across=(k / bands, (k + 1) / bands))
+        brush.work(1)
+        pts = [(-60, y + r.normal(0, 3)), (W / 2, y + r.normal(0, 4)), (W + 60, y + r.normal(0, 3))]
+        st(pts, None, wd, amount=0, pressure=0.4, brush=brush, seed=int(r.integers(1 << 31)))
+    blender = brushes.BLENDER.sized(160)
+    for y in np.arange(0, HORIZON + 40, 45):
+        # (it softens by picking up and laying down: no pushing paint along, which
+        # would leave the edge of the panel short of paint)
+        st([(-60, y), (W / 2, y + r.normal(0, 4)), (W + 60, y)], None, 160, amount=0, pressure=0.3,
+           brush=blender, drag=0.02, seed=int(r.integers(1 << 31)))
+
+
+def paint_sky():
+    stage("sky")
+    if SKY_STYLE == "broad":
+        # Draw the random numbers the banded sky would have used, without
+        # painting, so that everything painted after the sky comes out the same.
+        global st
+        real_st = st
+        st = lambda *a, **k: canvas._rng.integers(1 << 31)     # noqa: E731
+        try:
+            sky_bands()
+        finally:
+            st = real_st
+        sky_broad()
+    else:
+        sky_bands()
     canvas.dry()
 
 
