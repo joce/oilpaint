@@ -44,7 +44,7 @@ canvas.save("painting.png")
 Run `python examples/demo.py` to regenerate the demo images in `examples/output/`;
 see [Development](#development) for the tests and checks.
 
-## Three paintings made with it
+## Four paintings made with it
 
 Each is a single script where every mark is a `canvas.stroke(...)`; numpy only
 decides where the strokes go.
@@ -53,7 +53,8 @@ Each was also made a different way. The Bruegel is painted from memory: a
 winter village made up in his manner, with no picture to look at. The Bob Ross
 follows his method, step by step as he taught it on television, rather than
 any particular painting. The Rembrandt copies one real painting, matching a
-photograph of it as closely as the strokes allow.
+photograph of it as closely as the strokes allow. The Kandinsky is made up in
+his manner, like the Bruegel, and painted on the back of glass, in reverse.
 
 * `examples/bruegel_winter.py`: a winter village in the manner of Pieter
   Bruegel the Elder, painted thinly on an oak panel with soft sable brushes,
@@ -79,6 +80,17 @@ photograph of it as closely as the strokes allow.
   wet paint with the brush handle or drawn on with a liner;
   transparent glazes over the dried shadows (about 18,000 strokes, ~6 minutes;
   `REMBRANDT_SCALE=0.5` for a quick half-size version).
+* `examples/kandinsky_glass.py`: a reverse glass painting in the manner of
+  Wassily Kandinsky's Murnau years (1909-1911), when he and Gabriele Münter
+  took up the Bavarian folk craft of painting behind glass. Onion-domed towers
+  on a snowy hill, a rider galloping up it in front of blue mountains, a sun
+  and a dark cloud, a road, a river with a rowing boat, and patches of colour
+  floating free of the lines. It is painted on the back of the glass and seen
+  through it, so it goes on in reverse, each layer left to dry: the black
+  lines first, then the windows and glints, the floating patches, the colours
+  of things (uneven dabs, then a solid coat behind them), and the sky last of
+  all, over everything. Black card behind the glass, as Kandinsky used
+  (about 4,800 strokes, ~2 minutes).
 
 ![bruegel](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/bruegel_winter.png)
 
@@ -100,6 +112,13 @@ from a photograph of it: a monochrome underpainting left to dry, the head
 worked up wet-into-wet from big brushes to small with each stroke following
 the form, the lights piled up in lead white, the curls scratched into the wet
 paint, and glazes over the dried shadows. About 18,000 strokes.*
+
+![kandinsky glass](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/kandinsky_glass.png)
+
+*A reverse glass painting in the manner of Kandinsky's Murnau years, made up
+rather than copied: painted on the back of the glass, black lines first and
+the sky last, and seen through the front. No brush relief shows through the
+glass, only colour.*
 
 ## API
 

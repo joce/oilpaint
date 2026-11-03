@@ -15,6 +15,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first paint laid is in front. A new `reverse_glass` demo shows a flower
   painted on the front, on the back in reverse order, and on the back in the
   wrong order.
+- A fourth example painting, `examples/kandinsky_glass.py`: a reverse glass
+  painting in the manner of Kandinsky's Murnau years, painted on the back of
+  the glass in reverse order.
 - `spectral.km_film`: the reflectance and transmittance of a paint film on
   its own.
 - A dirty-brush demo (`examples/demo.py`, shown in the README): a full brush
