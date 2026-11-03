@@ -58,6 +58,9 @@ jobs:
   coverage:
     needs: spell-check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Codecov checks the upload with GitHub's OIDC token: no secret needed
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
@@ -75,6 +78,7 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           files: coverage.xml
+          use_oidc: true
           verbose: true
 
       - name: Upload test results to Codecov
@@ -83,3 +87,4 @@ jobs:
         with:
           files: junit.xml
           report_type: test_results
+          use_oidc: true
