@@ -21,9 +21,11 @@ tox = [
 dev = [
     { include-group = "tox" },
     "black>=25.9,<27.0",
+    "coverage>=7.15.0,<8.0",
     "pillow>=10.0",
     "pyright>=1.1.409,<2.0",
     "pytest>=9.0,<10.0",
+    "pytest-cov>=7.0,<8.0",
     "ruff>=0.15,<1.0",
 ]
 
@@ -40,6 +42,22 @@ typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["oilpaint"]
+# Compiled by numba: coverage.py can't see inside it, so it would read as
+# untested though every test runs it. (With NUMBA_DISABLE_JIT=1 it runs as
+# plain Python and can be measured, but the tests then take about an hour.)
+omit = ["oilpaint/_engine.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+precision = 2
+
+[tool.coverage.html]
+directory = "htmlcov"
 
 [tool.ruff]
 exclude = [
