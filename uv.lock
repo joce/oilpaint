@@ -480,7 +480,6 @@ wheels = [
 
 [[package]]
 name = "oilpaint"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "numba" },
@@ -514,7 +513,7 @@ tox = [
 requires-dist = [
     { name = "numba", specifier = ">=0.57" },
     { name = "numpy", specifier = ">=1.24" },
-    { name = "pillow", marker = "extra == 'pil'" },
+    { name = "pillow", marker = "extra == 'pil'", specifier = ">=9.1" },
 ]
 provides-extras = ["pil"]
 

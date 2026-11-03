@@ -4,12 +4,15 @@
 [![Coverage](https://codecov.io/gh/joce/oilpaint/graph/badge.svg)](https://codecov.io/gh/joce/oilpaint)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![GitHub License](https://img.shields.io/github/license/joce/oilpaint)](https://github.com/joce/oilpaint/blob/main/LICENSE)
 
 A small Python API that mimics oil painting. You describe **strokes** (a spline,
 a paint, an amount of paint, a brush width and pressure) and the library
 simulates how the paint is laid down, picked up, dragged and mixed on the
 canvas. Colors mix like real pigments (blue + yellow gives green, not grey),
 using spectral Kubelka-Munk theory.
+
+Install with `pip install oilpaint` (Python 3.11 or newer).
 
 Dependencies: `numpy` and `numba` (the stroke engine is compiled; the first
 stroke after installing takes about 20 seconds while it compiles, and the
@@ -77,9 +80,9 @@ photograph of it as closely as the strokes allow.
   transparent glazes over the dried shadows (about 18,000 strokes, ~6 minutes;
   `REMBRANDT_SCALE=0.5` for a quick half-size version).
 
-![bruegel](examples/output/bruegel_winter.png)
-![bob ross style](examples/output/bob_ross_style.png)
-![after rembrandt](examples/output/rembrandt_self_portrait.png)
+![bruegel](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/bruegel_winter.png)
+![bob ross style](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/bob_ross_style.png)
+![after rembrandt](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/rembrandt_self_portrait.png)
 
 ## API
 
@@ -218,13 +221,13 @@ hair (`hog`, `mongoose`, `synthetic`, `sable`, `squirrel`) and the bristle
 length (0 = short like a bright: stiffer, smaller tip capacity; 1 = long:
 springier, larger tip capacity). `brushes.catalog()` lists the presets.
 
-![brush rack](examples/output/brush_rack.png)
+![brush rack](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/brush_rack.png)
 
 *Each preset, top to bottom (`ROUND` … `BLENDER`, in the order of the table):
 a straight stroke, an S with light → heavy → light pressure, a dab, a stroke
 on the brush's edge, and a stroke that twists from broadside to edge-on.*
 
-![brush uses](examples/output/brush_uses.png)
+![brush uses](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/brush_uses.png)
 
 *Calligraphy with a flat at a fixed angle, filbert leaves, hog-fan grass,
 deer-foot stippling, a mop blending two wet colors, palette-knife slabs, rigger
@@ -318,7 +321,7 @@ canvas = Canvas(1200, 800, surface=Surface(texture="twill", scale=5, tooth=0.6, 
 `surfaces.catalog()` lists the presets. Scales assume about 1 px ≈ 0.3 mm;
 use `.with_(scale=...)` to match other canvas sizes.
 
-![surfaces](examples/output/surfaces.png)
+![surfaces](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/surfaces.png)
 
 *The same marks on each surface, left to right and top to bottom: canvas, fine
 linen, coarse linen, cotton duck, canvas board, oil paper, gesso panel, copper,
@@ -415,7 +418,7 @@ What painters do with it:
   stroke that starts light and darkens, or a stroke you can revive with a
   darker colour by pressing.
 
-![multi loading](examples/output/multi_loading.png)
+![multi loading](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/multi_loading.png)
 
 *Top: a double-loaded flat (red with a white edge), the same twisted half a
 turn, one-stroke petals, tip-loaded leaves. Then a triple-loaded sky stroke;
@@ -424,7 +427,7 @@ double load at blending 0.05, 0.4 and 1.0 (right); a viridian/yellow load
 worked 0, 2 and 6 times on the palette; double-loaded fan grass; a two-tone
 knife slab; and a white stroke whose lower side picked up wet red.*
 
-![manipulations](examples/output/manipulations.png)
+![manipulations](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/manipulations.png)
 
 *Top left: a round loaded red on one side and yellow on the other, not
 rolled, rolled half a turn, and rolled three turns along the stroke. Top
@@ -464,7 +467,7 @@ canvas.stroke(path, Paint.mix((P.CADMIUM_RED, 1), (P.MEDIUM, 3)), amount=45, bru
 canvas.save("impasto.png", light=(-0.6, -0.8, 0.7))     # a raking light shows the relief
 ```
 
-![impasto](examples/output/impasto.png)
+![impasto](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/impasto.png)
 
 *Top: the same hog flat loaded with `amount` 6, 15, 30 and 60. The colour is
 the same; the relief grows. Second row: an overloaded flat (`amount=45`) at
@@ -509,7 +512,7 @@ the blade is filled up to the blade and everything above it is pushed away, so:
   * pressing hard scrapes a channel down through both layers and carries
     the mixture along, piling it where the knife lifts.
 
-  ![knife drag](examples/output/knife_drag.png)
+  ![knife drag](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/knife_drag.png)
 
   *A thick purple field with white knifed over its left half while wet, then
   a clean knife dragged from the white out into the purple at pressure 0.3,
@@ -570,7 +573,7 @@ they're held:
 * **Handle.** A cranked (offset) handle keeps the knuckles out of the wet paint;
   it changes nothing in the mark, so it isn't modelled.
 
-![knives](examples/output/knives.png)
+![knives](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/knives.png)
 
 *Top: a palette knife at pressure 0.15, 0.4, 0.7 and 0.95, from a thick slab
 to paint scraped into the weave. Second row: the large trowel, small-trowel
@@ -595,7 +598,7 @@ and `S` by volume; that's why mixes behave like pigments (darker, subtractive,
 complementaries going to near-black, white making tints rather than washing
 out).
 
-![mixing chart](examples/output/mixing_chart.png)
+![mixing chart](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/mixing_chart.png)
 
 *In each pair of rows, the top row is paint mixing and the bottom row is naive
 RGB averaging.*
@@ -615,7 +618,7 @@ paint stirs into the wet layer instead. So white scrubbed over white on a wet
 blue sky stays white where the strokes overlap; it doesn't leave a blue ring
 at every soft edge.
 
-![glazing](examples/output/glazing.png)
+![glazing](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/glazing.png)
 
 *Left two columns: transparent glazes over a dried value study. Right two columns:
 opaque paints that hide it.*
@@ -686,8 +689,8 @@ size. The footprint is swept at its current angle and size (both can change
 along the stroke), which is what makes a flat's square ends, its thin edge
 and its twisted ribbons.
 
-![blending](examples/output/blending.png)
-![strokes](examples/output/strokes.png)
+![blending](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/blending.png)
+![strokes](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/strokes.png)
 
 **Light.** Rendering lights the same surface the paint is pushed around on:
 the canvas weave, dried paint and wet paint. Thin strokes get soft
