@@ -81,8 +81,25 @@ photograph of it as closely as the strokes allow.
   `REMBRANDT_SCALE=0.5` for a quick half-size version).
 
 ![bruegel](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/bruegel_winter.png)
+
+*A winter village in the manner of Pieter Bruegel the Elder, painted from
+memory with no picture to look at: thin paint on an oak panel, soft sable
+brushes, back to front, each layer left to dry. About 21,000 strokes.*
+
 ![bob ross style](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/bob_ross_style.png)
+
+*A mountain lake in the manner of Bob Ross, following his method step by step
+rather than any one painting: wet-on-wet over Liquid White, criss-cross sky,
+the mountain cut in with the knife, a misty tree line, fan-brush evergreens,
+happy little bushes, and water lines cut with the knife edge.*
+
 ![after rembrandt](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/rembrandt_self_portrait.png)
+
+*A study after Rembrandt's* Self-Portrait *of 1659, copying the real painting
+from a photograph of it: a monochrome underpainting left to dry, the head
+worked up wet-into-wet from big brushes to small with each stroke following
+the form, the lights piled up in lead white, the curls scratched into the wet
+paint, and glazes over the dried shadows. About 18,000 strokes.*
 
 ## API
 
