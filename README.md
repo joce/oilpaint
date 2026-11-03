@@ -8,8 +8,6 @@ using spectral Kubelka-Munk theory.
 
 Only dependency: `numpy`. (Pillow is optional, for `Canvas.to_pil()`.)
 
-![landscape](examples/output/landscape.png)
-
 ## Quick start
 
 ```python
