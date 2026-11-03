@@ -736,6 +736,102 @@ def test_reverse_painting_needs_a_clear_support_and_pickles():
     assert copy.reverse and copy.color_at(100, 80) == c.color_at(100, 80)
 
 
+def _dab_coverage(brush, pressure, paint="#2f5a2a", r=None):
+    """Share of a dab's footprint that took paint."""
+    c = Canvas(120, 120, seed=11)
+    c.stroke([(60, 60)], paint, amount=6, brush=brush, pressure=pressure, seed=3)
+    r = r or 0.42 * brush.width
+    inner = np.hypot(*np.mgrid[-60:60, -60:60]) < r
+    return float((c.thickness[inner] > 0.05).mean())
+
+
+def test_a_stippler_tapped_lightly_prints_dots_that_fill_in_with_pressure():
+    light, firm, hard = (_dab_coverage(brushes.STIPPLER, p) for p in (0.15, 0.35, 0.7))
+    assert light < 0.5 < hard
+    assert light < firm < hard
+    assert hard > 0.9
+
+
+def test_fewer_tips_print_bigger_separate_dots():
+    def edge_share(tips):
+        c = Canvas(120, 120, seed=11)
+        brush = brushes.STIPPLER.with_(tips=tips)
+        c.stroke([(60, 60)], "#2f5a2a", amount=6, brush=brush, pressure=0.3, seed=3)
+        on = c.thickness > 0.05
+        inner = on[1:-1, 1:-1]
+        edge = inner & ~(on[:-2, 1:-1] & on[2:, 1:-1] & on[1:-1, :-2] & on[1:-1, 2:])
+        return edge.sum() / max(inner.sum(), 1)
+
+    # many small dots have more edge for their area than a few big ones
+    assert edge_share(150) > 1.2 * edge_share(12)
+
+
+def test_stipple_taps_one_brush_until_it_runs_out():
+    c = Canvas(400, 80, seed=12)
+    pts = [(20 + 16 * k, 40) for k in range(23)]
+    brush = c.stipple(pts, P.CADMIUM_RED, amount=2, pressure=0.6)
+    first = c.thickness[30:50, 8:32].sum()
+    last = c.thickness[30:50, 360:384].sum()
+    assert brush.volume < Brush(brushes.STIPPLER).load(P.CADMIUM_RED, 2).volume
+    assert last < 0.7 * first
+
+
+def test_a_sponge_stays_open_however_hard_it_is_pressed():
+    sponge = _dab_coverage(brushes.SPONGE, 0.9, r=18)
+    round_ = _dab_coverage(brushes.ROUND.sized(46), 0.9, r=18)
+    assert round_ > 0.95 and sponge < 0.92
+    assert _dab_coverage(brushes.SPONGE, 0.15, r=18) < sponge
+
+
+def test_a_light_fingertip_prints_its_ridges():
+    light = _dab_coverage(brushes.FINGER, 0.1, r=8)
+    firm = _dab_coverage(brushes.FINGER, 0.45, r=8)
+    assert 0.2 < light < 0.85 and firm > 0.95
+
+
+def test_a_finger_blends_the_edge_between_two_wet_colours():
+    def transition(blend):
+        c = Canvas(160, 160, seed=13)
+        c.stroke([(10, 55), (150, 55)], P.CADMIUM_RED, amount=14, width=50, seed=1)
+        c.stroke(
+            [(10, 105), (150, 105)], P.ULTRAMARINE_BLUE, amount=14, width=50, seed=2
+        )
+        if blend:
+            for k, x in enumerate(range(30, 140, 18)):
+                c.stroke(
+                    [(x, 60), (x + 4, 100), (x, 60)], brush=brushes.FINGER, seed=3 + k
+                )
+        reds = np.array([sp.parse_color(c.color_at(80, y))[0] for y in range(50, 111)])
+        mid = (reds > reds.min() + 0.2 * np.ptp(reds)) & (
+            reds < reds.max() - 0.2 * np.ptp(reds)
+        )
+        return int(mid.sum())
+
+    assert transition(True) > transition(False) + 4
+
+
+def test_spatter_flies_the_way_it_is_flicked():
+    c = Canvas(400, 300, seed=14)
+    n = c.spatter((60, 150), P.CADMIUM_RED, direction=0, spread=15, reach=150, seed=1)
+    ys, xs = np.nonzero(c.thickness > 0.05)
+    assert n > 60 and xs.size > 0
+    assert (xs < 55).mean() < 0.02  # nothing flies backwards
+    assert abs(np.average(ys) - 150) < 25 and np.average(xs) > 150
+    down = Canvas(300, 400, seed=14)
+    down.spatter((150, 60), P.CADMIUM_RED, direction=90, spread=15, reach=150, seed=1)
+    ys, xs = np.nonzero(down.thickness > 0.05)
+    assert np.average(ys) > 150 and abs(np.average(xs) - 150) < 25
+    more = Canvas(400, 300, seed=14).spatter((60, 150), "#000000", amount=3, seed=1)
+    assert more > 2 * n
+
+
+def test_brush_type_validation_for_the_new_fields():
+    with pytest.raises(ValueError):
+        BrushType(pattern="velvet")
+    with pytest.raises(ValueError):
+        BrushType(tips=-1)
+
+
 def test_rag_only_lifts_paint():
     c = Canvas(200, 80, seed=12)
     c.stroke([(10, 40), (190, 40)], paint="#aa3322", amount=20, width=30, seed=1)

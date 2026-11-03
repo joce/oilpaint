@@ -171,7 +171,7 @@ Useful members:
 
 | parameter  | meaning |
 |------------|---------|
-| `path`     | List of `(x, y)` points: a smooth Catmull-Rom spline passes through them. Or a `CatmullRom`, `Bezier` (anchor, handle, handle, anchor, …) or `Polyline`. One point makes a dab: pressed firmly, a solid mark; tapped lightly (pressure below about 0.4), only the bristle tips touch and the mark breaks into a stipple (bushes, foliage), and a soft brush gives a dab feathered all round. |
+| `path`     | List of `(x, y)` points: a smooth Catmull-Rom spline passes through them. Or a `CatmullRom`, `Bezier` (anchor, handle, handle, anchor, …) or `Polyline`. One point makes a dab: pressed firmly, a solid mark; tapped lightly (pressure below about 0.4), only the tips of the longest bristles touch and the mark breaks into dots (bushes, foliage; see `tips` and `canvas.stipple`), and a soft brush gives a dab feathered all round. |
 | `paint`    | A `Paint` or a color. `None` uses a clean brush (blending), or the given `brush`. A list loads several paints: `[(paint, amount[, across[, depth]]), ...]` (see `Brush`). |
 | `amount`   | Paint on the brush, in "brush widths of solid stroke": `amount=6` covers about 6 widths before the brush runs dry and starts to break up. Small brushes need bigger amounts to go as far (they also hold more for their size). Loading a brush beyond what its hair holds (roughly `amount` 10 to 15 and up for a brush 20 px or wider, depending on the hair) puts a glob of paint on it that goes on thick: impasto. |
 | `brush`    | The tool: a `BrushType` (e.g. `brushes.FLAT_HOG`, see below), or a `Brush` that keeps leftover paint and dirt between strokes. Default: a medium round. |
@@ -216,6 +216,9 @@ dataclass with the same fields and call `canvas.paint(stroke1, stroke2, ...)`.
 | `PALETTE_KNIFE`, `KNIFE_…`, `SCRAPER` | Painting knives: rigid steel blades of different shapes (see **Knives** below). |
 | `RAG` | Lifts wet paint without laying any down: wipe out lights or correct mistakes. |
 | `BRUSH_HANDLE` | The other end of the brush, scratched through wet paint (sgraffito): a groove down to the paint beneath, deeper with more pressure. |
+| `STIPPLER` | A short, dense, flat-topped round, tapped straight down (`canvas.stipple`): clusters of dots for foliage, textures, broken colour. |
+| `SPONGE` | A natural sponge: dabbed on, it prints an irregular web with holes, never a solid mark (rocks, foliage, snow, weathered walls). |
+| `FINGER`, `PALM` | A fingertip and the heel of the hand: no bristles, so no brush marks. Rubbed over wet paint they blend and smooth; a fingertip touched lightly into paint leaves its print. |
 
 ```python
 from oilpaint import BrushType, brushes
@@ -250,6 +253,8 @@ custom = BrushType(shape="filbert", width=26, aspect=0.45, stiffness=0.6, capaci
 | `deposits` | `False` for tools that only lift paint (the rag). |
 | `dig` | 0..1: how deep a point cuts into the wet paint under it (1: down to the dry paint or canvas), pushing it aside into low ridges (the brush handle). |
 | `blending` | How readily different paints loaded on the brush merge as it is used. |
+| `tips` | How many separate tips (clumps of bristle ends) a dab prints when the brush is tapped lightly; 0 works it out from the size and the hair (fine hair: more, smaller tips). A light tap touches only the longest; harder taps bring in more until the mark closes up. Each brush keeps its own layout, turned a little on every tap. |
+| `pattern` | The tool's face where it is pressed down: `bristles` (separate tips), `sponge` (an irregular web with holes that stays open however hard it is pressed; `tips` is then the number of holes) or `skin` (a fingertip, with faint ridges that print on a light touch). |
 | `streaks`, `pickup`, `drag`, `mixing`, `rough` | Explicit overrides of the behavior otherwise derived from stiffness and bristles. |
 
 `brushes.make(shape, width, hair, length)` picks sensible values from the
@@ -268,6 +273,51 @@ on the brush's edge, and a stroke that twists from broadside to edge-on.*
 *Calligraphy with a flat at a fixed angle, filbert leaves, hog-fan grass,
 deer-foot stippling, a mop blending two wet colors, palette-knife slabs, rigger
 branches, an angled flat cutting a corner, dagger strokes.*
+
+### Dabbing, hands and spatter
+
+Some marks aren't brushed at all: they are tapped, pressed, rubbed or flicked.
+
+* `canvas.stipple(points, paint, amount=6, width=None, pressure=0.3, brush=STIPPLER)`
+  taps one brush straight down at each point in turn, without reloading it,
+  so it runs out as it goes; it turns a little on every tap. Tapped lightly,
+  a bristle brush prints only the tips of its longest bristles: sparse dots
+  that fill in as the pressure rises (`tips` sets how many). A `SPONGE`
+  prints its web of holes at any pressure. `pressure` can be one value per
+  point. Returns the brush.
+* `FINGER` and `PALM` are tools like any other: rub them over wet paint to
+  blend and soften it without brush marks, or touch a fingertip lightly into
+  paint to leave its print.
+* `canvas.spatter(at, paint, amount=1, direction=0, spread=25, reach=120, size=3)`
+  flicks paint off a loaded brush: a spray of drops leaving from `at` (a
+  point, or a path the brush sweeps along as it is flicked), flying
+  `direction` degrees (0 to the right, 90 down the canvas), fanned out by
+  about `spread` degrees and landing about `reach` px away, sparser further
+  off. `size` is a typical drop's diameter: most are smaller, a few much
+  bigger, with little satellites. Drops landing head-on stay round; those
+  flying further come in at a slant and stretch into teardrops, their narrow
+  tails pointing the way they flew. They sit on top of wet paint. `amount` 1
+  is a good flick, about 120 drops. Returns the number of drops.
+
+```python
+from oilpaint import brushes
+
+canvas.stipple(points, "#3c6e2f", amount=12, pressure=0.25)               # stippled foliage
+canvas.stipple(points, "#8a5a2b", pressure=0.5, brush=brushes.SPONGE)      # sponged rock
+canvas.stroke([(100, 300), (400, 306), (110, 304)], brush=brushes.FINGER)  # rubbed with a fingertip
+canvas.spatter((80, 400), "#f2c230", direction=-20, spread=15, reach=250, size=1.5)  # a fine flick
+```
+
+![dabbing, hands and spatter](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/dabs_hands_spatter.png)
+
+*Top left: the stippler tapped from light to firm, then with 10, 40 and 160
+tips at the same pressure, and a bush stippled dark to light. Top right: sponge
+prints from light to hard, a rock face sponged over a dry umber ground, and a
+sponged tree. Bottom left: yellow and red rubbed together along their edge
+with a fingertip (right half), four light fingertip prints, and a sky
+smoothed with the palm (right half). Bottom right, on a dark wash: a fine flick
+of yellow, a coarse one of white, and orange flicked from a brush swept along
+as it went.*
 
 ### Painting from a reference: `Reference(image, width, height, box=None)`
 

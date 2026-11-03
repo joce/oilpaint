@@ -8,6 +8,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Stippling: a dab tapped lightly now prints the separate tips of a brush's
+  longest bristles, dots that fill in as the pressure rises; `BrushType.tips`
+  sets how many. A new `STIPPLER` brush, and `canvas.stipple(points, ...)`
+  taps one brush at many points without reloading it.
+- A natural `SPONGE` (`BrushType.pattern="sponge"`): it prints an irregular
+  web with holes, never a solid mark.
+- Hands: `FINGER` and `PALM` blend and soften wet paint without brush marks; a
+  fingertip touched lightly into paint leaves its print
+  (`BrushType.pattern="skin"`).
+- Spatter: `canvas.spatter(...)` flicks drops of paint off a brush, round where
+  they land head-on, teardrops further off.
+- A demo of all four (`dabs_hands_spatter.png`).
+
 - Glass (`surfaces.GLASS`): a clear, perfectly smooth and slick support, with
   whatever is behind it showing through.
 - Reverse glass painting: `Canvas(..., surface=surfaces.GLASS, reverse=True)`

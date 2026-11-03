@@ -46,9 +46,10 @@ import numpy as np
 
 from . import _engine as eng
 from . import spectral as sp
+from ._dab import dab_pattern
 from ._engine import COLUMNS, IB, IS, IV, PACKED
 from ._filters import _max_filter
-from .noise import aniso_noise, fractal_noise_2d, value_noise_1d, value_noise_2d
+from .noise import aniso_noise, value_noise_1d, value_noise_2d
 from .paint import ColorLike, Paint, as_paint
 from .spline import Path, Profile, as_path, evaluate_profile
 
@@ -107,6 +108,8 @@ def _pack(paint: Paint, volume: float) -> np.ndarray:
 #: Blade outlines of palette and painting knives (see :class:`BrushType`).
 KNIFE_SHAPES = ("trowel", "pear", "straight", "angled", "spoon")
 SHAPES = ("round", "flat", "filbert", "fan") + KNIFE_SHAPES
+#: What a tool's face looks like where it is pressed straight down (a dab).
+PATTERNS = ("bristles", "sponge", "skin")
 
 
 @dataclass(frozen=True)
@@ -189,6 +192,18 @@ class BrushType:
         stiffness.
     taper:
         Default feathered ends for strokes made with this brush.
+    tips:
+        How many separate tips (clumps of bristle ends) a dab shows when the
+        brush is tapped lightly: a light tap touches only the longest ones,
+        sparse dots; harder taps bring in more until the mark closes up. 0
+        works it out from the size and the hair (fine hair has more, smaller
+        tips). Each brush keeps its own layout, turned a little on every tap.
+    pattern:
+        The face of the tool where it is pressed down: ``"bristles"``
+        (separate tips, see ``tips``), ``"sponge"`` (an irregular web with
+        holes, which stays open however hard it is pressed; ``tips`` is then
+        the number of holes) or ``"skin"`` (a fingertip: smooth, with faint
+        ridges that only print when it is touched on lightly).
     streaks, pickup, drag, mixing, rough:
         Explicit physics overrides. ``None`` derives them from stiffness and
         bristles (``rough`` is the raggedness of the stroke edges).
@@ -210,6 +225,8 @@ class BrushType:
     dig: float = 0.0
     blending: float | None = None
     taper: float = 0.0
+    tips: int = 0
+    pattern: str = "bristles"
     streaks: float | None = None
     pickup: float | None = None
     drag: float | None = None
@@ -222,6 +239,10 @@ class BrushType:
             raise ValueError(f"unknown brush shape {self.shape!r}; use one of {SHAPES}")
         if self.width <= 0 or self.aspect <= 0:
             raise ValueError("width and aspect must be positive")
+        if self.pattern not in PATTERNS:
+            raise ValueError(f"unknown pattern {self.pattern!r}; use one of {PATTERNS}")
+        if self.tips < 0:
+            raise ValueError("tips must be 0 (automatic) or more")
 
     def with_(self, **changes) -> BrushType:
         """A copy with some properties changed."""
@@ -553,6 +574,25 @@ class Brush:
             else:
                 out.append(Paint.from_optics(c[:N] / c[IV], c[IS] / c[IV]).hex)
         return out
+
+
+def load_paint(brush: Brush, paint: StrokePaint | None, amount: float) -> None:
+    """Load what a stroke asks for onto the brush: one paint, or several, each
+    as ``(paint, amount[, across[, depth]])`` or as :meth:`Brush.load` keywords."""
+    if isinstance(paint, list):
+        for item in paint:
+            if isinstance(item, dict):
+                brush.load(**item)
+            else:
+                item = tuple(cast(Sequence, item))
+                brush.load(
+                    item[0],
+                    item[1],
+                    across=item[2] if len(item) > 2 else None,
+                    depth=item[3] if len(item) > 3 else "belly",
+                )
+    elif paint is not None:
+        brush.load(paint, amount)
 
 
 #: What a stroke loads on the brush: one paint, or several, each as
@@ -922,21 +962,7 @@ class _Run:
         self.pts, self.pressure, self.angles, self.rolls = pts, pressure, angles, rolls
 
         brush.width = float(np.mean(widths))
-        # several paints: [(paint, amount[, across[, depth]]), ...]
-        if isinstance(stroke.paint, list):
-            for item in stroke.paint:
-                if isinstance(item, dict):
-                    brush.load(**item)
-                else:
-                    item = tuple(cast(Sequence, item))
-                    brush.load(
-                        item[0],
-                        item[1],
-                        across=item[2] if len(item) > 2 else None,
-                        depth=item[3] if len(item) > 3 else "belly",
-                    )
-        elif stroke.paint is not None:
-            brush.load(stroke.paint, stroke.amount)
+        load_paint(brush, stroke.paint, stroke.amount)
 
         # Hair streaks: a fixed 1-D pattern across the brush (in units of its
         # half-width), so streaks run along the stroke; coarser bristles give
@@ -967,10 +993,10 @@ class _Run:
         swell = value_noise_1d(int(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
         self.lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
         self.blade_tilt = float(_clip(rng.normal(0.0, 0.08), -0.2, 0.2))
-        # bristle tips pressed straight down: a blotchy 2-D pattern (stippling)
+        # the tool's face pressed straight down: bristle tips, a sponge's web or
+        # a fingertip (see _dab)
         if is_dab:
-            tex2 = fractal_noise_2d(96, 96, 96 / (9.0 * density), rng, octaves=2)
-            self.tex2 = (tex2 - tex2.min()) / max(np.ptp(tex2), 1e-9)
+            self.tex2 = dab_pattern(bt, 0.5 * w_typ, rng)
         aspect = self.aspect = 1.0 if circle else bt.aspect
         self.reach = 1.0 if circle else float(np.hypot(1.0, aspect))
         # in half-widths squared
@@ -1056,6 +1082,8 @@ class _Run:
             softness=float(bt.softness),
             slant=float(bt.slant),
             clumps=float(bt.clumps),
+            # a sponge's holes stay open however hard it is pressed
+            porous=0.22 if bt.pattern == "sponge" else 0.0,
             feather=float(self.feather),
             # soft brushes are lowered and lifted gently, so their ends feather
             end_k=1.0 if is_dab else max(0.0, 1.0 - 1.5 * float(bt.softness)),

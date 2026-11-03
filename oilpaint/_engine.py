@@ -119,6 +119,7 @@ StrokeConsts = namedtuple(
         "softness",
         "slant",
         "clumps",
+        "porous",
         "feather",
         "end_k",
         "surface_acts",
@@ -418,6 +419,7 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
     cx, cy, tx, ty, ds = st.cx, st.cy, st.tx, st.ty, st.ds
     r0, r1, r, p, lmax = st.r0, st.r1, st.r, st.p, st.lmax
     n_tex = tex.shape[0]
+    n2 = tex2.shape[0] - 1
     half_aa = 0.5 * EDGE_PX
     soft_pow = 1.0 + 4.0 * K.softness
     span = max(K.feather * 2.0 * r, 1.0)
@@ -434,8 +436,8 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
             lat = lat_px / r_px  # signed, in brush half-widths
             u = lat * st.uscale  # position across the bristles
             if K.is_dab:
-                ix = min(max(int((u + 1.3) / 2.6 * 95), 0), 95)
-                iy = min(max(int((along / r + 1.3) / 2.6 * 95), 0), 95)
+                ix = min(max(int((u + 1.3) / 2.6 * n2), 0), n2)
+                iy = min(max(int((along / r + 1.3) / 2.6 * n2), 0), n2)
                 hair = tex2[iy, ix]
             else:
                 hair = interp(u, -1.3, 1.3, tex, tex[0], tex[n_tex - 1])
@@ -486,7 +488,7 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
                     profile *= smoothstep(1.0, 1.0 - K.softness, rr) ** soft_pow
                 # tapped lightly, only the tips of the bristles touch: a stippled,
                 # broken mark
-                tip_thr = 0.75 - 1.5 * p
+                tip_thr = max(0.75 - 1.5 * p, K.porous)
                 if tip_thr > 0:
                     profile *= smoothstep(tip_thr - 0.12, tip_thr + 0.12, hair)
             overlap = max(min(0.0, rel + h) - max(-ds, rel - h), 0.0)
