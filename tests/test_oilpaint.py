@@ -705,6 +705,27 @@ def test_reverse_glass_shows_its_backing_and_looks_the_same_once_dry():
     assert np.abs(c.render() - before).max() < 1e-4
 
 
+def test_partly_covered_films_on_reverse_glass_never_reflect_more_than_comes_in():
+    from oilpaint.canvas import _film
+
+    rng = np.random.default_rng(1)
+    n, N = 5000, sp.N_BANDS
+    rf, rb, t2 = np.zeros((n, N)), np.zeros((n, N)), np.ones((n, N))
+    for _ in range(3):  # three films on the glass, each partly covering the pixel
+        r, tt = _film(
+            rng.uniform(0, 8, (n, N)) * rng.uniform(0, 1, (n, 1)) ** 2,
+            rng.uniform(0, 15, n),
+            rng.uniform(0, 2, n) * rng.uniform(0, 1, n),
+            np.where(rng.uniform(size=n) < 0.3, 0.0, rng.uniform(0, 1, n)),
+        )
+        bounce = 1 / (1 - rb * r)
+        rf, rb, t2 = rf + t2 * r * bounce, r + tt * rb * bounce, t2 * tt * bounce**2
+    assert (rf + t2 / (1 - rb)).max() <= 1.0  # over a perfectly white backing
+    # a white film over half the pixel, in front of a light backing
+    r, tt = _film(np.zeros((1, N)), np.full(1, 12.0), np.ones(1), np.full(1, 0.5))
+    assert (r + tt * 0.9 / (1 - r * 0.9)).max() < 0.95
+
+
 def test_reverse_painting_needs_a_clear_support_and_pickles():
     import pickle
 

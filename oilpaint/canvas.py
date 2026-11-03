@@ -454,8 +454,14 @@ def _composite(kappa, sigma, volume, alpha, below):
 def _film(kappa, sigma, volume, alpha):
     """A wet sublayer as one film of a stack (reverse painting): its
     reflectance (the same from both sides) and the share of light that gets
-    through it and back. Where it covers only part of the pixel (see
-    _composite), the rest of the pixel is clear."""
+    through it and back.
+
+    Where it covers only part of the pixel (see _composite), the rest of the
+    pixel is clear, and the stack treats the pixel as one averaged film. That
+    average also bounces light back and forth with what lies behind it, as if
+    the clear part reflected too; the light through the clear part is cut by
+    as much, so a pixel never reflects more than comes in. Exact for a full
+    film, and for an opaque one over black or white."""
     volume = np.asarray(volume, dtype=np.float32)
     alpha = np.asarray(alpha, dtype=np.float32)
     by_volume = volume / MIN_FILM
@@ -463,7 +469,8 @@ def _film(kappa, sigma, volume, alpha):
     cov = np.clip(cov, 1e-6, 1.0)
     r, t = sp.km_film(kappa / cov[..., None], sigma / cov)
     cov = cov[..., None]
-    return cov * r, cov * t * t + (1.0 - cov)
+    r_avg = cov * r
+    return r_avg, cov * t * t + (1.0 - cov) * (1.0 - r_avg)
 
 
 def _cast_shadow(h: np.ndarray, L: np.ndarray, max_steps: int = 32) -> np.ndarray:
