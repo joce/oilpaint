@@ -35,8 +35,8 @@ canvas.stroke([(80, 300), (560, 300)], width=40, pressure=0.6)
 canvas.save("painting.png")
 ```
 
-Run `python examples/demo.py` to regenerate all the images in `examples/output/`,
-and `pytest tests` to run the tests.
+Run `python examples/demo.py` to regenerate the demo images in `examples/output/`;
+see [Development](#development) for the tests and checks.
 
 ## Three paintings made with it
 
@@ -717,3 +717,19 @@ it's wet.
 * Speed: about a millisecond for a small brush stroke, tenths of a second for a
   big heavily loaded one or a knife stroke. Memory is about 0.3 KB per pixel (a
   1000×750 canvas needs ~250 MB).
+
+## Development
+
+Python 3.11 to 3.15. The checks run with [uv](https://docs.astral.sh/uv/) and tox:
+
+```bash
+uv run tox            # every Python version: formatting, lint, types and tests
+uv run tox -e check   # the same, once, on the current Python
+uv run pytest         # just the tests
+make spell            # spelling (cspell; needs Node.js)
+make pre-push         # tox, and the spelling of the files you changed
+```
+
+Formatting is black and ruff format (88 columns), lint is ruff, types are
+pyright. CI runs the spell check, then the tox checks on each Python version,
+on every pull request and every push to `main`.

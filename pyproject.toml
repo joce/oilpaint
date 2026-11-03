@@ -7,12 +7,99 @@ name = "oilpaint"
 version = "0.1.0"
 description = "A small oil-painting simulator: spline brush strokes with physically based (spectral Kubelka-Munk) paint mixing."
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = ["numpy>=1.22", "numba>=0.57"]
+requires-python = ">=3.11, <4.0"
+dependencies = ["numpy>=1.24", "numba>=0.57"]
 
 [project.optional-dependencies]
 pil = ["Pillow"]
-test = ["pytest"]
+
+[dependency-groups]
+tox = [
+    "tox>=4.53,<5.0",
+    "tox-uv>=1.35,<2.0",
+]
+dev = [
+    { include-group = "tox" },
+    "black>=25.9,<27.0",
+    "pillow>=10.0",
+    "pyright>=1.1.409,<2.0",
+    "pytest>=9.0,<10.0",
+    "ruff>=0.15,<1.0",
+]
 
 [tool.setuptools]
 packages = ["oilpaint"]
+
+[tool.black]
+target-version = ["py311"]
+line-length = 88
+
+[tool.pyright]
+include = ["oilpaint", "tests", "examples"]
+typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+exclude = [
+    "__pycache__",
+    ".git",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".uv-cache",
+    ".venv",
+    ".vscode",
+    "node_modules",
+]
+line-length = 88
+indent-width = 4
+target-version = "py311"
+
+[tool.ruff.format]
+# (the code samples in the README keep their hand-aligned comments)
+exclude = ["*.md"]
+indent-style = "space"
+line-ending = "lf"
+quote-style = "double"
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint]
+# A core set for now; yoghurt's stricter families (annotations, docstrings,
+# naming, pylint, ...) can be turned on one at a time later.
+select = [
+    "F",
+    "E",
+    "W",
+    "I",
+    "UP",
+    "B",
+    "A",
+    "C4",
+    "SIM",
+    "PIE",
+    "PERF",
+    "FURB",
+    "RET",
+    "ISC",
+    "Q",
+    "NPY",
+    "PGH",
+    "T10",
+    "YTT",
+    "ICN",
+    "FLY",
+    "RUF",
+]
+fixable = ["ALL"]
+unfixable = []
+ignore = [
+    # `[x] + rest` -> `[x, *rest]` changes the meaning when `rest` is a numpy array
+    "collection-literal-concatenation",
+    # exact float comparisons here are deliberate (defaults, stored values, exact zeros)
+    "float-equality-comparison",
+    # numpy and numba scalars: explicit int() casts stay, even where Python's are redundant
+    "unnecessary-cast-to-int",
+]
+preview = true
