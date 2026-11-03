@@ -6,7 +6,9 @@ simulates how the paint is laid down, picked up, dragged and mixed on the
 canvas. Colors mix like real pigments (blue + yellow gives green, not grey),
 using spectral Kubelka-Munk theory.
 
-Only dependency: `numpy`. (Pillow is optional, for `Canvas.to_pil()`.)
+Dependencies: `numpy` and `numba` (the stroke engine is compiled; the first
+stroke after installing takes about 20 seconds while it compiles, and the
+result is cached). Pillow is optional, for `Canvas.to_pil()`.
 
 ## Quick start
 
@@ -47,7 +49,7 @@ photograph of it as closely as the strokes allow.
 
 * `examples/bruegel_winter.py`: a winter village in the manner of Pieter
   Bruegel the Elder, painted thinly on an oak panel with soft sable brushes,
-  back to front, letting layers dry (about 20,000 strokes, ~13 minutes).
+  back to front, letting layers dry (about 21,000 strokes, ~2 minutes).
 * `examples/bob_ross_style.py`: a mountain lake painted wet-on-wet in the
   manner of Bob Ross, in the order he worked on the show: Liquid White over
   the whole canvas; the sky in criss-cross strokes with a two-inch brush;
@@ -55,7 +57,7 @@ photograph of it as closely as the strokes allow.
   laid on with almost no pressure so it breaks; a misty tree line tapped in;
   evergreens built with the fan brush from the top down; happy little bushes
   tapped dark and then highlighted; water lines cut with the knife edge
-  (~10 minutes).
+  (~3.5 minutes).
 * `examples/rembrandt_self_portrait.py`: a study after Rembrandt's
   *Self-Portrait* of 1659 (National Gallery of Art, Washington; public
   domain), painted from a reproduction (`examples/reference`) the way he
@@ -67,7 +69,7 @@ photograph of it as closely as the strokes allow.
   lead white; the hair in thin strokes following the swirl of its curls,
   the curls themselves traced from a close-up of the head, scratched into the
   wet paint with the brush handle or drawn on with a liner;
-  transparent glazes over the dried shadows (about 22,000 strokes, ~20 minutes;
+  transparent glazes over the dried shadows (about 18,000 strokes, ~6 minutes;
   `REMBRANDT_SCALE=0.5` for a quick half-size version).
 
 ![bruegel](examples/output/bruegel_winter.png)
@@ -710,6 +712,6 @@ it's wet.
   with the leading edge) is folded into pressure.
 * Paint optics are derived from RGB colors, not measured pigment data. If you
   have measured spectra, `Paint.from_optics(K, S)` accepts them directly.
-* Pure numpy: tens of milliseconds per stroke on a typical canvas (more for
-  big, heavily loaded or knife strokes). Memory is about 0.3 KB per pixel (a
+* Speed: about a millisecond for a small brush stroke, tenths of a second for a
+  big heavily loaded one or a knife stroke. Memory is about 0.3 KB per pixel (a
   1000×750 canvas needs ~250 MB).

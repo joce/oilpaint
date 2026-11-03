@@ -67,28 +67,27 @@ class CatmullRom(Path):
             P = np.vstack([P[-1], P, P[0], P[1]])
         else:  # reflect end points to get natural end tangents
             P = np.vstack([2 * P[0] - P[1], P, 2 * P[-1] - P[-2]])
-        pts, knots = [], []
-        for i in range(len(P) - 3):
-            p0, p1, p2, p3 = P[i:i + 4]
-            chord = np.linalg.norm(p2 - p1)
-            m = max(8, int(chord / 2) + 1)
-            t = np.linspace(0.0, 1.0, m, endpoint=False)
-            pts.append(_catmull_segment(p0, p1, p2, p3, t, self.alpha))
-            knots.append(i + t)
-        pts.append(P[-2][None])
-        knots.append(np.array([float(len(P) - 3)]))
-        return np.vstack(pts), np.concatenate(knots)
+        # all segments at once: segment i runs from P[i + 1] to P[i + 2]
+        p0, p1, p2, p3 = P[:-3], P[1:-2], P[2:-1], P[3:]
+        m = np.maximum(8, (np.linalg.norm(p2 - p1, axis=1) / 2).astype(int) + 1)    # samples per segment
+        seg = np.repeat(np.arange(len(m)), m)
+        t = (np.arange(m.sum()) - np.repeat(np.cumsum(m) - m, m)) * (1.0 / m[seg])    # 0..1 within each
+        pts = _catmull_segment(p0[seg], p1[seg], p2[seg], p3[seg], t, self.alpha)
+        return np.vstack([pts, P[-2][None]]), np.concatenate([seg + t, [float(len(P) - 3)]])
 
 
 def _catmull_segment(p0, p1, p2, p3, t, alpha):
+    """Points at parameter t (0..1) on the Catmull-Rom segments from p1 to p2
+    (one row of p0..p3 per value of t)."""
     def tj(ti, a, b):
-        return ti + max(np.linalg.norm(b - a), 1e-6) ** alpha
+        return ti + np.maximum(np.linalg.norm(b - a, axis=1), 1e-6) ** alpha
 
     t0 = 0.0
     t1 = tj(t0, p0, p1)
     t2 = tj(t1, p1, p2)
     t3 = tj(t2, p2, p3)
-    tt = (t1 + (t2 - t1) * t)[:, None]
+    tt = t1 + (t2 - t1) * t
+    t1, t2, t3, tt = t1[:, None], t2[:, None], t3[:, None], tt[:, None]
     a1 = (t1 - tt) / (t1 - t0) * p0 + (tt - t0) / (t1 - t0) * p1
     a2 = (t2 - tt) / (t2 - t1) * p1 + (tt - t1) / (t2 - t1) * p2
     a3 = (t3 - tt) / (t3 - t2) * p2 + (tt - t2) / (t3 - t2) * p3
