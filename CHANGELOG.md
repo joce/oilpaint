@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-03
+
 First release.
 
 ### Added
@@ -34,4 +36,5 @@ First release.
 - Example paintings after Bruegel, Bob Ross and Rembrandt, and demos.
 - Python 3.11 to 3.15.
 
-[Unreleased]: https://github.com/joce/oilpaint/commits/main
+[Unreleased]: https://github.com/joce/oilpaint/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/joce/oilpaint/releases/tag/v0.1.0
