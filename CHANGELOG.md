@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Brushes stay dirty longer after working through thick wet paint. What a
+  brush lifts no longer all goes into its tips: deeper wet paint comes
+  further up the hairs, more so under pressure and with soft hair, and part
+  of it goes into the body of the brush, where it lasts into the next
+  strokes. A thin film still only dirties the tips.
+
 ## [0.1.0] - 2026-11-03
 
 First release.

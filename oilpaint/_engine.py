@@ -59,6 +59,13 @@ BLEND_RATE = 2.3
 HOLD = 11.0
 # Extra layer thickness per load unit of glob, for paint of body 1.
 IMPASTO = 0.2
+# How deep wet paint must reach up the hairs (in units of paint thickness, per
+# unit of tip capacity) for half of what a brush lifts from it to go past the
+# tips into the body of the brush (see past_tips). With 6, a full hog flat
+# dragged through medium wet paint (1.5 thick) ends up with about 3% of that
+# paint in its body (under 1% if it all went to the tips): enough to tint its
+# next stroke all along. A thin film (0.5) still mostly dirties the tips.
+TIP_DEPTH = 6.0
 # Share of an overload squeezed out at the edges per width of travel (knife, brush).
 SQUEEZE_KNIFE, SQUEEZE_BRUSH = 0.03, 0.04
 # Paint thinner than this can't form a continuous film (as canvas.MIN_FILM).
@@ -1190,13 +1197,26 @@ def lay_ridges(cv, pend, br, K, st, ridges, grid, c_tab, h_tab):
 
 
 @njit(cache=True, error_model="numpy")
+def past_tips(h, p, K):
+    """Share of the paint a brush lifts that goes past the tips into the belly.
+    A thin film of wet paint only wets the tips; deeper paint comes further up
+    between the hairs, and pressing bends them (soft hair more) so that more of
+    their length lies in it. ``h``: the wet paint from earlier strokes there."""
+    if h <= 0.0:
+        return 0.0
+    reach = h * (0.5 + p * (1.6 - K.stiffness))
+    return reach / (reach + TIP_DEPTH * K.smear)
+
+
+@njit(cache=True, error_model="numpy")
 def pick_up(cv, br, taps, F, st, K, f_pick):
     """The tool lifts wet paint. Bristles plough through it: they lift paint
     along the hair lines and leave it between them (brush marks). Thick fresh
     paint shields the older layer below. What is lifted goes into the columns
-    that touched it."""
-    top, und = cv[0], cv[1]
-    tip = br[0]
+    that touched it: into their tips, and from deep wet paint partly further up
+    (see past_tips)."""
+    top, und, ids = cv[0], cv[1], cv[4]
+    tip, belly = br[0], br[1]
     cols, wts, ntap = taps
     p = st.p
     gain = K.pickup * 1.2 * (0.25 + 1.5 * min(p, 1.0))
@@ -1217,6 +1237,9 @@ def pick_up(cv, br, taps, F, st, K, f_pick):
             a_und = np.float32(
                 (1.0 - math.exp(-k * p)) * math.exp(-top[Y, X, IV] / 1.5)
             )
+            # (the paint this stroke has just laid is what the tips gave)
+            other = und[Y, X, IV] + (top[Y, X, IV] if ids[Y, X] != K.stroke_id else 0.0)
+            deep = past_tips(other, p, K)
             for li in range(2):
                 layer = top if li == 0 else und
                 a = a_top if li == 0 else a_und
@@ -1226,7 +1249,8 @@ def pick_up(cv, br, taps, F, st, K, f_pick):
                 for t in range(ntap[q]):
                     b, wt = cols[q, t], wts[q, t]
                     for c in range(PACKED):
-                        tip[b, c] += wt * lifted[c]
+                        tip[b, c] += wt * (1.0 - deep) * lifted[c]
+                        belly[b, c] += wt * deep * lifted[c]
 
 
 @njit(cache=True, error_model="numpy")
@@ -1307,6 +1331,7 @@ def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
             vmax = max(vmax, top[cy0 + y, cx0 + x, IV] + und[cy0 + y, cx0 + x, IV])
     if digging or vmax > (1.0 - 0.4 * K.streaks) * hb:
         tv = np.empty((ch, cw))
+        wet_h = np.empty((ch, cw))
         excess = np.empty((ch, cw))
         emax = 0.0
         depth = K.dig * smoothstep(0.05, 0.6, p)
@@ -1316,6 +1341,7 @@ def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
                 # (heights summed in single precision, like the paint itself)
                 t = top[Y, X, IV] if ids[Y, X] != K.stroke_id else np.float32(0.0)
                 tv[y, x] = t
+                wet_h[y, x] = t + und[Y, X, IV]
                 e = F[F_EXPO, wy0 + y, wx0 + x]
                 # a point cut into the paint: a groove through a share of all of it
                 if digging:
@@ -1339,10 +1365,13 @@ def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
             for y in range(ch):
                 for x in range(cw):
                     q = y * cw + x
+                    deep = past_tips(wet_h[y, x], p, K)
                     for t in range(ntap[q]):
                         b, wt = cols[q, t], wts[q, t] * share_pick
                         for c in range(PACKED):
-                            tip[b, c] += wt * moved[y, x, c]
+                            m = wt * moved[y, x, c]
+                            tip[b, c] += (1.0 - deep) * m
+                            belly[b, c] += deep * m
             moved *= 1.0 - share_pick
             if st.touchdown:
                 for y in range(ch):

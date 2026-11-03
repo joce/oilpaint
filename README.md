@@ -398,7 +398,10 @@ What painters do with it:
   pressure, from a crisp edge to a smooth gradient across the stroke.
 * **Dirty brush**: not cleaning between strokes carries colour from one area
   into the next for colour harmony; paint picked up from the canvas stays on
-  the side of the brush that touched it.
+  the side of the brush that touched it. How long it lasts follows from the
+  amounts: a brush that went through thick wet paint, or pressed hard into
+  it, or held little paint of its own, stays dirty longer than a full brush
+  that skimmed a thin film.
 * **Fans and knives**: a double-loaded hog fan puts light and dark blades in
   every flick of grass; a double-loaded palette knife lays two-tone slabs.
 * **Rolling a round**: rolling the brush between the fingers as it moves
@@ -631,7 +634,10 @@ the footprint through the current roll), each with a tip, a belly
 along the spline it does four things:
 
 1. It pushes some of the wet paint ahead of it (drag).
-2. It lifts some of the wet paint into its tip (pickup).
+2. It lifts some of the wet paint (pickup). A thin film only wets the tip;
+   deeper wet paint comes further up between the hairs, more so when pressing
+   bends them, so part of it goes into the reservoir and stays in the brush
+   for longer.
 3. It lays down a mix of what the tip holds (deposit), refilling the tip from
    the reservoir. Neighbouring columns and layers slowly share their paint as
    the brush flexes (the `blending` setting).
