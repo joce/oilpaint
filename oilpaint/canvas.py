@@ -36,9 +36,17 @@ class Canvas:
         A :class:`oilpaint.Surface`, e.g. ``surfaces.LINEN_FINE`` or
         ``surfaces.GESSO_PANEL``: texture, tooth, absorbency, slickness and
         priming. Default: a generic primed canvas.
+    reverse:
+        Paint on the back of a clear support (``surfaces.GLASS``) and look
+        at it through the front: a reverse glass painting. The first paint
+        laid is then in front: the outlines and details go on first, the
+        background last. The brushes work as usual (on the back); the picture
+        is seen through flat glass, without brush relief. Coordinates are as
+        seen from the front, so nothing has to be painted mirrored. ``ground``
+        is what shows through where there is no paint.
 
     Memory: about 0.3 KB per pixel (24 spectral bands for the dry ground and
-    for each of the two wet sublayers).
+    for each of the two wet sublayers); 0.5 KB painted in reverse.
     """
 
     def __init__(
@@ -50,10 +58,16 @@ class Canvas:
         weave: float | None = None,
         seed: int | None = None,
         surface: Surface | None = None,
+        reverse: bool = False,
     ):
         self.width, self.height = int(width), int(height)
         if self.width <= 0 or self.height <= 0:
             raise ValueError("canvas size must be positive")
+        if reverse and not (surface or DEFAULT_SURFACE).transparent:
+            raise ValueError(
+                "reverse painting needs a clear support, such as surfaces.GLASS"
+            )
+        self.reverse = bool(reverse)
         self._rng = np.random.default_rng(seed)
         surf = surface or DEFAULT_SURFACE
         image = None
@@ -74,6 +88,15 @@ class Canvas:
                 f"ground image is {image.shape[1]}x{image.shape[0]}, canvas is {W}x{H}"
             )
         self.ground = self.surface.ground_reflectance(H, W, self._rng, image=image)
+        if self.reverse:
+            # The dried paint on the back of the glass, as one stack: its
+            # reflectance seen through the glass and seen from behind, and
+            # the share of light that gets through it and back out (see
+            # _stack). Clear glass to begin with. The ground is behind it all.
+            N = sp.N_BANDS
+            self.glass_r = np.zeros((H, W, N), f32)
+            self.glass_rb = np.zeros((H, W, N), f32)
+            self.glass_t2 = np.ones((H, W, N), f32)
         # Wet sublayers, packed per pixel as [K (N bands), S, volume, body x
         # volume], all extensive (summed over the paint present). The
         # *_k/_s/_v names are views.
@@ -111,6 +134,7 @@ class Canvas:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        self.__dict__.setdefault("reverse", False)  # canvases saved before glass
         # canvases saved before coverage existed
         for name in ("top_a", "und_a"):
             if name not in self.__dict__:
@@ -175,7 +199,10 @@ class Canvas:
         """Let all wet paint dry. Later strokes no longer mix with it; they
         layer over it optically (glazes show the dry paint through)."""
         for s in self._row_chunks():
-            self.ground[s] = self._reflectance_rows(s)
+            if self.reverse:
+                self.glass_r[s], self.glass_rb[s], self.glass_t2[s] = self._stack(s)
+            else:
+                self.ground[s] = self._reflectance_rows(s)
         self.dry_height += self.top_v + self.und_v
         self.top.fill(0)
         self.und.fill(0)
@@ -232,10 +259,35 @@ class Canvas:
         return self._reflectance_rows(slice(None))
 
     def _reflectance_rows(self, s) -> np.ndarray:
+        if self.reverse:
+            # through the glass: the dried paint first, then the wet paint
+            # behind it (the newest, ``top``, furthest back), then the ground
+            rf, rb, t2 = self._stack(s)
+            g = self.ground[s]
+            return rf + t2 * g / (1.0 - rb * g)
         R = _composite(
             self.und_k[s], self.und_s[s], self.und_v[s], self.und_a[s], self.ground[s]
         )
         return _composite(self.top_k[s], self.top_s[s], self.top_v[s], self.top_a[s], R)
+
+    def _stack(self, s):
+        """Reverse painting: the paint on the back of the glass, seen through it,
+        as ``(reflectance from the front, reflectance from behind, round trip
+        through it)``. The dried stack, then each wet sublayer behind it."""
+        rf, rb, t2 = self.glass_r[s], self.glass_rb[s], self.glass_t2[s]
+        for k, sg, v, a in (
+            (self.und_k[s], self.und_s[s], self.und_v[s], self.und_a[s]),
+            (self.top_k[s], self.top_s[s], self.top_v[s], self.top_a[s]),
+        ):
+            r, tt = _film(k, sg, v, a)
+            # light reflected back and forth between the stack and the film
+            bounce = 1.0 / (1.0 - rb * r)
+            rf, rb, t2 = (
+                rf + t2 * r * bounce,
+                r + tt * rb * bounce,
+                t2 * tt * bounce * bounce,
+            )
+        return rf, rb, t2
 
     def _row_chunks(self):
         rows = max(1, 2_000_000 // max(self.width * sp.N_BANDS, 1))
@@ -243,6 +295,9 @@ class Canvas:
 
     def color_at(self, x: int, y: int) -> str:
         """Hex color of the paint at pixel (x, y), without lighting."""
+        if self.reverse:
+            R = self._reflectance_rows((slice(y, y + 1), slice(x, x + 1)))[0, 0]
+            return sp.to_hex(sp.reflectance_to_srgb(R))
         R = _composite(
             self.und_k[y, x],
             self.und_s[y, x],
@@ -270,7 +325,7 @@ class Canvas:
         ``lighting`` shades the surface relief (canvas weave and impasto) with
         a raking light from ``light`` (x, y, z; y points down the image).
         ``relief`` scales the apparent height of paint, ``gloss`` the oily
-        highlights.
+        highlights. A reverse painting is seen through flat glass: no relief.
         """
         lin = self._render_linear()
         matte = self._matte()
@@ -279,7 +334,7 @@ class Canvas:
             # a glossy surface reflects away is scattered back diffusely instead,
             # so darks look lighter and duller.
             lin = lin + (0.04 * matte)[..., None] * (1.0 - lin)
-        if lighting:
+        if lighting and not self.reverse:
             lin = self._light(lin, np.asarray(light, float), relief, gloss, matte)
         return sp.linear_to_srgb(lin).astype(np.float32)
 
@@ -394,6 +449,21 @@ def _composite(kappa, sigma, volume, alpha, below):
     film = sp.km_layer(kappa / cov[..., None], sigma / cov, below)
     cov = cov[..., None]
     return cov * film + (1.0 - cov) * below
+
+
+def _film(kappa, sigma, volume, alpha):
+    """A wet sublayer as one film of a stack (reverse painting): its
+    reflectance (the same from both sides) and the share of light that gets
+    through it and back. Where it covers only part of the pixel (see
+    _composite), the rest of the pixel is clear."""
+    volume = np.asarray(volume, dtype=np.float32)
+    alpha = np.asarray(alpha, dtype=np.float32)
+    by_volume = volume / MIN_FILM
+    cov = np.where(alpha > 0, np.minimum(alpha, by_volume), by_volume)
+    cov = np.clip(cov, 1e-6, 1.0)
+    r, t = sp.km_film(kappa / cov[..., None], sigma / cov)
+    cov = cov[..., None]
+    return cov * r, cov * t * t + (1.0 - cov)
 
 
 def _cast_shadow(h: np.ndarray, L: np.ndarray, max_steps: int = 32) -> np.ndarray:

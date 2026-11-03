@@ -362,6 +362,29 @@ def km_layer(kappa, sigma, ground):
     return num / den
 
 
+def km_film(kappa, sigma):
+    """Reflectance and transmittance of a free-standing paint film: ``(R, T)``.
+
+    The same from either side (a film is uniform through its thickness).
+    ``R`` is what it reflects with nothing behind it, ``T`` the share of
+    light that gets through it one way. Over a ground ``g`` it reflects
+    ``R + T**2 * g / (1 - R * g)``, which is :func:`km_layer`. Inputs are
+    optical thicknesses, as for :func:`km_layer`.
+    """
+    kappa = np.maximum(np.asarray(kappa), 0.0)
+    sigma = np.maximum(np.asarray(sigma), 0.0)
+    if sigma.ndim == kappa.ndim - 1:
+        sigma = sigma[..., None]
+    B = np.sqrt(kappa * kappa + 2.0 * kappa * sigma)
+    small = B < 1e-4
+    tau = np.where(small, 1.0 - B * B / 3.0, np.tanh(B) / np.where(small, 1.0, B))
+    den = (sigma + kappa) * tau + 1.0
+    # 1 / cosh(B), without overflow for thick, dark films
+    e = np.exp(-B)
+    sech = 2.0 * e / (1.0 + e * e)
+    return sigma * tau / den, sech / den
+
+
 def km_opaque(kappa, sigma):
     """Reflectance of an infinitely thick layer (the paint's masstone)."""
     kappa = np.asarray(kappa)

@@ -414,6 +414,7 @@ def surface_sampler():
         "OIL_PAPER",
         "GESSO_PANEL",
         "COPPER",
+        "GLASS",
         "toned",
     ]
     dark = Paint.mix((P.BURNT_UMBER, 1), (P.IVORY_BLACK, 0.5))
@@ -469,7 +470,7 @@ def surface_sampler():
         )
         tiles.append(np.pad(c.render(), ((6, 6), (6, 6), (0, 0)), constant_values=1.0))
         print("  ", c.surface.name)
-    grid = np.vstack([np.hstack(tiles[r * 3 : r * 3 + 3]) for r in range(3)])
+    grid = np.vstack([np.hstack(tiles[r * 5 : r * 5 + 5]) for r in range(2)])
     path = os.path.join(OUT, "surfaces.png")
     write_png(path, np.round(grid * 255).astype(np.uint8))
     print("wrote", path)
@@ -1121,6 +1122,142 @@ def dirty_brush():
     save(c, "dirty_brush.png")
 
 
+# ---------------------------------------------------------------------------
+# 13. Reverse glass: painted on the back, seen through the front
+# ---------------------------------------------------------------------------
+PETAL = Paint.mix((P.CADMIUM_RED, 3), (P.CADMIUM_ORANGE, 1))
+LEAF = Paint.mix((P.SAP_GREEN, 2), (P.CADMIUM_YELLOW, 1))
+GLASS_SKY = Paint.mix((P.ULTRAMARINE_BLUE, 2), (P.TITANIUM_WHITE, 1))
+# (angle, height up the stem) of the two leaves
+LEAVES = ((-0.55, 150), (0.6, 125))
+
+
+def _ellipse(cx, cy, rx, ry, angle, n=14):
+    t = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    ca, sa = np.cos(angle), np.sin(angle)
+    pts = [
+        (
+            cx + ca * rx * np.cos(u) - sa * ry * np.sin(u),
+            cy + sa * rx * np.cos(u) + ca * ry * np.sin(u),
+        )
+        for u in t
+    ]
+    return [*pts, *pts[:2]]  # closed, with the join smooth
+
+
+def _leaf(cx, cy, angle, up, n=12):
+    """Points around a leaf from the stem at height ``up``, slanting ``angle``."""
+    side = 1.0 if angle >= 0 else -1.0
+    dx, dy = side * np.cos(angle), -np.sin(abs(angle))  # along the leaf
+    nx, ny = -dy, dx  # across it
+    u = np.linspace(0.0, 1.0, n)
+    half = 16 * np.sin(np.pi * u)
+    x0, y0 = cx + 7 + 75 * u * dx, cy + up + 75 * u * dy
+    pts = list(zip(x0 + half * nx, y0 + half * ny, strict=True)) + list(
+        zip((x0 - half * nx)[::-1], (y0 - half * ny)[::-1], strict=True)
+    )
+    return [*pts, *pts[:2]]
+
+
+def _flower_step(c, step, cx=180, cy=150):
+    """One stage of a folk-art flower on glass."""
+
+    def line(pts, w=5):  # a black line, with enough paint to reach its end
+        run = float(np.sum(np.hypot(*np.diff(np.asarray(pts, float), axis=0).T)))
+        c.stroke(
+            pts,
+            P.IVORY_BLACK,
+            amount=1.5 * run / w + 2,
+            brush=B.ROUND_SABLE.sized(w),
+            pressure=0.7,
+        )
+
+    petals = [
+        (cx + 58 * np.cos(a), cy + 58 * np.sin(a), a)
+        for a in np.arange(6) * np.pi / 3 + 0.3
+    ]
+    stem = [(cx + 20, cy + 96), (cx + 12, cy + 160), (cx + 6, cy + 240)]
+    if step == "outlines":
+        for x, y, a in petals:
+            line(_ellipse(x, y, 40, 21, a))
+        line(_ellipse(cx, cy, 23, 23, 0))
+        line(stem, 6)
+        for angle, up in LEAVES:
+            line(_leaf(cx, cy, angle, up))
+    elif step == "details":  # a white gleam on each petal, black seeds
+        for x, y, a in petals:
+            ca, sa = np.cos(a), np.sin(a)
+            gleam = [(x + d * ca - 6 * sa, y + d * sa + 6 * ca) for d in (-14, 10)]
+            c.stroke(gleam, P.TITANIUM_WHITE, amount=3, brush=B.ROUND.sized(7))
+        for a in np.arange(7) * 2 * np.pi / 7:
+            x, y = cx + 11 * np.cos(a), cy + 11 * np.sin(a)
+            c.stroke(
+                [(x, y), (x + 1, y + 1)],
+                P.IVORY_BLACK,
+                amount=2,
+                brush=B.ROUND.sized(5),
+            )
+    elif step == "colours":
+        for x, y, a in petals:
+            ca, sa = np.cos(a), np.sin(a)
+            c.stroke(
+                [(x + d * ca, y + d * sa) for d in (-38, -20, 0, 20, 38)],
+                PETAL,
+                amount=10,
+                brush=B.FILBERT_HOG.sized(24),
+                width=[8, 36, 42, 36, 8],
+                pressure=0.55,
+            )
+        c.stroke(
+            _ellipse(cx, cy, 8, 8, 0, 8),
+            P.CADMIUM_YELLOW,
+            amount=12,
+            brush=B.ROUND.sized(30),
+        )
+        c.stroke(stem, LEAF, amount=12, brush=B.ROUND.sized(12))
+        for angle, up in LEAVES:
+            side = 1.0 if angle >= 0 else -1.0
+            c.stroke(
+                [
+                    (
+                        cx + 7 + side * 75 * u * np.cos(angle),
+                        cy + up - 75 * u * np.sin(abs(angle)),
+                    )
+                    for u in (0.0, 0.3, 0.6, 1.0)
+                ],
+                LEAF,
+                amount=10,
+                brush=B.FILBERT_HOG.sized(30),
+                width=[6, 30, 30, 6],
+            )
+    else:  # the background, all over
+        for y in range(-6, c.height + 20, 20):
+            c.stroke(
+                [(-20, y), (c.width + 20, y + 4)],
+                GLASS_SKY,
+                amount=16,
+                brush=B.FLAT_HOG.sized(36),
+                pressure=0.6,
+            )
+
+
+def reverse_glass():
+    """The same flower painted on the front of the glass in the usual order, on
+    the back in reverse order (seen through the glass), and on the back in the
+    usual order."""
+    usual = ["background", "colours", "details", "outlines"]
+    panels = []
+    for order, reverse in ((usual, False), (usual[::-1], True), (usual, True)):
+        c = Canvas(360, 400, surface=S.GLASS, reverse=reverse, seed=11)
+        for step in order:
+            _flower_step(c, step)
+            c.dry()  # each stage dries before the next goes on
+        panels.append(np.pad(c.render(), ((0, 0), (6, 6), (0, 0)), constant_values=1.0))
+    path = os.path.join(OUT, "reverse_glass.png")
+    write_png(path, np.round(np.hstack(panels) * 255).astype(np.uint8))
+    print("wrote", path)
+
+
 if __name__ == "__main__":
     for fn in (
         mixing_chart,
@@ -1136,6 +1273,7 @@ if __name__ == "__main__":
         knives,
         knife_drag,
         dirty_brush,
+        reverse_glass,
     ):
         t0 = time.time()
         fn()

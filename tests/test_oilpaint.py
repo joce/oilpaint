@@ -656,6 +656,65 @@ def test_canvas_with_surface_pickles():
     assert c.surface.name == "Gesso panel" and np.isfinite(c.render()).all()
 
 
+def test_km_film_is_the_layer_seen_on_its_own():
+    rng = np.random.default_rng(0)
+    k = rng.uniform(0, 20, (50, sp.N_BANDS)) * rng.uniform(0, 1, (50, 1)) ** 3
+    s = rng.uniform(0, 10, 50)
+    g = rng.uniform(0, 1, (50, sp.N_BANDS))
+    R, T = sp.km_film(k, s)
+    assert np.allclose(sp.km_layer(k, s, g), R + T**2 * g / (1 - R * g))
+
+
+def _on_glass(first, second, reverse, ground=None):
+    """``first`` painted on glass and left to dry, then ``second`` across it."""
+    glass = surfaces.GLASS if ground is None else surfaces.GLASS.with_(ground=ground)
+    c = Canvas(200, 160, surface=glass, reverse=reverse, seed=1)
+    c.stroke([(10, 80), (190, 80)], paint=first, amount=10, width=40, seed=1)
+    c.dry()
+    c.stroke([(100, 5), (100, 155)], paint=second, amount=10, width=34, seed=2)
+    return c
+
+
+def test_reverse_glass_shows_the_first_paint_in_front():
+    red, blue = P.CADMIUM_RED, P.ULTRAMARINE_BLUE
+    front, back = _on_glass(red, blue, False), _on_glass(red, blue, True)
+    r, _g, b = sp.parse_color(front.color_at(100, 80))
+    assert b > r  # painted on the front: the blue goes over the red
+    r, _g, b = sp.parse_color(back.color_at(100, 80))
+    assert r > b + 0.3  # painted on the back: the red, laid first, is in front
+    # where they don't overlap, the paint looks the same from either side
+    for x, y in ((30, 80), (100, 20)):
+        seen = [sp.parse_color(c.color_at(x, y)) for c in (front, back)]
+        assert np.abs(seen[0] - seen[1]).max() < 0.02
+
+
+def test_a_glaze_painted_first_on_reverse_glass_tints_what_goes_behind():
+    glaze = Paint.mix((P.ALIZARIN_CRIMSON, 1), (P.MEDIUM, 4))
+    white = P.TITANIUM_WHITE
+    over = sp.parse_color(_on_glass(glaze, white, False).color_at(100, 80))
+    through = sp.parse_color(_on_glass(glaze, white, True).color_at(100, 80))
+    assert over[0] - over[1] < 0.05  # on the front the white covers the glaze
+    assert through[0] - through[1] > 0.2  # seen through it, the white turns pink
+
+
+def test_reverse_glass_shows_its_backing_and_looks_the_same_once_dry():
+    c = _on_glass(P.CADMIUM_YELLOW, P.PHTHALO_GREEN, True, ground="#141414")
+    assert np.abs(sp.parse_color(c.color_at(20, 20)) - 0x14 / 255).max() < 0.01
+    before = c.render()
+    c.dry()
+    assert np.abs(c.render() - before).max() < 1e-4
+
+
+def test_reverse_painting_needs_a_clear_support_and_pickles():
+    import pickle
+
+    with pytest.raises(ValueError):
+        Canvas(40, 40, surface=surfaces.COPPER, reverse=True)
+    c = _on_glass(P.CADMIUM_RED, P.ULTRAMARINE_BLUE, True)
+    copy = pickle.loads(pickle.dumps(c))
+    assert copy.reverse and copy.color_at(100, 80) == c.color_at(100, 80)
+
+
 def test_rag_only_lifts_paint():
     c = Canvas(200, 80, seed=12)
     c.stroke([(10, 40), (190, 40)], paint="#aa3322", amount=20, width=30, seed=1)
