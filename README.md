@@ -1,5 +1,7 @@
 # oilpaint
 
+[![CI](https://github.com/joce/oilpaint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/joce/oilpaint/actions/workflows/ci.yml)
+
 A small Python API that mimics oil painting. You describe **strokes** (a spline,
 a paint, an amount of paint, a brush width and pressure) and the library
 simulates how the paint is laid down, picked up, dragged and mixed on the
