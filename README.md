@@ -1,6 +1,9 @@
 # oilpaint
 
 [![CI](https://github.com/joce/oilpaint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/joce/oilpaint/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/joce/oilpaint/graph/badge.svg)](https://codecov.io/gh/joce/oilpaint)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 A small Python API that mimics oil painting. You describe **strokes** (a spline,
 a paint, an amount of paint, a brush width and pressure) and the library
@@ -726,10 +729,13 @@ Python 3.11 to 3.15. The checks run with [uv](https://docs.astral.sh/uv/) and to
 uv run tox            # every Python version: formatting, lint, types and tests
 uv run tox -e check   # the same, once, on the current Python
 uv run pytest         # just the tests
+make coverage         # test coverage, with an HTML report in htmlcov/
 make spell            # spelling (cspell; needs Node.js)
 make pre-push         # tox, and the spelling of the files you changed
 ```
 
 Formatting is black and ruff format (88 columns), lint is ruff, types are
-pyright. CI runs the spell check, then the tox checks on each Python version,
-on every pull request and every push to `main`.
+pyright. CI runs the spell check, then the tox checks on each Python version
+and the coverage (sent to Codecov), on every pull request and every push to
+`main`. The coverage leaves out the compiled engine (`oilpaint/_engine.py`):
+coverage.py can't see inside numba-compiled code, though every test runs it.

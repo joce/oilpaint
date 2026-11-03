@@ -7,6 +7,12 @@ dist/
 .venv/
 venv/
 
+# Test and coverage output
+.coverage
+coverage.xml
+junit*.xml
+htmlcov/
+
 # Tools
 .pytest_cache/
 .mypy_cache/
