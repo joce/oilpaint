@@ -6,9 +6,19 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from . import brushes
 from . import spectral as sp
 from ._filters import _box_blur, _max_filter, _smooth121
-from .brush import IB, PACKED, Brush, Stroke, StrokePaint, apply_stroke
+from .brush import (
+    IB,
+    PACKED,
+    Brush,
+    BrushType,
+    Stroke,
+    StrokePaint,
+    apply_stroke,
+    load_paint,
+)
 from .paint import DEFAULT_BODY, ColorLike
 from .png import write_png
 from .spline import Profile
@@ -189,6 +199,121 @@ class Canvas:
                 **options,
             ),
         )
+
+    def stipple(
+        self,
+        points,
+        paint: StrokePaint | None = None,
+        amount: float = 6.0,
+        width: float | None = None,
+        pressure: Profile = 0.3,
+        *,
+        brush=None,
+        **options,
+    ) -> Brush:
+        """Tap a brush straight down at each of ``points`` in turn, without
+        reloading it: stippling (foliage, textures, broken colour, the dots of
+        pointillism). The brush (``brushes.STIPPLER`` by default) turns a
+        little on every tap, so no two prints are the same, and it runs out as
+        it goes. ``pressure`` is one value, or one per point: a light tap
+        prints sparse dots, a firmer one a fuller mark. Returns the brush."""
+        pts = np.asarray(points, dtype=float).reshape(-1, 2)
+        if isinstance(brush, Brush):
+            tool = brush
+        else:
+            tool = Brush(brush if isinstance(brush, BrushType) else brushes.STIPPLER)
+        load_paint(tool, paint, amount)
+        press = np.broadcast_to(np.asarray(pressure, dtype=float), (len(pts),))
+        for (x, y), p in zip(pts, press, strict=True):
+            self.stroke([(x, y)], brush=tool, width=width, pressure=float(p), **options)
+        return tool
+
+    def spatter(
+        self,
+        at,
+        paint: ColorLike,
+        amount: float = 1.0,
+        direction: float = 0.0,
+        spread: float = 25.0,
+        reach: float = 120.0,
+        size: float = 3.0,
+        seed: int | None = None,
+    ) -> int:
+        """Flick paint off a loaded brush: a spray of drops.
+
+        ``at`` is where the paint leaves the brush, ``(x, y)``, or a path of
+        points it leaves from along the way (a brush swept as it is flicked).
+        The drops fly ``direction`` degrees (0 to the right, 90 down the
+        canvas), fanned out by about ``spread`` degrees either way, and land
+        about ``reach`` px away, thinning out further off. ``size`` is a
+        typical drop's diameter in px: most are smaller, a few much bigger
+        (with little satellite drops). Drops landing head-on stay round; those
+        flying further come in at a slant and stretch into teardrops, their
+        narrow tails pointing the way they flew. They sit on top of wet paint.
+        ``amount`` sets how much paint flies: 1 is a good flick, about 120
+        drops. Returns the number of drops."""
+        rng = np.random.default_rng(
+            seed if seed is not None else self._rng.integers(1 << 31)
+        )
+        path = np.asarray(at, dtype=float).reshape(-1, 2)
+        # distance along the path the brush sweeps (a single point: none)
+        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(path, axis=0).T))]
+        n = max(1, round(120 * amount))
+        heading = np.deg2rad(direction)
+        drops = 0
+        for _ in range(n):
+            if len(path) > 1:
+                s = rng.uniform(0.0, arc[-1])
+                x0 = float(np.interp(s, arc, path[:, 0]))
+                y0 = float(np.interp(s, arc, path[:, 1]))
+            else:
+                x0, y0 = path[0]
+            a = heading + np.deg2rad(spread) * rng.normal(0.0, 0.6)
+            dist = reach * rng.gamma(2.0, 0.5)
+            d = float(np.clip(size * rng.lognormal(0.0, 0.6), 0.7, 8.0 * size))
+            ux, uy = np.cos(a), np.sin(a)
+            x, y = x0 + dist * ux, y0 + dist * uy
+            # flying further, a drop comes in at more of a slant and stretches
+            stretch = 1.0 + 1.6 * min(dist / reach, 2.5) * rng.uniform(0.2, 1.0)
+            drops += self._drop(x, y, d, stretch, ux, uy, paint, rng)
+            if d > 2.0 * size:  # a big drop throws off little satellites
+                for _ in range(int(rng.integers(1, 5))):
+                    t = rng.uniform(1.0, 3.5) * d
+                    side = rng.normal(0.0, 0.6) * d
+                    drops += self._drop(
+                        x + t * ux - side * uy,
+                        y + t * uy + side * ux,
+                        max(0.7, d * rng.uniform(0.15, 0.35)),
+                        1.0,
+                        ux,
+                        uy,
+                        paint,
+                        rng,
+                    )
+        return drops
+
+    def _drop(self, x, y, d, stretch, ux, uy, paint, rng) -> int:
+        """One drop of paint landing at (x, y), ``d`` px across; stretched into
+        a teardrop along (ux, uy) when ``stretch`` > 1."""
+        if not (-d < x < self.width + d and -d < y < self.height + d):
+            return 0
+        kw = {
+            "amount": 4.0 + 0.4 * d,
+            "brush": _DROP.sized(d),
+            "pressure": 0.6,
+            "seed": int(rng.integers(1 << 31)),
+        }
+        if stretch < 1.25 or d < 1.5:
+            self.stroke([(x, y)], paint, width=d, **kw)
+        else:
+            tail = d * (stretch - 1.0) * 0.9
+            pts = [
+                (x, y),
+                (x + 0.5 * tail * ux, y + 0.5 * tail * uy),
+                (x + tail * ux, y + tail * uy),
+            ]
+            self.stroke(pts, paint, width=[d, 0.7 * d, 0.25 * d], **kw)
+        return 1
 
     def paint(self, *strokes: Stroke) -> None:
         """Apply one or more :class:`Stroke` objects, in order."""
@@ -449,6 +574,22 @@ def _composite(kappa, sigma, volume, alpha, below):
     film = sp.km_layer(kappa / cov[..., None], sigma / cov, below)
     cov = cov[..., None]
     return cov * film + (1.0 - cov) * below
+
+
+#: A drop of paint landing (see Canvas.spatter): no bristles, it neither drags
+#: nor picks up the paint it lands on, and sits on top of it.
+_DROP = BrushType(
+    shape="round",
+    width=4.0,
+    stiffness=0.5,
+    bristles=1.0,
+    streaks=0.0,
+    pickup=0.0,
+    drag=0.0,
+    mixing=0.03,
+    rough=0.0,
+    name="Drop",
+)
 
 
 def _film(kappa, sigma, volume, alpha):
