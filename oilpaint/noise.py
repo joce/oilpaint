@@ -119,15 +119,21 @@ def woven(h, w, period, rng, irregularity=0.3, twill=False) -> np.ndarray:
     i, j = np.floor(gx), np.floor(gy)
     fx, fy = gx - i, gy - j
     nx, ny = int(w / period) + 8, int(h / period) + 8
-    warp_t = 1.0 + 0.7 * irregularity * (rng.random(nx) - 0.5) * 2      # thread-to-thread thickness
+    # thread-to-thread thickness
+    warp_t = 1.0 + 0.7 * irregularity * (rng.random(nx) - 0.5) * 2
     weft_t = 1.0 + 0.7 * irregularity * (rng.random(ny) - 0.5) * 2
     tw = warp_t[np.clip(i.astype(int) + 4, 0, nx - 1)]
     tf = weft_t[np.clip(j.astype(int) + 4, 0, ny - 1)]
-    sec_x = np.sin(np.pi * fx) ** (0.9 / tw)          # rounded thread cross-sections
+    sec_x = np.sin(np.pi * fx) ** (0.9 / tw)  # rounded thread cross-sections
     sec_y = np.sin(np.pi * fy) ** (0.9 / tf)
     over = (((i - j) % 4) < 2) if twill else (((i + j) % 2) == 0)
-    cloth = np.where(over, sec_x * tw * (0.55 + 0.45 * sec_y), sec_y * tf * (0.55 + 0.45 * sec_x))
-    slubs = aniso_noise(h, w, period * 6, period * 0.9, 90, rng) * 0.5 + aniso_noise(h, w, period * 6, period * 0.9, 0, rng) * 0.5
+    cloth = np.where(
+        over, sec_x * tw * (0.55 + 0.45 * sec_y), sec_y * tf * (0.55 + 0.45 * sec_x)
+    )
+    slubs = (
+        aniso_noise(h, w, period * 6, period * 0.9, 90, rng) * 0.5
+        + aniso_noise(h, w, period * 6, period * 0.9, 0, rng) * 0.5
+    )
     cloth = cloth * (1.0 + 1.2 * irregularity * (slubs - 0.5))
     fibre = fractal_noise_2d(h, w, max(period * 0.6, 1.5), rng, octaves=2)
     return _normalize(0.85 * cloth + 0.15 * fibre)
@@ -135,7 +141,10 @@ def woven(h, w, period, rng, irregularity=0.3, twill=False) -> np.ndarray:
 
 def paper(h, w, scale, rng) -> np.ndarray:
     """Paper tooth: fine felted fibres."""
-    fibres = sum(aniso_noise(h, w, scale * 5, scale * 0.6, a, rng, octaves=2) for a in (15, 75, 125))
+    fibres = sum(
+        aniso_noise(h, w, scale * 5, scale * 0.6, a, rng, octaves=2)
+        for a in (15, 75, 125)
+    )
     tooth = fractal_noise_2d(h, w, scale * 1.5, rng, octaves=3)
     return _normalize(0.5 * fibres / 3 + 0.5 * tooth)
 
@@ -147,7 +156,7 @@ def wood(h, w, scale, angle, rng) -> np.ndarray:
     v = -x * np.sin(a) + y * np.cos(a)
     warp = aniso_noise(h, w, scale * 25, scale * 4, angle, rng)
     rings = 0.5 + 0.5 * np.sin(2 * np.pi * (v / scale + 2.5 * warp))
-    rings = rings ** 3                                 # narrow dark latewood bands
+    rings = rings**3  # narrow dark latewood bands
     fibres = aniso_noise(h, w, scale * 4, 1.2, angle, rng, octaves=2)
     return _normalize(0.6 * rings + 0.4 * fibres)
 

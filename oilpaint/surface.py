@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Optional
 
 import numpy as np
 
@@ -74,7 +73,7 @@ class Surface:
     absorbency: float = 0.0
     slickness: float = 0.5
     ground: ColorLike = "#efe9dc"
-    toning: Optional[ColorLike] = None
+    toning: ColorLike | None = None
     toning_strength: float = 1.0
     priming_marks: float = 0.0
     priming_angle: float = 0.0
@@ -89,7 +88,7 @@ class Surface:
             if not 0.0 <= getattr(self, field) <= 1.0:
                 raise ValueError(f"{field} must be between 0 and 1")
 
-    def with_(self, **changes) -> "Surface":
+    def with_(self, **changes) -> Surface:
         """A copy with some properties changed."""
         return replace(self, **changes)
 
@@ -104,7 +103,9 @@ class Surface:
         if self.texture == "canvas":
             base = nz.canvas_weave(h, w, self.scale, rng)
         elif self.texture in ("linen", "cotton", "twill"):
-            base = nz.woven(h, w, self.scale, rng, self.irregularity, twill=self.texture == "twill")
+            base = nz.woven(
+                h, w, self.scale, rng, self.irregularity, twill=self.texture == "twill"
+            )
         elif self.texture == "paper":
             base = nz.paper(h, w, self.scale, rng)
         elif self.texture == "wood":
@@ -117,7 +118,9 @@ class Surface:
             base = (base - base.min()) / max(np.ptp(base), 1e-9)
         return base
 
-    def ground_reflectance(self, h: int, w: int, rng: np.random.Generator, image=None) -> np.ndarray:
+    def ground_reflectance(
+        self, h: int, w: int, rng: np.random.Generator, image=None
+    ) -> np.ndarray:
         """Reflectance spectrum (h, w, N_BANDS) of the primed (and toned) surface."""
         N = sp.N_BANDS
         out = np.empty((h, w, N), np.float32)
@@ -130,11 +133,15 @@ class Surface:
         if self.priming_marks > 0:
             # thinner priming in the troughs of the brushmarks reads a touch darker
             marks = nz.brushmarks(h, w, self.priming_angle, rng)
-            out *= (1.0 - 0.05 * self.priming_marks * (1.0 - marks))[..., None].astype(np.float32)
+            out *= (1.0 - 0.05 * self.priming_marks * (1.0 - marks))[..., None].astype(
+                np.float32
+            )
         if self.toning is not None and self.toning_strength > 0:
             wash = Paint(self.toning, opacity=0.25)
             # brushed on loosely: broad, soft variations rather than fine streaks
-            sweep = nz.aniso_noise(h, w, 90, 28, self.priming_angle + 30, rng, octaves=2)
+            sweep = nz.aniso_noise(
+                h, w, 90, 28, self.priming_angle + 30, rng, octaves=2
+            )
             t = (self.toning_strength * (0.85 + 0.3 * sweep))[..., None]
             out[:] = sp.km_layer(wash.K * t, wash.S * t[..., 0], out).astype(np.float32)
         return out

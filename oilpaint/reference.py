@@ -61,8 +61,9 @@ def _sample(img, x, y):
     fx, fy = x - x0, y - y0
     if img.ndim == 3:
         fx, fy = fx[..., None], fy[..., None]
-    return ((img[y0, x0] * (1 - fx) + img[y0, x0 + 1] * fx) * (1 - fy)
-            + (img[y0 + 1, x0] * (1 - fx) + img[y0 + 1, x0 + 1] * fx) * fy)
+    return (img[y0, x0] * (1 - fx) + img[y0, x0 + 1] * fx) * (1 - fy) + (
+        img[y0 + 1, x0] * (1 - fx) + img[y0 + 1, x0 + 1] * fx
+    ) * fy
 
 
 class Reference:
@@ -77,16 +78,25 @@ class Reference:
 
         if isinstance(image, np.ndarray):
             arr = image.astype(np.float64)
-            image = Image.fromarray(np.clip(arr * (255 if arr.max() <= 1.0 else 1), 0, 255).astype(np.uint8))
+            image = Image.fromarray(
+                np.clip(arr * (255 if arr.max() <= 1.0 else 1), 0, 255).astype(np.uint8)
+            )
         elif not hasattr(image, "convert"):
             image = Image.open(image)
         image = image.convert("RGB")
         if box is not None:
-            image = image.crop(tuple(int(v) for v in box))
+            image = image.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3])))
         self.width, self.height = int(width), int(height)
-        self.image = np.asarray(image.resize((self.width, self.height), Image.LANCZOS), np.float32) / 255.0
+        self.image = (
+            np.asarray(
+                image.resize((self.width, self.height), Image.Resampling.LANCZOS),
+                np.float32,
+            )
+            / 255.0
+        )
         lab = sp.srgb_to_lab(self.image.astype(np.float64))
-        self.lightness = (lab[..., 0] / 100.0).astype(np.float32)       # perceptual, 0..1
+        # perceptual, 0..1
+        self.lightness = (lab[..., 0] / 100.0).astype(np.float32)
         self._cache = {}
 
     # ------------------------------------------------------------------ maps
@@ -109,10 +119,13 @@ class Reference:
         # structure tensor, pooled over a neighbourhood twice the scale
         J = _blur(np.stack([gx * gx, gx * gy, gy * gy], axis=-1), 2.0 * max(scale, 1.0))
         jxx, jxy, jyy = J[..., 0], J[..., 1], J[..., 2]
-        across = 0.5 * np.arctan2(2.0 * jxy, jxx - jyy)             # the way the light changes fastest
+        # the way the light changes fastest
+        across = 0.5 * np.arctan2(2.0 * jxy, jxx - jyy)
         root = np.sqrt((jxx - jyy) ** 2 + 4.0 * jxy * jxy)
         coherence = (root / np.maximum(jxx + jyy, 1e-12)) ** 2
-        return np.stack([np.cos(across + np.pi / 2), np.sin(across + np.pi / 2), coherence], axis=-1)
+        return np.stack(
+            [np.cos(across + np.pi / 2), np.sin(across + np.pi / 2), coherence], axis=-1
+        )
 
     def _make_detail(self, scale):
         L = self.lightness.astype(np.float64)
@@ -141,8 +154,16 @@ class Reference:
         pixels (0 = flat; ~0.1 and up = busy: eyes, edges, folds)."""
         return _sample(self._map("detail", scale), x, y)
 
-    def trace(self, x, y, length: float, scale: float = 4.0, step: float | None = None,
-              tolerance: float = 0.08, bend: float = 1.0):
+    def trace(
+        self,
+        x,
+        y,
+        length: float,
+        scale: float = 4.0,
+        step: float | None = None,
+        tolerance: float = 0.08,
+        bend: float = 1.0,
+    ):
         """A stroke path from (x, y) that follows the forms: it steps along
         :meth:`direction` (both ways, so the start ends up in the middle) for up
         to ``length`` pixels in all, stopping where the colour (at ``scale``)
@@ -163,12 +184,15 @@ class Reference:
                     nd = -nd
                 nd = (1 - bend) * d + bend * nd
                 nd /= max(np.linalg.norm(nd), 1e-9)
-                if nd @ d < 0.5:                 # too sharp a turn
+                if nd @ d < 0.5:  # too sharp a turn
                     break
                 q = p + step * nd
                 if not (0 <= q[0] < self.width and 0 <= q[1] < self.height):
                     break
-                if np.linalg.norm(self.color(q[0], q[1], scale) - start_col) > tolerance:
+                if (
+                    np.linalg.norm(self.color(q[0], q[1], scale) - start_col)
+                    > tolerance
+                ):
                     break
                 p, d, run = q, nd, run + step
                 pts.append(p.copy())

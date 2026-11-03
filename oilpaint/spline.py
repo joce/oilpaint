@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Callable, Sequence, Union
+from collections.abc import Callable, Sequence
 
 import numpy as np
 
-Profile = Union[float, Sequence[float], Callable[[np.ndarray], np.ndarray]]
+Profile = float | Sequence[float] | Callable[[np.ndarray], np.ndarray]
 
 
 class Path:
@@ -69,16 +69,21 @@ class CatmullRom(Path):
             P = np.vstack([2 * P[0] - P[1], P, 2 * P[-1] - P[-2]])
         # all segments at once: segment i runs from P[i + 1] to P[i + 2]
         p0, p1, p2, p3 = P[:-3], P[1:-2], P[2:-1], P[3:]
-        m = np.maximum(8, (np.linalg.norm(p2 - p1, axis=1) / 2).astype(int) + 1)    # samples per segment
+        # samples per segment
+        m = np.maximum(8, (np.linalg.norm(p2 - p1, axis=1) / 2).astype(int) + 1)
         seg = np.repeat(np.arange(len(m)), m)
-        t = (np.arange(m.sum()) - np.repeat(np.cumsum(m) - m, m)) * (1.0 / m[seg])    # 0..1 within each
+        # 0..1 within each
+        t = (np.arange(m.sum()) - np.repeat(np.cumsum(m) - m, m)) * (1.0 / m[seg])
         pts = _catmull_segment(p0[seg], p1[seg], p2[seg], p3[seg], t, self.alpha)
-        return np.vstack([pts, P[-2][None]]), np.concatenate([seg + t, [float(len(P) - 3)]])
+        return np.vstack([pts, P[-2][None]]), np.concatenate(
+            [seg + t, [float(len(P) - 3)]]
+        )
 
 
 def _catmull_segment(p0, p1, p2, p3, t, alpha):
     """Points at parameter t (0..1) on the Catmull-Rom segments from p1 to p2
     (one row of p0..p3 per value of t)."""
+
     def tj(ti, a, b):
         return ti + np.maximum(np.linalg.norm(b - a, axis=1), 1e-6) ** alpha
 
@@ -97,13 +102,16 @@ def _catmull_segment(p0, p1, p2, p3, t, alpha):
 
 
 class Bezier(Path):
-    """Piecewise cubic Bezier: ``[anchor, handle, handle, anchor, handle, handle, anchor, ...]``
-    (3n + 1 points). Knots are the anchors."""
+    """Piecewise cubic Bezier:
+    ``[anchor, handle, handle, anchor, handle, handle, anchor, ...]`` (3n + 1
+    points). Knots are the anchors."""
 
     def __init__(self, points):
         P = np.asarray(points, dtype=np.float64).reshape(-1, 2)
         if (len(P) - 1) % 3 != 0 or len(P) < 4:
-            raise ValueError("Bezier needs 3n+1 points: anchor, handle, handle, anchor, ...")
+            raise ValueError(
+                "Bezier needs 3n+1 points: anchor, handle, handle, anchor, ..."
+            )
         self.points = P
         self.n_knots = (len(P) - 1) // 3 + 1
 
@@ -111,11 +119,19 @@ class Bezier(Path):
         pts, knots = [], []
         P = self.points
         for i in range(self.n_knots - 1):
-            p0, p1, p2, p3 = P[3 * i:3 * i + 4]
-            approx = np.linalg.norm(p1 - p0) + np.linalg.norm(p2 - p1) + np.linalg.norm(p3 - p2)
-            t = np.linspace(0.0, 1.0, max(8, int(approx / 2) + 1), endpoint=False)[:, None]
+            p0, p1, p2, p3 = P[3 * i : 3 * i + 4]
+            approx = (
+                np.linalg.norm(p1 - p0)
+                + np.linalg.norm(p2 - p1)
+                + np.linalg.norm(p3 - p2)
+            )
+            t = np.linspace(0.0, 1.0, max(8, int(approx / 2) + 1), endpoint=False)[
+                :, None
+            ]
             mt = 1 - t
-            pts.append(mt ** 3 * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t ** 3 * p3)
+            pts.append(
+                mt**3 * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t**3 * p3
+            )
             knots.append(i + t[:, 0])
         pts.append(P[-1][None])
         knots.append(np.array([float(self.n_knots - 1)]))
@@ -139,7 +155,9 @@ def as_path(path) -> Path:
     return CatmullRom(path)
 
 
-def evaluate_profile(profile: Profile, u: np.ndarray, knot: np.ndarray, n_knots: int) -> np.ndarray:
+def evaluate_profile(
+    profile: Profile, u: np.ndarray, knot: np.ndarray, n_knots: int
+) -> np.ndarray:
     """Evaluate a per-stroke value (width, pressure, ...) along the samples.
 
     * scalar -> constant

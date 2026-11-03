@@ -35,10 +35,17 @@ def _max_filter(a: np.ndarray, r: int) -> np.ndarray:
 
 
 def _smooth121(a: np.ndarray) -> np.ndarray:
-    """Light [1, 2, 1] smoothing in both directions (softens pixel steps, keeps fine grooves)."""
+    """Light [1, 2, 1] smoothing in both directions (softens pixel steps, keeps
+    fine grooves)."""
     out = a.astype(np.float32)
     for axis in (0, 1):
-        p = np.pad(out, [(1, 1) if k == axis else (0, 0) for k in range(2)], mode="edge")
+        p = np.pad(
+            out, [(1, 1) if k == axis else (0, 0) for k in range(2)], mode="edge"
+        )
         n = out.shape[axis]
-        out = 0.25 * np.take(p, np.arange(0, n), axis=axis) + 0.5 * out + 0.25 * np.take(p, np.arange(2, n + 2), axis=axis)
+        out = (
+            0.25 * np.take(p, np.arange(0, n), axis=axis)
+            + 0.5 * out
+            + 0.25 * np.take(p, np.arange(2, n + 2), axis=axis)
+        )
     return out

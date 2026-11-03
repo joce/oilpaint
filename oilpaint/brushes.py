@@ -31,23 +31,29 @@ from .brush import BrushType
 #: Character of common hair types. Stiff hair pushes paint and leaves strong
 #: brush marks; soft hair lays it smoothly and blends.
 HAIRS = {
-    "hog": dict(stiffness=0.85, bristles=0.3, capacity=1.15),
-    "mongoose": dict(stiffness=0.6, bristles=0.6, capacity=1.0),
-    "synthetic": dict(stiffness=0.55, bristles=0.75, capacity=0.85),
-    "sable": dict(stiffness=0.3, bristles=0.85, capacity=1.0),
-    "squirrel": dict(stiffness=0.1, bristles=0.95, capacity=1.5),
+    "hog": {"stiffness": 0.85, "bristles": 0.3, "capacity": 1.15},
+    "mongoose": {"stiffness": 0.6, "bristles": 0.6, "capacity": 1.0},
+    "synthetic": {"stiffness": 0.55, "bristles": 0.75, "capacity": 0.85},
+    "sable": {"stiffness": 0.3, "bristles": 0.85, "capacity": 1.0},
+    "squirrel": {"stiffness": 0.1, "bristles": 0.95, "capacity": 1.5},
 }
 
 _SHAPES = {
-    "round": dict(aspect=1.0, spread=0.5),
-    "flat": dict(aspect=0.22, spread=0.05),
-    "filbert": dict(aspect=0.4, spread=0.45),
-    "fan": dict(aspect=0.06, spread=0.1, clumps=9),
+    "round": {"aspect": 1.0, "spread": 0.5},
+    "flat": {"aspect": 0.22, "spread": 0.05},
+    "filbert": {"aspect": 0.4, "spread": 0.45},
+    "fan": {"aspect": 0.06, "spread": 0.1, "clumps": 9},
 }
 
 
-def make(shape: str = "round", width: float = 20.0, hair: str = "synthetic", length: float = 0.5,
-         name: str | None = None, **overrides) -> BrushType:
+def make(
+    shape: str = "round",
+    width: float = 20.0,
+    hair: str = "synthetic",
+    length: float = 0.5,
+    name: str | None = None,
+    **overrides,
+) -> BrushType:
     """Build a brush from a shape, a size in pixels and a hair type.
 
     ``length`` is the bristle length, 0 (short, like a bright: stiffer,
@@ -64,9 +70,14 @@ def make(shape: str = "round", width: float = 20.0, hair: str = "synthetic", len
     props = dict(_SHAPES[shape])
     # soft hairs splay out more under pressure than stiff ones
     props["spread"] = props["spread"] * (1.3 - 0.6 * stiffness)
-    props.update(shape=shape, width=float(width), stiffness=stiffness, bristles=h["bristles"],
-                 capacity=h["capacity"] * (0.6 + 0.8 * length),
-                 name=name or f"{shape} {hair} {width:g}px")
+    props.update(
+        shape=shape,
+        width=float(width),
+        stiffness=stiffness,
+        bristles=h["bristles"],
+        capacity=h["capacity"] * (0.6 + 0.8 * length),
+        name=name or f"{shape} {hair} {width:g}px",
+    )
     props.update(overrides)
     return BrushType(**props)
 
@@ -81,12 +92,25 @@ ROUND_SABLE = make("round", 10, "sable", length=0.6, spread=0.75, name="Round (s
 #: Liner: ultra-fine point for outlines and detail.
 LINER = make("round", 3, "synthetic", length=0.7, spread=0.5, name="Liner")
 #: Rigger: long, thin hair for long fine lines (rigging, branches). Load it generously.
-RIGGER = make("round", 2.5, "sable", length=1.0, capacity=2.2, spread=0.35, name="Rigger")
+RIGGER = make(
+    "round", 2.5, "sable", length=1.0, capacity=2.2, spread=0.35, name="Rigger"
+)
 #: Mop: big, very soft and absorbent, for soft blending and covering large areas.
-MOP = make("round", 70, "squirrel", length=0.8, softness=0.35, streaks=0.1, mixing=0.6, pickup=0.5,
-           name="Mop")
+MOP = make(
+    "round",
+    70,
+    "squirrel",
+    length=0.8,
+    softness=0.35,
+    streaks=0.1,
+    mixing=0.6,
+    pickup=0.5,
+    name="Mop",
+)
 #: Deer foot: a round cut on a slant, for stippling foliage and textures.
-DEER_FOOT = make("round", 18, "hog", length=0.3, slant=0.35, aspect=0.8, name="Deer foot")
+DEER_FOOT = make(
+    "round", 18, "hog", length=0.3, slant=0.35, aspect=0.8, name="Deer foot"
+)
 
 # --- flats -------------------------------------------------------------------
 #: Long hog flat: the workhorse for covering large areas; turn it on its edge for lines.
@@ -98,10 +122,20 @@ BRIGHT = make("flat", 16, "hog", length=0.15, aspect=0.28, name="Bright")
 #: Angled flat: the slanted edge reaches into corners and paints curves.
 ANGLED = make("flat", 20, "synthetic", length=0.6, slant=0.55, name="Angled flat")
 #: Dagger: an angled brush with a long sharp toe, for fine, tapering strokes.
-DAGGER = make("flat", 18, "sable", length=0.9, slant=0.9, aspect=0.16, spread=0.3, name="Dagger")
+DAGGER = make(
+    "flat", 18, "sable", length=0.9, slant=0.9, aspect=0.16, spread=0.3, name="Dagger"
+)
 #: Wide hake-style blender: soft and wide for glazes and smooth gradients.
-BLENDER = make("flat", 50, "squirrel", length=0.7, softness=0.2, streaks=0.15, mixing=0.55,
-               name="Blender")
+BLENDER = make(
+    "flat",
+    50,
+    "squirrel",
+    length=0.7,
+    softness=0.2,
+    streaks=0.15,
+    mixing=0.55,
+    name="Blender",
+)
 
 # --- filberts ----------------------------------------------------------------
 #: Hog filbert: broad strokes or, on its edge, detail; soft-cornered marks.
@@ -113,14 +147,29 @@ FILBERT_SABLE = make("filbert", 16, "sable", length=0.6, name="Filbert (sable)")
 #: Hog fan: separate clumps of stiff bristle, for grass, hair, foliage textures.
 FAN_HOG = make("fan", 40, "hog", length=0.7, clumps=10, name="Fan (hog)")
 #: Soft fan: gentle blending and feathering.
-FAN_SOFT = make("fan", 40, "sable", length=0.7, clumps=16, streaks=0.2, name="Fan (soft)")
+FAN_SOFT = make(
+    "fan", 40, "sable", length=0.7, clumps=16, streaks=0.2, name="Fan (soft)"
+)
 
 # --- knives ------------------------------------------------------------------
-_BLADE_ASPECT = {"trowel": 0.4, "pear": 0.5, "straight": 0.2, "angled": 0.3, "spoon": 0.6}
+_BLADE_ASPECT = {
+    "trowel": 0.4,
+    "pear": 0.5,
+    "straight": 0.2,
+    "angled": 0.3,
+    "spoon": 0.6,
+}
 
 
-def knife(shape: str = "trowel", length: float = 40.0, flex: float = 0.5, aspect: float | None = None,
-          teeth: int = 0, name: str | None = None, **overrides) -> BrushType:
+def knife(
+    shape: str = "trowel",
+    length: float = 40.0,
+    flex: float = 0.5,
+    aspect: float | None = None,
+    teeth: int = 0,
+    name: str | None = None,
+    **overrides,
+) -> BrushType:
     """Build a painting knife.
 
     ``shape`` is the blade outline: ``"trowel"`` (diamond, pointed tip),
@@ -137,9 +186,16 @@ def knife(shape: str = "trowel", length: float = 40.0, flex: float = 0.5, aspect
         raise ValueError(f"unknown blade {shape!r}; use one of {sorted(_BLADE_ASPECT)}")
     if not 0.0 <= flex <= 1.0:
         raise ValueError("flex must be between 0 (stiff) and 1 (very flexible)")
-    props = dict(shape=shape, width=float(length), aspect=_BLADE_ASPECT[shape] if aspect is None else aspect,
-                 stiffness=1.0 - 0.5 * flex, bristles=1.0, capacity=1.0, clumps=int(teeth),
-                 name=name or f"{shape} knife {length:g}px")
+    props = {
+        "shape": shape,
+        "width": float(length),
+        "aspect": _BLADE_ASPECT[shape] if aspect is None else aspect,
+        "stiffness": 1.0 - 0.5 * flex,
+        "bristles": 1.0,
+        "capacity": 1.0,
+        "clumps": int(teeth),
+        "name": name or f"{shape} knife {length:g}px",
+    }
     props.update(overrides)
     return BrushType(**props)
 
@@ -164,27 +220,58 @@ KNIFE_SPOON = knife("spoon", 26, flex=0.3, name="Spoon knife")
 #: Comb knife: a stiff serrated edge for scoring parallel grooves (sgraffito)
 #: into wet paint: grass, wood grain, hair, texture.
 KNIFE_COMB = knife("straight", 48, flex=0.1, teeth=8, name="Comb knife")
-#: Scraper: a wide stiff blade for scraping back to the canvas or laying big flat planes.
+#: Scraper: a wide stiff blade for scraping back to the canvas or laying big flat
+#: planes.
 SCRAPER = knife("straight", 110, flex=0.1, aspect=0.25, name="Scraper")
 
 # --- other tools -------------------------------------------------------------
 #: A rag: lifts wet paint without putting any back, to wipe out lights or
 #: correct. It wipes clean on slick surfaces and leaves a stain on absorbent ones.
-RAG = BrushType(shape="round", width=40, aspect=0.8, stiffness=0.2, bristles=1.0, capacity=4.0, streaks=0.15,
-                pickup=1.2, drag=0.05, mixing=0.0, softness=0.3, deposits=False, name="Rag")
+RAG = BrushType(
+    shape="round",
+    width=40,
+    aspect=0.8,
+    stiffness=0.2,
+    bristles=1.0,
+    capacity=4.0,
+    streaks=0.15,
+    pickup=1.2,
+    drag=0.05,
+    mixing=0.0,
+    softness=0.3,
+    deposits=False,
+    name="Rag",
+)
 #: The handle of a brush, scratched through wet paint (sgraffito): a groove
 #: down to the paint beneath, with low ridges either side. Rembrandt drew curls
 #: into wet hair this way. Pressure sets how deep it cuts.
-BRUSH_HANDLE = BrushType(shape="round", width=3.0, stiffness=1.0, bristles=1.0, streaks=0.0, pickup=0.0,
-                         drag=0.0, mixing=0.0, deposits=False, dig=1.0, name="Brush handle")
+BRUSH_HANDLE = BrushType(
+    shape="round",
+    width=3.0,
+    stiffness=1.0,
+    bristles=1.0,
+    streaks=0.0,
+    pickup=0.0,
+    drag=0.0,
+    mixing=0.0,
+    deposits=False,
+    dig=1.0,
+    name="Brush handle",
+)
 
-ALL = {name: value for name, value in list(globals().items()) if isinstance(value, BrushType)}
+ALL = {
+    name: value
+    for name, value in list(globals().items())
+    if isinstance(value, BrushType)
+}
 
 
 def catalog() -> str:
     """A one-line summary of every preset."""
     rows = []
     for key, b in ALL.items():
-        rows.append(f"{key:14s} {b.shape:8s} {b.width:5.1f}px  stiffness {b.stiffness:.2f}  "
-                    f"capacity {b.capacity:.2f}  {b.name}")
+        rows.append(
+            f"{key:14s} {b.shape:8s} {b.width:5.1f}px  stiffness {b.stiffness:.2f}  "
+            f"capacity {b.capacity:.2f}  {b.name}"
+        )
     return "\n".join(rows)

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence, Tuple, Union
+from collections.abc import Iterable, Sequence
+from typing import Union
 
 import numpy as np
 
@@ -21,7 +22,7 @@ def _scatter_factor(luminance: float) -> float:
     return 0.1 + 0.9 * luminance
 
 
-ColorLike = Union[str, Sequence[float], "Paint"]
+ColorLike = Union[str, Sequence[float], np.ndarray, "Paint"]
 
 #: Body (stiffness) of paint straight from the tube.
 DEFAULT_BODY = 0.7
@@ -63,10 +64,16 @@ class Paint:
     adds those, weighted by volume.
     """
 
-    __slots__ = ("K", "S", "name", "_color", "body")
+    __slots__ = ("K", "S", "_color", "body", "name")
 
-    def __init__(self, color: ColorLike, opacity: float = 1.0, strength: float = 1.0,
-                 name: str | None = None, body: float | None = None):
+    def __init__(
+        self,
+        color: ColorLike,
+        opacity: float = 1.0,
+        strength: float = 1.0,
+        name: str | None = None,
+        body: float | None = None,
+    ):
         if isinstance(color, Paint):
             self.K, self.S = color.K.copy(), color.S
             self.name = name or color.name
@@ -78,7 +85,7 @@ class Paint:
         target = sp.linear_rgb_to_reflectance(sp.srgb_to_linear(srgb))
         lum = float(sp.LUMINANCE @ sp.srgb_to_linear(srgb))
         opacity = float(np.clip(opacity, 0.0, 1.0))
-        S = SCATTER_MAX * _scatter_factor(lum) * opacity ** 2
+        S = SCATTER_MAX * _scatter_factor(lum) * opacity**2
         K = sp.solve_absorption(target, S)
         self.K = K * strength
         self.S = S * strength
@@ -87,7 +94,9 @@ class Paint:
 
     # ------------------------------------------------------------------
     @classmethod
-    def from_optics(cls, K, S, name: str | None = None, body: float = None) -> "Paint":
+    def from_optics(
+        cls, K, S, name: str | None = None, body: float | None = None
+    ) -> Paint:
         """Build a paint directly from absorption spectrum K (per band, sampled
         at :data:`oilpaint.spectral.WAVELENGTHS`) and scattering S (scalar),
         both per unit volume. Handy for measured pigment data."""
@@ -99,12 +108,14 @@ class Paint:
         p.body = DEFAULT_BODY if body is None else _check_body(body)
         return p
 
-    def with_body(self, body: float) -> "Paint":
+    def with_body(self, body: float) -> Paint:
         """The same paint, stiffer or more fluid."""
         return Paint(self, body=body)
 
     @classmethod
-    def mix(cls, *parts: Union["Paint", Tuple[ColorLike, float]], name: str | None = None) -> "Paint":
+    def mix(
+        cls, *parts: Paint | tuple[ColorLike, float], name: str | None = None
+    ) -> Paint:
         """Physically mix paints on the palette.
 
         ``Paint.mix((ultramarine, 1), (titanium_white, 3))`` mixes one part
@@ -127,14 +138,18 @@ class Paint:
         return cls.from_optics(K / total, S / total, name=name, body=body / total)
 
     # ------------------------------------------------------------------
-    def reflectance(self, thickness: float = 1.0, over: ColorLike = "#ffffff") -> np.ndarray:
+    def reflectance(
+        self, thickness: float = 1.0, over: ColorLike = "#ffffff"
+    ) -> np.ndarray:
         """Reflectance spectrum of a layer of this paint over a ground color
         (any color form, or a reflectance spectrum)."""
         is_spectrum = isinstance(over, np.ndarray) and over.shape[-1] == sp.N_BANDS
         ground = over if is_spectrum else sp.srgb_to_reflectance(over)
         return sp.km_layer(self.K * thickness, self.S * thickness, ground)
 
-    def appearance(self, thickness: float = 1.0, over: ColorLike = "#ffffff") -> np.ndarray:
+    def appearance(
+        self, thickness: float = 1.0, over: ColorLike = "#ffffff"
+    ) -> np.ndarray:
         """sRGB color (0..1) of a layer of this paint over a ground color."""
         return sp.reflectance_to_srgb(self.reflectance(thickness, over))
 
@@ -174,8 +189,12 @@ def _cached_paint(color) -> Paint:
     return paint
 
 
-def mix_colors(colors: Iterable[ColorLike], weights: Iterable[float] | None = None) -> str:
+def mix_colors(
+    colors: Iterable[ColorLike], weights: Iterable[float] | None = None
+) -> str:
     """Quick helper: hex color of a palette mix of plain colors / paints."""
     colors = list(colors)
     weights = [1.0] * len(colors) if weights is None else list(weights)
-    return Paint.mix(*[(as_paint(c), w) for c, w in zip(colors, weights)]).hex
+    return Paint.mix(
+        *[(as_paint(c), w) for c, w in zip(colors, weights, strict=True)]
+    ).hex

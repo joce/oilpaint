@@ -7,7 +7,8 @@ Quick start::
     canvas = Canvas(800, 600)
     blue = Paint("#1d3f9a")
     canvas.stroke([(100, 300), (300, 220), (500, 320)], paint=blue, amount=8, width=40)
-    canvas.stroke([(300, 150), (320, 300), (280, 450)], paint="#f2c80f", amount=6, width=30)
+    yellow = "#f2c80f"
+    canvas.stroke([(300, 150), (320, 300), (280, 450)], yellow, amount=6, width=30)
     canvas.save("painting.png")
 """
 
@@ -20,7 +21,21 @@ from .spline import Bezier, CatmullRom, Polyline
 from .surface import Surface
 
 __all__ = [
-    "Canvas", "Paint", "Stroke", "Brush", "BrushType", "CatmullRom", "Bezier", "Polyline",
-    "mix_colors", "brushes", "palette", "reference", "Reference", "spectral", "Surface", "surfaces",
+    "Bezier",
+    "Brush",
+    "BrushType",
+    "Canvas",
+    "CatmullRom",
+    "Paint",
+    "Polyline",
+    "Reference",
+    "Stroke",
+    "Surface",
+    "brushes",
+    "mix_colors",
+    "palette",
+    "reference",
+    "spectral",
+    "surfaces",
 ]
 __version__ = "0.1.0"

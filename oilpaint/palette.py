@@ -23,7 +23,9 @@ YELLOW_OCHRE = Paint("#c8922f", opacity=0.9, name="Yellow Ochre")
 CADMIUM_ORANGE = Paint("#ef7d10", opacity=1.0, name="Cadmium Orange")
 CADMIUM_RED = Paint("#d22d1e", opacity=1.0, name="Cadmium Red")
 ALIZARIN_CRIMSON = Paint("#b0203a", opacity=0.3, strength=1.6, name="Alizarin Crimson")
-QUINACRIDONE_MAGENTA = Paint("#b8246e", opacity=0.3, strength=1.6, name="Quinacridone Magenta")
+QUINACRIDONE_MAGENTA = Paint(
+    "#b8246e", opacity=0.3, strength=1.6, name="Quinacridone Magenta"
+)
 BURNT_SIENNA = Paint("#93432a", opacity=0.6, name="Burnt Sienna")
 BURNT_UMBER = Paint("#4f3526", opacity=0.9, name="Burnt Umber")
 RAW_UMBER = Paint("#6b5638", opacity=0.9, name="Raw Umber")
@@ -57,8 +59,19 @@ BONE_BLACK = Paint("#211b18", opacity=0.7, name="Bone Black")
 SMALT = Paint("#5c6f9b", opacity=0.35, strength=0.5, name="Smalt")
 
 #: The palette of a Dutch painter around 1650-1660.
-OLD_MASTER = [LEAD_WHITE, LEAD_TIN_YELLOW, YELLOW_OCHRE, RED_OCHRE, VERMILION, RED_LAKE, RAW_UMBER,
-              BURNT_UMBER, CASSEL_EARTH, BONE_BLACK, SMALT]
+OLD_MASTER = [
+    LEAD_WHITE,
+    LEAD_TIN_YELLOW,
+    YELLOW_OCHRE,
+    RED_OCHRE,
+    VERMILION,
+    RED_LAKE,
+    RAW_UMBER,
+    BURNT_UMBER,
+    CASSEL_EARTH,
+    BONE_BLACK,
+    SMALT,
+]
 
 #: Clear oil medium: no pigment. Mix it in to thin a paint into a glaze, e.g.
 #: ``Paint.mix((ALIZARIN_CRIMSON, 1), (MEDIUM, 3))``.
@@ -66,7 +79,9 @@ MEDIUM = Paint.from_optics(np.zeros(N_BANDS), 0.0, name="Glazing Medium", body=0
 #: Clear impasto medium (a stiff gel or cold wax): extends paint and makes it
 #: stiffer, so it holds sharp ridges and peaks. ``Paint.mix((CADMIUM_RED, 2),
 #: (IMPASTO_MEDIUM, 1))`` is a slightly more transparent, much stiffer red.
-IMPASTO_MEDIUM = Paint.from_optics(np.zeros(N_BANDS), 0.4, name="Impasto Medium", body=1.0)
+IMPASTO_MEDIUM = Paint.from_optics(
+    np.zeros(N_BANDS), 0.4, name="Impasto Medium", body=1.0
+)
 
 ALL = [v for v in list(globals().values()) if isinstance(v, Paint)]
 
@@ -75,13 +90,19 @@ class Match(NamedTuple):
     """A mix found by :func:`match`: the mixed ``paint``, the recipe ``parts``
     (``[(paint, parts), ...]``, ready for :meth:`Paint.mix`) and how far its
     colour is from the target (CIELAB delta E; under ~2 is hard to tell apart)."""
+
     paint: Paint
     parts: list
     error: float
 
 
-def match(color: ColorLike, paints, max_paints: int = 3, thickness: float = 1.0,
-          over: ColorLike = "#ffffff") -> Match:
+def match(
+    color: ColorLike,
+    paints,
+    max_paints: int = 3,
+    thickness: float = 1.0,
+    over: ColorLike = "#ffffff",
+) -> Match:
     """Mix the given paints to match a colour, as a painter would on the palette.
 
     Tries every combination of up to ``max_paints`` of ``paints`` in many
@@ -117,7 +138,8 @@ def match(color: ColorLike, paints, max_paints: int = 3, thickness: float = 1.0,
     for n in range(1, min(max_paints, len(paints)) + 1):
         grid = np.array(list(itertools.product(steps, repeat=n - 1)))
         for combo in itertools.combinations(range(len(paints)), n):
-            for lead in range(n):                       # each paint in turn as the main one
+            # each paint in turn as the main one
+            for lead in range(n):
                 W = np.zeros((max(len(grid), 1), len(paints)))
                 W[:, combo[lead]] = 1.0
                 others = [c for c in combo if c != combo[lead]]
@@ -128,6 +150,7 @@ def match(color: ColorLike, paints, max_paints: int = 3, thickness: float = 1.0,
                 if e[i] < best_e:
                     best_w, best_e = W[i].copy(), float(e[i])
     # refine: nudge each part up and down, shrinking the step
+    assert best_w is not None
     w = best_w
     for factor in (1.5, 1.2, 1.08, 1.03):
         improved = True

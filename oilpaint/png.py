@@ -17,7 +17,12 @@ def write_png(path: str, img: np.ndarray) -> None:
     raw = b"".join(b"\x00" + img[y].tobytes() for y in range(h))
 
     def chunk(tag: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
 
     with open(path, "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n")

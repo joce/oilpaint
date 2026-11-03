@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
 from . import spectral as sp
 from ._filters import _box_blur, _max_filter, _smooth121
-from .brush import IB, PACKED, Brush, Stroke, apply_stroke
+from .brush import IB, PACKED, Brush, Stroke, StrokePaint, apply_stroke
 from .paint import DEFAULT_BODY, ColorLike
 from .png import write_png
+from .spline import Profile
 from .surface import DEFAULT_SURFACE, Surface
 
 
@@ -40,9 +41,16 @@ class Canvas:
     for each of the two wet sublayers).
     """
 
-    def __init__(self, width: int, height: int, ground: Optional[ColorLike] = None,
-                 texture: Optional[float] = None, weave: Optional[float] = None, seed: Optional[int] = None,
-                 surface: Optional[Surface] = None):
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        ground: ColorLike | None = None,
+        texture: float | None = None,
+        weave: float | None = None,
+        seed: int | None = None,
+        surface: Surface | None = None,
+    ):
         self.width, self.height = int(width), int(height)
         if self.width <= 0 or self.height <= 0:
             raise ValueError("canvas size must be positive")
@@ -59,10 +67,12 @@ class Canvas:
         if weave is not None:
             changes["scale"] = float(weave)
         self.surface = surf.with_(**changes) if changes else surf
-        H, W, N = self.height, self.width, sp.N_BANDS
+        H, W = self.height, self.width
         f32 = np.float32
         if image is not None and image.shape[:2] != (H, W):
-            raise ValueError(f"ground image is {image.shape[1]}x{image.shape[0]}, canvas is {W}x{H}")
+            raise ValueError(
+                f"ground image is {image.shape[1]}x{image.shape[0]}, canvas is {W}x{H}"
+            )
         self.ground = self.surface.ground_reflectance(H, W, self._rng, image=image)
         # Wet sublayers, packed per pixel as [K (N bands), S, volume, body x
         # volume], all extensive (summed over the paint present). The
@@ -82,8 +92,16 @@ class Canvas:
 
     def _make_views(self):
         N = sp.N_BANDS
-        self.top_k, self.top_s, self.top_v = self.top[..., :N], self.top[..., N], self.top[..., N + 1]
-        self.und_k, self.und_s, self.und_v = self.und[..., :N], self.und[..., N], self.und[..., N + 1]
+        self.top_k, self.top_s, self.top_v = (
+            self.top[..., :N],
+            self.top[..., N],
+            self.top[..., N + 1],
+        )
+        self.und_k, self.und_s, self.und_v = (
+            self.und[..., :N],
+            self.und[..., N],
+            self.und[..., N + 1],
+        )
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -93,23 +111,39 @@ class Canvas:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        for name in ("top_a", "und_a"):          # canvases saved before coverage existed
+        # canvases saved before coverage existed
+        for name in ("top_a", "und_a"):
             if name not in self.__dict__:
                 setattr(self, name, np.zeros((self.height, self.width), np.float32))
-        for name in ("top", "und"):              # ... or before paint had a body
+        for name in ("top", "und"):  # ... or before paint had a body
             layer = self.__dict__[name]
             if layer.shape[-1] < PACKED:
                 body = (DEFAULT_BODY * layer[..., IB - 1])[..., None]
-                self.__dict__[name] = np.concatenate([layer, body.astype(layer.dtype)], axis=-1)
+                self.__dict__[name] = np.concatenate(
+                    [layer, body.astype(layer.dtype)], axis=-1
+                )
         self._make_views()
-        if not all(hasattr(self, n) for n in ("_floor", "_hollows", "_peaks_fine", "_peaks_wide")):
-            self._update_tooth()        # maps derived from the surface, added in later versions
+        if not all(
+            hasattr(self, n)
+            for n in ("_floor", "_hollows", "_peaks_fine", "_peaks_wide")
+        ):
+            # maps derived from the surface, added in later versions
+            self._update_tooth()
 
     # ------------------------------------------------------------------
     # painting
     # ------------------------------------------------------------------
-    def stroke(self, path, paint: Optional[ColorLike] = None, amount: float = 6.0,
-               width=None, pressure=0.5, *, brush=None, **options) -> Brush:
+    def stroke(
+        self,
+        path,
+        paint: StrokePaint | None = None,
+        amount: float = 6.0,
+        width: Profile | None = None,
+        pressure: Profile = 0.5,
+        *,
+        brush=None,
+        **options,
+    ) -> Brush:
         """Paint one stroke. See :class:`oilpaint.Stroke` for all parameters.
 
         ``path`` is a list of (x, y) points (a smooth spline is passed through
@@ -119,8 +153,18 @@ class Canvas:
         defaults to the brush's own size. Returns the :class:`Brush`
         afterwards, which you can keep painting with.
         """
-        return apply_stroke(self, Stroke(path=path, paint=paint, amount=amount, width=width,
-                                         pressure=pressure, brush=brush, **options))
+        return apply_stroke(
+            self,
+            Stroke(
+                path=path,
+                paint=paint,
+                amount=amount,
+                width=width,
+                pressure=pressure,
+                brush=brush,
+                **options,
+            ),
+        )
 
     def paint(self, *strokes: Stroke) -> None:
         """Apply one or more :class:`Stroke` objects, in order."""
@@ -150,16 +194,22 @@ class Canvas:
         tooth = self.texture * self.grain + 1.5 * relief
         tooth = tooth - _box_blur(tooth, 12) + 0.5 * self.texture
         lo, hi = np.percentile(tooth, [1, 99])
-        self._tooth = np.clip((tooth - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
+        self._tooth = np.clip((tooth - lo) / max(hi - lo, 1e-6), 0, 1).astype(
+            np.float32
+        )
         # The solid surface under the wet paint, in units of paint thickness:
         # the weave plus dried paint. A rigid blade pressed on it rests on its
         # high points: the tops of the threads (a flexible blade) or the
         # highest ridges around (a stiff one).
-        self._floor = (WEAVE_DEPTH * self.texture * self.grain + self.dry_height).astype(np.float32)
+        self._floor = (
+            WEAVE_DEPTH * self.texture * self.grain + self.dry_height
+        ).astype(np.float32)
         # How far each point lies below the local average surface (the hollows
         # of the weave and of dried paint): thick wet paint fills these first.
         r_mean = max(2, int(round(self.surface.scale)))
-        self._hollows = (_box_blur(self._floor, r_mean) - self._floor).astype(np.float32)
+        self._hollows = (_box_blur(self._floor, r_mean) - self._floor).astype(
+            np.float32
+        )
         r_fine = max(1, int(round(0.5 * self.surface.scale)))
         self._peaks_fine = _box_blur(_max_filter(self._floor, r_fine), 1)
         self._peaks_wide = _box_blur(_max_filter(self._floor, 3 * r_fine + 3), 2)
@@ -182,7 +232,9 @@ class Canvas:
         return self._reflectance_rows(slice(None))
 
     def _reflectance_rows(self, s) -> np.ndarray:
-        R = _composite(self.und_k[s], self.und_s[s], self.und_v[s], self.und_a[s], self.ground[s])
+        R = _composite(
+            self.und_k[s], self.und_s[s], self.und_v[s], self.und_a[s], self.ground[s]
+        )
         return _composite(self.top_k[s], self.top_s[s], self.top_v[s], self.top_a[s], R)
 
     def _row_chunks(self):
@@ -191,15 +243,28 @@ class Canvas:
 
     def color_at(self, x: int, y: int) -> str:
         """Hex color of the paint at pixel (x, y), without lighting."""
-        R = _composite(self.und_k[y, x], self.und_s[y, x], self.und_v[y, x], self.und_a[y, x], self.ground[y, x])
-        R = _composite(self.top_k[y, x], self.top_s[y, x], self.top_v[y, x], self.top_a[y, x], R)
+        R = _composite(
+            self.und_k[y, x],
+            self.und_s[y, x],
+            self.und_v[y, x],
+            self.und_a[y, x],
+            self.ground[y, x],
+        )
+        R = _composite(
+            self.top_k[y, x], self.top_s[y, x], self.top_v[y, x], self.top_a[y, x], R
+        )
         return sp.to_hex(sp.reflectance_to_srgb(R))
 
     # ------------------------------------------------------------------
     # rendering
     # ------------------------------------------------------------------
-    def render(self, lighting: bool = True, light: Sequence[float] = (-0.6, -0.8, 1.1),
-               relief: float = 1.0, gloss: float = 1.0) -> np.ndarray:
+    def render(
+        self,
+        lighting: bool = True,
+        light: Sequence[float] = (-0.6, -0.8, 1.1),
+        relief: float = 1.0,
+        gloss: float = 1.0,
+    ) -> np.ndarray:
         """Render to an sRGB float image (H, W, 3) in 0..1.
 
         ``lighting`` shades the surface relief (canvas weave and impasto) with
@@ -219,7 +284,8 @@ class Canvas:
         return sp.linear_to_srgb(lin).astype(np.float32)
 
     def _matte(self):
-        """Per-pixel mattness of paint sunk into an absorbent ground (None if not absorbent)."""
+        """Per-pixel mattness of paint sunk into an absorbent ground (None if not
+        absorbent)."""
         a = self.surface.absorbency
         if a <= 0:
             return None
@@ -272,11 +338,19 @@ class Canvas:
         paint_h = self.top_v + self.und_v + self.dry_height
         coverage = np.clip(paint_h / 0.5, 0, 1)
         wet = np.clip((self.top_v + self.und_v) / 0.5, 0, 1)
-        spec = gloss * coverage * (1.0 - shadow) * ((0.03 + 0.07 * wet) * tilt ** 3
-                                                    + (0.05 + 0.15 * wet) * tilt ** 8)
+        spec = (
+            gloss
+            * coverage
+            * (1.0 - shadow)
+            * ((0.03 + 0.07 * wet) * tilt**3 + (0.05 + 0.15 * wet) * tilt**8)
+        )
         if matte is not None:
-            spec = spec * (1.0 - 0.9 * np.clip(matte / max(self.surface.absorbency, 1e-6), 0, 1)
-                           * self.surface.absorbency)
+            spec = spec * (
+                1.0
+                - 0.9
+                * np.clip(matte / max(self.surface.absorbency, 1e-6), 0, 1)
+                * self.surface.absorbency
+            )
         return np.clip(lin * diffuse[..., None] + spec[..., None], 0, None)
 
     def save(self, path: str, **render_options) -> None:
@@ -286,7 +360,10 @@ class Canvas:
 
     def to_pil(self, **render_options):
         from PIL import Image  # optional dependency
-        return Image.fromarray(np.round(self.render(**render_options) * 255).astype(np.uint8))
+
+        return Image.fromarray(
+            np.round(self.render(**render_options) * 255).astype(np.uint8)
+        )
 
 
 #: Rendered height of one unit of paint thickness, in pixels (``relief`` in
@@ -326,7 +403,7 @@ def _cast_shadow(h: np.ndarray, L: np.ndarray, max_steps: int = 32) -> np.ndarra
     if horiz < 1e-6:
         return np.zeros_like(h)
     lx, ly = L[0] / horiz, L[1] / horiz
-    rise = L[2] / horiz                    # how fast the light ray climbs per pixel
+    rise = L[2] / horiz  # how fast the light ray climbs per pixel
     span = float(h.max() - h.min())
     steps = int(min(max_steps, np.ceil(span / max(rise, 1e-3)) + 1))
     if steps < 1 or span < 0.05:
