@@ -48,7 +48,7 @@ branch = true
 source = ["oilpaint"]
 # Compiled by numba: coverage.py can't see inside it, so it would read as
 # untested though every test runs it. (With NUMBA_DISABLE_JIT=1 it runs as
-# plain Python and can be measured, but the tests then take about an hour.)
+# plain Python and can be measured, but the tests then take over 50 minutes.)
 omit = ["oilpaint/_engine.py"]
 
 [tool.coverage.report]
