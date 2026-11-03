@@ -13,6 +13,7 @@ Quick start::
 """
 
 from . import brushes, palette, reference, spectral, surfaces
+from ._about import __version__
 from .brush import Brush, BrushType, Stroke
 from .canvas import Canvas
 from .paint import Paint, mix_colors
@@ -31,6 +32,7 @@ __all__ = [
     "Reference",
     "Stroke",
     "Surface",
+    "__version__",
     "brushes",
     "mix_colors",
     "palette",
@@ -38,4 +40,3 @@ __all__ = [
     "spectral",
     "surfaces",
 ]
-__version__ = "0.1.0"

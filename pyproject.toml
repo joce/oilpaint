@@ -1,17 +1,48 @@
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "oilpaint"
-version = "0.1.0"
+dynamic = ["version"]
 description = "A small oil-painting simulator: spline brush strokes with physically based (spectral Kubelka-Munk) paint mixing."
 readme = "README.md"
+authors = [{ name = "Jocelyn Legault", email = "jocelynlegault@gmail.com" }]
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11, <4.0"
+keywords = [
+    "painting",
+    "oil-paint",
+    "simulation",
+    "kubelka-munk",
+    "color-mixing",
+    "brush",
+    "impasto",
+    "generative-art",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Artistic Software",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = ["numpy>=1.24", "numba>=0.57"]
 
 [project.optional-dependencies]
-pil = ["Pillow"]
+pil = ["Pillow>=9.1"]
+
+[project.urls]
+Homepage = "https://github.com/joce/oilpaint"
+Repository = "https://github.com/joce/oilpaint"
+Issues = "https://github.com/joce/oilpaint/issues"
+Changelog = "https://github.com/joce/oilpaint/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 tox = [
@@ -29,15 +60,24 @@ dev = [
     "ruff>=0.15,<1.0",
 ]
 
-[tool.setuptools]
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "oilpaint/_version.py"
+
+[tool.hatch.build.targets.wheel]
 packages = ["oilpaint"]
+
+[tool.hatch.build.targets.sdist]
+include = ["oilpaint", "tests", "CHANGELOG.md", "LICENSE", "README.md", "RELEASING.md", "pyproject.toml"]
 
 [tool.black]
 target-version = ["py311"]
 line-length = 88
 
 [tool.pyright]
-include = ["oilpaint", "tests", "examples"]
+include = ["oilpaint", "tests", "examples", "tools"]
 typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
@@ -121,3 +161,7 @@ ignore = [
     "unnecessary-cast-to-int",
 ]
 preview = true
+
+[build-system]
+requires = ["hatchling>=1.29,<2.0", "hatch-vcs>=0.4,<1.0"]
+build-backend = "hatchling.build"

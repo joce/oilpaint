@@ -7,6 +7,9 @@ dist/
 .venv/
 venv/
 
+# Version file written at build time by hatch-vcs
+oilpaint/_version.py
+
 # Test and coverage output
 .coverage
 coverage.xml
