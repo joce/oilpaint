@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A dirty-brush demo (`examples/demo.py`, shown in the README): a full brush
+  dragged through thin, medium and thick wet paint, then used again on clean
+  canvas.
+
 ### Changed
 
 - Brushes stay dirty longer after working through thick wet paint. What a

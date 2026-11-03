@@ -1091,6 +1091,36 @@ def knife_study(c, x0, y0, w, h, rng):
         )
 
 
+# ---------------------------------------------------------------------------
+# 12. A dirty brush: paint picked up from the canvas, carried into the next stroke
+# ---------------------------------------------------------------------------
+def dirty_brush():
+    c = Canvas(720, 400, seed=7)
+    # (layers of wet blue, scraped back to a thin film, pressure of the drag)
+    rows = ((1, True, 0.6), (1, False, 0.6), (2, False, 0.6), (1, False, 0.95))
+    for k, (layers, scraped, pressure) in enumerate(rows):
+        y = 50 + 100 * k
+        # wet blue: thin (scraped back), medium, thick (two layers)
+        for _ in range(layers):
+            for yy in range(y - 28, y + 30, 8):
+                c.stroke(
+                    [(20, yy), (330, yy)],
+                    P.ULTRAMARINE_BLUE,
+                    amount=8,
+                    brush=B.FLAT_HOG,
+                    pressure=0.1,
+                )
+        if scraped:
+            for yy in range(y - 30, y + 36, 14):
+                c.stroke([(10, yy), (340, yy)], brush=B.SCRAPER, pressure=0.7)
+        # a full yellow brush dragged through it, then lifted and used again on
+        # clean canvas without new paint
+        br = Brush(B.FLAT_HOG).load(P.CADMIUM_YELLOW, 30)
+        c.stroke([(60, y), (220, y)], brush=br, pressure=pressure)
+        c.stroke([(380, y), (690, y)], brush=br, pressure=0.6)
+    save(c, "dirty_brush.png")
+
+
 if __name__ == "__main__":
     for fn in (
         mixing_chart,
@@ -1105,6 +1135,7 @@ if __name__ == "__main__":
         impasto,
         knives,
         knife_drag,
+        dirty_brush,
     ):
         t0 = time.time()
         fn()

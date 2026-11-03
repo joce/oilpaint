@@ -442,6 +442,16 @@ and then pressed hard (only the squeezed-out heel paint comes off); a round
 with umber in the heel, blue in the belly and white on the tip, painted once,
 then pressed hard to squeeze out the umber.*
 
+![dirty brush](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/dirty_brush.png)
+
+*A dirty brush. A flat full of yellow is dragged through wet blue (left),
+then lifted and used again on clean canvas without new paint (right). From
+the top: blue scraped back to a thin film, a medium layer, a thick one (two
+layers), and the medium layer again with the brush pressed hard. The thin
+film only dirties the tips, and the next stroke is soon clean yellow again.
+Thicker paint, or pressing harder, gets further up into the brush, and the
+next stroke stays greenish all along.*
+
 ### Impasto: thick paint and relief
 
 Thin paint gives colour; thick paint also gives shape. Paint has a height on
