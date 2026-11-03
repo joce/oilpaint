@@ -216,6 +216,57 @@ def test_dirty_brush_carries_color():
     assert (r - b) > (w[0] - w[2]) + 0.03  # pinkish, not pure white
 
 
+def _yellow_brush_through_blue(thickness, pressure):
+    """A full yellow flat dragged through an even film of wet blue,
+    ``thickness`` times as thick as a light stroke lays it."""
+    c = Canvas(260, 100, seed=3)
+    for y in range(26, 80, 8):
+        c.stroke(
+            [(10, y), (250, y)],
+            paint=P.ULTRAMARINE_BLUE,
+            amount=8,
+            brush=brushes.FLAT_HOG,
+            pressure=0.1,
+            seed=1,
+        )
+    c.top *= thickness
+    c.und *= thickness
+    brush = Brush(brushes.FLAT_HOG).load(P.CADMIUM_YELLOW, 30)
+    c.stroke([(40, 52), (200, 52)], brush=brush, pressure=pressure, seed=2)
+    return brush
+
+
+def _red(brush, depth):
+    """Mean red of the paint in one layer of the brush: the yellow loses red as
+    blue gets into it."""
+    return np.mean([sp.parse_color(h)[0] for h in brush.colors(depth)])
+
+
+def test_deep_wet_paint_gets_further_into_the_brush():
+    thin = _yellow_brush_through_blue(0.3, 0.6)
+    thick = _yellow_brush_through_blue(2.0, 0.6)
+    # A thin film only dirties the tips ...
+    assert _red(thin, "tip") < _red(thin, "belly") - 0.02
+    # ... thick paint comes up between the hairs, into the body of the brush.
+    assert _red(thick, "belly") < _red(thin, "belly") - 0.06
+    # Pressing bends the hairs into the paint: more of it gets in.
+    light = _yellow_brush_through_blue(1.0, 0.2)
+    hard = _yellow_brush_through_blue(1.0, 0.9)
+    assert _red(hard, "belly") < _red(light, "belly") - 0.05
+
+
+def test_brush_dirty_from_thick_paint_tints_its_whole_next_stroke():
+    def next_stroke(brush):
+        c = Canvas(360, 80, seed=4)
+        c.stroke([(20, 40), (340, 40)], brush=brush, pressure=0.6, seed=3)
+        # six brush widths along, well past what the tips held
+        return sp.parse_color(c.color_at(180, 40))
+
+    dirty = next_stroke(_yellow_brush_through_blue(2.0, 0.6))
+    clean = next_stroke(Brush(brushes.FLAT_HOG).load(P.CADMIUM_YELLOW, 30))
+    assert dirty[0] < clean[0] - 0.08  # still greener than the clean yellow
+
+
 def test_dry_keeps_colors_and_stops_mixing():
     c = Canvas(160, 120, seed=4)
     c.stroke(
