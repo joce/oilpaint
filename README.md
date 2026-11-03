@@ -39,6 +39,12 @@ and `pytest tests` to run the tests.
 Each is a single script where every mark is a `canvas.stroke(...)`; numpy only
 decides where the strokes go.
 
+Each was also made a different way. The Bruegel is painted from memory: a
+winter village made up in his manner, with no picture to look at. The Bob Ross
+follows his method, step by step as he taught it on television, rather than
+any particular painting. The Rembrandt copies one real painting, matching a
+photograph of it as closely as the strokes allow.
+
 * `examples/bruegel_winter.py`: a winter village in the manner of Pieter
   Bruegel the Elder, painted thinly on an oak panel with soft sable brushes,
   back to front, letting layers dry (about 20,000 strokes, ~13 minutes).
