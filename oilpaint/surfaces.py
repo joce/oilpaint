@@ -5,6 +5,7 @@
     from oilpaint import Canvas, surfaces
     canvas = Canvas(1200, 800, surface=surfaces.LINEN_FINE)
     toned = surfaces.COTTON_DUCK.with_(toning="#a9805a")        # raw-sienna imprimatura
+    behind = Canvas(800, 600, surface=surfaces.GLASS, reverse=True)  # reverse glass
 
 Scales are in pixels and assume roughly 1 px ≈ 0.3 mm (a 1200 px canvas is
 about 40 cm wide); use ``.with_(scale=...)`` for other sizes.
@@ -110,6 +111,22 @@ COPPER = Surface(
     slickness=0.95,
     ground="#c4936a",
     name="Copper",
+)
+
+#: Glass: perfectly smooth, the slickest surface of all (paint glides on it and
+#: wipes off clean) and clear: ``ground`` is what shows through it, here a white
+#: backing card. Paint it on the front like copper, or on the back as a reverse
+#: glass painting, seen through the glass:
+#: ``Canvas(..., surface=surfaces.GLASS, reverse=True)``.
+GLASS = Surface(
+    texture="smooth",
+    relief=0.0,
+    tooth=0.0,
+    absorbency=0.0,
+    slickness=1.0,
+    ground="#f3f2ee",
+    transparent=True,
+    name="Glass",
 )
 
 ALL = {

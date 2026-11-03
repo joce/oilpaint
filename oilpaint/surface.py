@@ -62,6 +62,10 @@ class Surface:
     priming_marks:
         0..1: how visible the brushmarks of the priming are, in the direction
         ``priming_angle`` (degrees).
+    transparent:
+        A clear support (glass): ``ground`` is then whatever shows through it
+        (the wall or backing card behind), and it can be painted from the
+        back and seen through the front: ``Canvas(..., reverse=True)``.
     """
 
     texture: str = "canvas"
@@ -77,6 +81,7 @@ class Surface:
     toning_strength: float = 1.0
     priming_marks: float = 0.0
     priming_angle: float = 0.0
+    transparent: bool = False
     name: str = "canvas"
 
     def __post_init__(self):

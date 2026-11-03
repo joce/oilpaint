@@ -275,13 +275,16 @@ paint = palette.match(ref.color(x, y, 6), palette.OLD_MASTER, over="#5e4430").pa
 canvas.stroke(path, paint=paint, width=14)
 ```
 
-### `Canvas(width, height, ground=None, texture=None, weave=None, seed=None, surface=None)`
+### `Canvas(width, height, ground=None, texture=None, weave=None, seed=None, surface=None, reverse=False)`
 
 * `surface` is what you paint on (see **Surfaces** below). Default: a
   generic primed canvas.
 * `ground` overrides the surface's priming color, or is an `(H, W, 3)` sRGB
   image to paint over. `texture` and `weave` are shortcuts for the surface's
   `relief` and `scale`.
+* `reverse=True` paints on the back of a clear support (`surfaces.GLASS`)
+  and shows it through the front: a reverse glass painting (see **Reverse
+  glass** below).
 * `canvas.dry()` lets everything dry. Later strokes stop mixing with it and
   glazes layer over it optically.
 * `canvas.render(lighting=True, light=(-0.6, -0.8, 1.1), relief=1.0, gloss=1.0)`
@@ -310,6 +313,7 @@ canvas.stroke(path, paint=paint, width=14)
 | `OIL_PAPER` | Felted paper fibres with a pronounced tooth; absorbent. |
 | `GESSO_PANEL` | Oak panel with a chalk gesso, as used by the Flemish masters: smooth, very absorbent, with priming brushmarks and a hint of wood grain. |
 | `COPPER` | Glass-smooth and very slick; nothing is absorbed; the warm metal glows through thin paint. |
+| `GLASS` | Clear glass: perfectly smooth, the slickest of all (paint wipes off clean), nothing absorbed. Its `ground` is what shows through it, a white backing card by default. Paint it on the front, or on the back as a reverse glass painting. |
 
 ```python
 from oilpaint import Canvas, Surface, surfaces
@@ -334,6 +338,7 @@ canvas = Canvas(1200, 800, surface=Surface(texture="twill", scale=5, tooth=0.6, 
 | `ground` | Priming color. |
 | `toning`, `toning_strength` | A transparent toned layer (imprimatura) brushed over the priming. |
 | `priming_marks`, `priming_angle` | Visible brushmarks in the priming, and their direction. |
+| `transparent` | A clear support: `ground` is what shows through it, and it can be painted from the back (`Canvas(..., reverse=True)`). |
 
 `surfaces.catalog()` lists the presets. Scales assume about 1 px ≈ 0.3 mm;
 use `.with_(scale=...)` to match other canvas sizes.
@@ -342,11 +347,53 @@ use `.with_(scale=...)` to match other canvas sizes.
 
 *The same marks on each surface, left to right and top to bottom: canvas, fine
 linen, coarse linen, cotton duck, canvas board, oil paper, gesso panel, copper,
-and fine linen with a toned ground. The marks are: a loaded hog flat, the same
-brush dragged lightly (it breaks up on coarse linen and paper), a dark (it sinks
-in on absorbent grounds), an ochre patch wiped back with the `RAG` tool (clean
-on copper and oil-primed linen, a stain on gesso and paper), and a palette-knife
-slab.*
+glass (over a white card), and fine linen with a toned ground. The marks are: a
+loaded hog flat, the same brush dragged lightly (it breaks up on coarse linen
+and paper), a dark (it sinks in on absorbent grounds), an ochre patch wiped back
+with the `RAG` tool (clean on copper and glass, a stain on gesso and paper), and
+a palette-knife slab.*
+
+#### Reverse glass
+
+A reverse glass painting is painted on the back of a sheet of glass and
+looked at through the front, so the first paint laid is the one in front.
+The painter works backwards: the outlines and the details first, then the
+colours, and the background last. Each layer dries before the next goes on,
+or the brush would smear what is already there. The colours can go on loosely
+behind the outlines, since the lines in front hide the edges. Seen through the
+glass, the paint is flat and glossy: brush marks and impasto stay on the back.
+It was a folk art in Bavaria, Bohemia and Romania. Kandinsky and Gabriele
+Münter took it up in Murnau around 1910, and Ivan Generalić and the Hlebine
+school in Croatia made it their main medium.
+
+```python
+from oilpaint import Canvas, surfaces
+
+glass = Canvas(800, 600, surface=surfaces.GLASS, reverse=True)
+# the outlines first ...
+glass.stroke(outline, "#1b1a19", amount=20, brush=brushes.LINER)
+glass.dry()
+# ... the colours behind them ...
+glass.stroke(petal, "#d63a1f", amount=10, brush=brushes.FILBERT_HOG)
+glass.dry()
+# ... and the background last, all over
+for y in range(0, 600, 20):
+    glass.stroke([(0, y), (800, y)], "#7a9fd8", amount=16, brush=brushes.FLAT_HOG)
+```
+
+Coordinates are as seen from the front, so nothing has to be painted mirrored.
+`ground` is what shows through where there is no paint: Kandinsky put black
+card behind his glass paintings to deepen the colours
+(`surfaces.GLASS.with_(ground="#151515")`).
+
+![reverse glass](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/reverse_glass.png)
+
+*The same flower painted three ways. Left: on the front of the glass, in the
+usual order (background, colours, details, outlines); the brush marks show in
+the light. Middle: on the back, in reverse order (outlines, details, colours,
+background), seen through the glass: the same picture, flat and crisp, the
+colours tucked behind the lines. Right: on the back, in the usual order: the
+background went on first, so it is in front and hides everything else.*
 
 ### `Brush`: loading one or several paints
 
