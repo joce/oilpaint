@@ -2,15 +2,17 @@
 
 Painted from a photograph of the painting (The Metropolitan Museum of Art,
 New York; public domain; ``examples/reference``) the way Courbet painted his
-rocks: on a dark ground, the masses and the dark clefts laid in with a broad
-brush; then, once that is dry, the stone built up light over dark with a
-sponge, loaded lightly and dabbed on in layers of value, each left to dry:
-the middle tones over the rock, lighter prints only on its lit planes, and
-the brightest pressed most lightly of all, so that the darker layers show
-through the sponge's holes as the grain of the stone. The falling water is
-laid on with the palette knife, and the darkest cracks drawn again with a
-small brush. The brushwork and the knife go only where the canvas still
-differs from the photograph (see ``_studies``).
+rocks, light over dark: on a dark ground, the whole picture laid in with a
+broad brush in its shadow tone (the lights brought down, the darks left as
+they are); then, once that is dry, the lights brought up with a sponge,
+loaded lightly and dabbed on in layers, each left to dry: broad prints on
+the broad lit planes, smaller ones on the narrower lights, the brightest
+pressed most lightly of all. A print goes only where all of it falls on
+light, so the clefts and the shadows stay the dark lay-in, and the dark
+shows through the sponge's holes as the grain of the stone. The foam on
+the water is sponged too, and its brightest parts laid on with the palette
+knife. The brushwork goes only where the canvas still differs from the
+photograph (see ``_studies``).
 
     python examples/courbet_loue.py [output.png]
 """
@@ -22,7 +24,7 @@ from collections import defaultdict
 
 import numpy as np
 from _studies import Study
-from PIL import Image
+from PIL import Image, ImageFilter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -35,6 +37,19 @@ W = 1000
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def shadow_tone(img):
+    """The photograph in its shadow tone: the lights brought down, the darks
+    left about as they are."""
+    return img * (1.0 - 0.5 * img.mean(-1, keepdims=True))
+
+
+def darkest(value, size):
+    """The darkest value within about ``size`` px of each point."""
+    k = max(int(size) // 2 * 2 + 1, 3)
+    im = Image.fromarray(np.round(np.clip(value, 0, 1) * 255).astype(np.uint8))
+    return np.asarray(im.filter(ImageFilter.MinFilter(k)), dtype=float) / 255.0
 
 
 def sponged(study, size, spacing, scale, where, pressure, lift=1.0, load=0.6):
@@ -99,36 +114,37 @@ def paint_it(path):
     c = Canvas(W, h, surface=surfaces.LINEN_FINE.with_(ground="#2e2620"), seed=1864)
     study = Study(c, ref, seed=1864, body=0.55)
     ys, xs = np.mgrid[0:h, 0:W]
-    value = np.asarray(ref.value(xs, ys, scale=3))
-    around = np.asarray(ref.value(xs, ys, scale=12))
-    water = (value > 0.6) & (ys > 0.4 * h) & (xs > 0.2 * W)
-    rock = ~water
-    log("lay-in: the masses and the clefts")
+    value = np.asarray(ref.value(xs, ys, scale=2))
+    water = (value > 0.55) & (ys > 0.4 * h) & (xs > 0.2 * W)
+    log("lay-in, in the shadow tone")
+    study.tone = shadow_tone
     study.layer(56, brushes.FLAT_HOG, straight=True, load=0.5, pressure=0.5)
     study.layer(28, brushes.FLAT_HOG, threshold=5.0, load=0.5, pressure=0.5)
+    study.layer(14, brushes.FLAT_HOG, threshold=7.0, load=0.5, pressure=0.5)
+    study.tone = None
     c.dry()
-    # the sponge, in layers of value, each let dry: the middle tones over the
-    # rock, then lighter prints only where the stone catches the light (lighter
-    # than around it), then the brightest, pressed most lightly
+    # the sponge brings up the lights, in layers, each let dry: a print only
+    # where all of it falls on light (the darkest point under it is light
+    # enough), so the clefts stay dark
     n = 0
     layers = (
-        ("middle tones", 40, 12, 5, rock & (value > 0.22), 0.35, 1.0),
-        ("middle tones", 28, 9, 3, rock & (value > 0.3), 0.3, 1.0),
-        ("the lit planes", 26, 8, 2.5, rock & (value > 0.42) & (value > around), 0.24,
-         1.06),
-        ("the lights", 18, 6, 1.5, rock & (value > 0.58) & (value > around + 0.04),
-         0.17, 1.12),
-    )  # fmt: skip
-    for name, size, spacing, scale, where, pressure, lift in layers:
-        log(f"sponge {size}px: {name} ({n} prints so far)")
+        (36, 11, 4.0, 0.30, 0.40, 0.30, 1.0),
+        (24, 8, 2.5, 0.36, 0.48, 0.25, 1.05),
+        (16, 6, 1.5, 0.42, 0.56, 0.20, 1.1),
+        (10, 5, 1.0, 0.50, 0.66, 0.16, 1.14),
+    )
+    for size, spacing, scale, floor, light, pressure, lift in layers:
+        log(f"sponge {size}px: the lights ({n} prints so far)")
+        under = darkest(value, 0.8 * size)
+        where = ~water & (under > floor) & (value > light)
         n += sponged(study, size, spacing, scale, where, pressure, lift)
         c.dry()
-    log("knife: the falling water")
-    k = foam(study, water, threshold=3.0)
+    log("sponge: the foam")
+    n += sponged(study, 22, 7, 2.0, water & (value > 0.6), 0.3, 1.05)
+    n += sponged(study, 14, 5, 1.2, water & (value > 0.7), 0.22, 1.1)
     c.dry()
-    log("the darkest cracks")
-    study.layer(4, brushes.ROUND, threshold=10.0, length=4, load=0.6, pressure=0.45,
-                where=value < 0.28)  # fmt: skip
+    log("knife: the brightest water")
+    k = foam(study, water & (value > 0.8), threshold=4.0)
     c.save(path, relief=0.45, gloss=0.5)
     print(f"wrote {path}: {study.strokes} brush strokes, {n} sponge prints, "
           f"{k} knife strokes, in {time.time() - t0:.0f} s")  # fmt: skip

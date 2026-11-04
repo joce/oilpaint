@@ -35,7 +35,10 @@ def box_mean(img, r):
 
 
 class Study:
-    """A canvas painted up from a reference photograph."""
+    """A canvas painted up from a reference photograph. ``tone``, when set, is
+    a function of an (H, W, 3) image that the photograph's colours pass
+    through first: to lay a picture in darker than it is, say, and bring up
+    the lights afterwards."""
 
     def __init__(self, canvas, ref, seed, body=0.6, levels=28):
         self.c, self.ref = canvas, ref
@@ -43,6 +46,7 @@ class Study:
         self.body, self.levels = body, levels
         self.paints: dict = {}
         self.strokes = 0
+        self.tone = None
         ys, xs = np.mgrid[0 : canvas.height, 0 : canvas.width]
         self._xy = (xs, ys)
 
@@ -54,8 +58,10 @@ class Study:
         return self.paints[key]
 
     def target(self, scale):
-        """The photograph softened to ``scale``, as an (H, W, 3) image."""
-        return np.asarray(self.ref.color(*self._xy, scale=scale), dtype=np.float64)
+        """The photograph softened to ``scale``, as an (H, W, 3) image (passed
+        through ``tone``, if set)."""
+        img = np.asarray(self.ref.color(*self._xy, scale=scale), dtype=np.float64)
+        return img if self.tone is None else self.tone(img)
 
     def gap(self, size, scale):
         """What the canvas still lacks, at the scale of a brush ``size`` wide:
