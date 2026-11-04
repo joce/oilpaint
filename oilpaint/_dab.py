@@ -8,8 +8,9 @@ one more of the face.
 
 * bristles: separate tips, clumps of bristle ends of slightly different
   lengths, each a little cone (a harder tap spreads it into a bigger dot);
-* sponge: an irregular web of walls around holes, the surface uneven, the
-  outline ragged; the holes stay open however hard it is pressed.
+* sponge: an open web of walls around holes on an uneven lump, the outline
+  irregular; a light press prints a few clusters, and the holes stay open
+  however hard it is pressed.
 
 A brush keeps its layout (it comes from the brush type), turned to a new
 angle on every tap, as a painter's hand turns.
@@ -95,23 +96,27 @@ def _cells(X, Y, spacing, rng, wall):
 
 
 def _sponge(n, spacing, rng):
-    """A sea sponge's face: big holes and small pores in an uneven web, some
-    parts standing proud (they print first), the outline ragged."""
+    """A sea sponge's face: big holes and small pores in an open web, on a lump
+    (the middle and the proud bumps touch first, so a light press prints a
+    few clusters that spread as it is pressed harder), the outline uneven."""
     X, Y = _coords(n)
-    web = _cells(X, Y, spacing, rng, 0.75) * (
-        0.35 + 0.65 * _cells(X, Y, 0.4 * spacing, rng, 0.9)
+    web = _cells(X, Y, spacing, rng, 0.5) * (
+        0.15 + 0.85 * _cells(X, Y, 0.4 * spacing, rng, 0.7)
     )
-    rough = fractal_noise_2d(n, n, n / 6.0, rng, octaves=3)
-    rough = (rough - rough.min()) / max(np.ptp(rough), 1e-9)
-    face = web * (0.2 + 0.8 * rough)
-    # a ragged outline
+    bumps = fractal_noise_2d(n, n, n / 4.0, rng, octaves=3)
+    bumps = (bumps - bumps.min()) / max(np.ptp(bumps), 1e-9)
+    # an uneven outline, and a dome under it
     ang = np.arctan2(Y, X)
-    edge = (
+    edge = 0.85 * (
         1.0
-        + 0.08 * np.sin(3 * ang + rng.uniform(0, 6))
+        + 0.16 * np.sin(2 * ang + rng.uniform(0, 6))
+        + 0.10 * np.sin(3 * ang + rng.uniform(0, 6))
         + 0.06 * np.sin(5 * ang + rng.uniform(0, 6))
     )
-    return face * _smoothstep(edge, edge - 0.18, np.hypot(X, Y))
+    r = np.hypot(X, Y) / edge
+    dome = np.sqrt(np.clip(1.0 - r * r, 0.0, 1.0))
+    face = web * (0.1 + 0.45 * dome + 0.45 * bumps)
+    return face * _smoothstep(1.0, 0.85, r)
 
 
 @functools.lru_cache(maxsize=64)

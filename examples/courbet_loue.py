@@ -2,14 +2,15 @@
 
 Painted from a photograph of the painting (The Metropolitan Museum of Art,
 New York; public domain; ``examples/reference``) the way Courbet painted his
-rocks: on a dark ground, the masses laid in thinly with a broad brush, then
-the stone built up light over dark almost entirely with sponges, big ones
-first and smaller ones over them, their uneven prints, with the dark showing
-through their holes, giving it its grain; the falling water laid on with the
-palette knife; and only the darkest lines, the cracks, the timbers of the
-mill and its windows, drawn with a small brush. Each pass looks at the canvas
-so far and prints or paints only where it still differs from the photograph
-(see ``_studies``).
+rocks: on a dark ground, the masses and the dark clefts laid in with a broad
+brush; then, once that is dry, the stone built up light over dark with a
+sponge, loaded lightly and dabbed on in layers of value, each left to dry:
+the middle tones over the rock, lighter prints only on its lit planes, and
+the brightest pressed most lightly of all, so that the darker layers show
+through the sponge's holes as the grain of the stone. The falling water is
+laid on with the palette knife, and the darkest cracks drawn again with a
+small brush. The brushwork and the knife go only where the canvas still
+differs from the photograph (see ``_studies``).
 
     python examples/courbet_loue.py [output.png]
 """
@@ -36,45 +37,49 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def sponged(study, size, spacing, scale, where, pressure, lift=1.05, threshold=3.0):
-    """Sponge prints where the canvas still lacks the stone's colour: the
-    photograph's colour there, a touch lighter (the darker paint beneath shows
-    through the sponge's holes)."""
-    target, lacking, err = study.gap(size, scale)
-    xs, ys = study.points(spacing, where & (err > threshold))
+def sponged(study, size, spacing, scale, where, pressure, lift=1.0, load=0.6):
+    """A layer of sponge prints about ``spacing`` apart over ``where``. The
+    sponge is loaded lightly (dabbed off on the palette first: ``load`` per
+    print) with the photograph's colour there, nudged towards what the canvas
+    still lacks and ``lift``-ed (the darker layers show through its holes),
+    and a few prints are made from each loading, the sponge turned each
+    time."""
+    target, lacking, _ = study.gap(size, scale)
+    xs, ys = study.points(spacing, where)
     groups = defaultdict(list)
     paints = {}
     for x, y in zip(xs, ys, strict=True):
         yi, xi = int(y), int(x)
         rgb = (
-            (target[yi, xi] + 0.6 * lacking[yi, xi])
+            (target[yi, xi] + 0.4 * lacking[yi, xi])
             * lift
-            * study.rng.uniform(0.94, 1.06)
+            * study.rng.uniform(0.95, 1.05)
         )
         paint = study.paint(rgb)
         groups[id(paint)].append((x, y))
         paints[id(paint)] = paint
     batches = []
     for key, pts in groups.items():
-        batches.extend((paints[key], pts[k : k + 4]) for k in range(0, len(pts), 4))
+        batches.extend((paints[key], pts[k : k + 5]) for k in range(0, len(pts), 5))
     sponge = brushes.SPONGE.sized(size)
     for k in study.rng.permutation(len(batches)):
         paint, pts = batches[k]
+        jitter = study.rng.uniform(0.85, 1.15, len(pts))
         study.c.stipple(
-            pts, paint, amount=3.0 * len(pts) + 4, pressure=pressure, brush=sponge
+            pts, paint, amount=load * len(pts), pressure=pressure * jitter, brush=sponge
         )
     return len(xs)
 
 
 def foam(study, where, threshold=5.0):
-    """The brightest foam on the falling water: small strokes of the palette
-    knife, following the flow."""
+    """The falling water and its foam: small strokes of the palette knife,
+    following the flow."""
     target, lacking, err = study.gap(10, 1.5)
     xs, ys = study.points(6, where & (err > threshold))
     knife = brushes.KNIFE_SMALL
     for x, y in zip(xs, ys, strict=True):
         a, _ = study.ref.direction(x, y, scale=4)
-        d = study.rng.uniform(4, 8)
+        d = study.rng.uniform(5, 10)
         pts = [
             (x - d * np.cos(a), y - d * np.sin(a)),
             (x + d * np.cos(a), y + d * np.sin(a)),
@@ -95,37 +100,35 @@ def paint_it(path):
     study = Study(c, ref, seed=1864, body=0.55)
     ys, xs = np.mgrid[0:h, 0:W]
     value = np.asarray(ref.value(xs, ys, scale=3))
-    water_mask = (value > 0.6) & (ys > 0.4 * h) & (xs > 0.2 * W)
-    log("lay-in")
+    around = np.asarray(ref.value(xs, ys, scale=12))
+    water = (value > 0.6) & (ys > 0.4 * h) & (xs > 0.2 * W)
+    rock = ~water
+    log("lay-in: the masses and the clefts")
     study.layer(56, brushes.FLAT_HOG, straight=True, load=0.5, pressure=0.5)
+    study.layer(28, brushes.FLAT_HOG, threshold=5.0, load=0.5, pressure=0.5)
     c.dry()
-    # everything sponged, big sponges to small ones: pressed lightly at first,
-    # so each print is a lacy web and they build up a grain (the dark showing
-    # through), then the smallest sponge pressed harder for the edges; each
-    # pass let dry so the next does not lift it again
+    # the sponge, in layers of value, each let dry: the middle tones over the
+    # rock, then lighter prints only where the stone catches the light (lighter
+    # than around it), then the brightest, pressed most lightly
     n = 0
-    passes = (
-        (44, 12, 6, 0.0, 0.2),
-        (44, 12, 6, 3.0, 0.2),
-        (30, 8, 4, 3.0, 0.2),
-        (20, 6, 2.5, 4.0, 0.22),
-        (14, 4.5, 1.5, 5.0, 0.25),
-        (10, 3.5, 1.0, 6.0, 0.3),
-    )
-    everywhere = np.ones((h, W), bool)
-    for size, spacing, scale, threshold, pressure in passes:
-        log(f"sponge {size}px ({n} prints so far)")
-        n += sponged(
-            study, size, spacing, scale, everywhere, pressure, threshold=threshold
-        )
+    layers = (
+        ("middle tones", 40, 12, 5, rock & (value > 0.22), 0.35, 1.0),
+        ("middle tones", 28, 9, 3, rock & (value > 0.3), 0.3, 1.0),
+        ("the lit planes", 26, 8, 2.5, rock & (value > 0.42) & (value > around), 0.24,
+         1.06),
+        ("the lights", 18, 6, 1.5, rock & (value > 0.58) & (value > around + 0.04),
+         0.17, 1.12),
+    )  # fmt: skip
+    for name, size, spacing, scale, where, pressure, lift in layers:
+        log(f"sponge {size}px: {name} ({n} prints so far)")
+        n += sponged(study, size, spacing, scale, where, pressure, lift)
         c.dry()
-    log("knife: the foam")
-    k = foam(study, water_mask & (value > 0.75))
+    log("knife: the falling water")
+    k = foam(study, water, threshold=3.0)
     c.dry()
-    # a brush only for the darkest thin lines
-    log("the cracks, the timbers, the windows")
-    study.layer(3, brushes.LINER, threshold=12.0, length=8, load=0.6, pressure=0.45,
-                where=value < 0.3)  # fmt: skip
+    log("the darkest cracks")
+    study.layer(4, brushes.ROUND, threshold=10.0, length=4, load=0.6, pressure=0.45,
+                where=value < 0.28)  # fmt: skip
     c.save(path, relief=0.45, gloss=0.5)
     print(f"wrote {path}: {study.strokes} brush strokes, {n} sponge prints, "
           f"{k} knife strokes, in {time.time() - t0:.0f} s")  # fmt: skip
