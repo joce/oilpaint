@@ -142,9 +142,9 @@ the colour that brings the canvas closer (`examples/_studies.py`).
   sponges and rags as well as the palette knife: here, over a dark ground and
   a thin lay-in, about COURBET_PRINTS `SPONGE` prints, big sponges to small,
   pressed lightly so the dark shows through their holes and gives the stone
-  its grain, the smaller ones pressed along the planes of the rock; then a
-  few touches of the palette knife for the brightest foam and the lit rock,
-  and a liner for the darkest cracks and timbers (COURBET_TIME).
+  its grain, the smallest pressed harder for the edges; then a few touches
+  of the palette knife for the brightest foam, and a liner for the darkest
+  cracks and timbers (COURBET_TIME).
 * `examples/turner_venice.py`: J. M. W. Turner's *Approach to Venice* (1844,
   National Gallery of Art, Washington). The late Turner smudged and glazed
   with his fingers and thumb as much as with a brush: a thin lay-in swept
@@ -168,7 +168,8 @@ nearly pure colour, tapped on side by side.*
 ![after courbet](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/courbet_loue.png)
 
 *After Courbet's* The Source of the Loue*: the rock and the water built up
-light over dark with sponges, a few lights laid on with the palette knife.*
+light over dark with sponges, the brightest foam laid on with the palette
+knife.*
 
 ![after turner](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/turner_venice.png)
 

@@ -3,13 +3,13 @@ Falling Rocket* (1875).
 
 Painted from a photograph of the painting (Detroit Institute of Arts; public
 domain; ``examples/reference``) the way Whistler made his nocturnes: very
-thin, fluid paint (his "sauce") swept on in broad washes over a dark ground,
-the smoke and the lights brushed into it, a few dark figures, and the sparks
-of the falling rocket flicked on: spattered from a loaded brush, so that they
-fall in showers. This is the picture John Ruskin said flung "a pot of paint
-in the public's face", and the libel suit Whistler brought over it. Each
-layer looks at the canvas so far and paints only where it still differs from
-the photograph (see ``_studies``).
+thin, fluid paint (his "sauce") swept on in broad washes with a soft mop
+over a dark ground, wet into wet, the smoke and the lights brushed softly
+into it, and the sparks of the falling rocket flicked on: spattered from a
+loaded brush, so that they fall in showers. This is the picture John Ruskin
+said flung "a pot of paint in the public's face", and the libel suit
+Whistler brought over it. Each layer looks at the canvas so far and paints
+only where it still differs from the photograph (see ``_studies``).
 
     python examples/whistler_rocket.py [output.png]
 """
@@ -97,17 +97,14 @@ def paint_it(path):
     # the brushes leave the sparks alone: they are flicked on at the end
     night = box_mean(lit.astype(float), 6) < 1e-6
     log("washes")
-    # long washes, up and down the canvas, then narrower sweeps the same way
+    # broad straight sweeps of the mop, wet into wet, then narrower ones
     for size, threshold in ((80, 0.0), (40, 4.0), (20, 5.0)):
-        study.layer(size, brushes.MOP, angle=np.pi / 2, threshold=threshold,
-                    length=6, load=0.5, pressure=0.4, correct=0.8)  # fmt: skip
+        study.layer(size, brushes.MOP, straight=True, threshold=threshold, load=0.5,
+                    pressure=0.4, correct=0.8)  # fmt: skip
     c.dry()
     log("smoke and lights")
     # soft: the mop again, following the drifts of smoke, gently
     study.layer(16, brushes.MOP, threshold=7.0, load=0.4, pressure=0.3, correct=0.3,
-                where=night & busy)  # fmt: skip
-    log("figures, the barge, the lights")
-    study.layer(5, brushes.ROUND, threshold=10.0, length=3, load=0.8, pressure=0.45,
                 where=night & busy)  # fmt: skip
     c.dry()
     log("sparks")
