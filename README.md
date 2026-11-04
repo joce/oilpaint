@@ -120,6 +120,53 @@ rather than copied: painted on the back of the glass, black lines first and
 the sky last, and seen through the front. No brush relief shows through the
 glass, only colour.*
 
+### Four masters, four tools
+
+Each of these studies is painted from a photograph of a real painting
+(`examples/reference`, all public domain) with one of the tools from
+**Dabbing, hands and spatter**, the way its painter is known to have used it.
+
+* `examples/seurat_grande_jatte.py`: Georges Seurat's *Gray Weather, Grande
+  Jatte* (about 1886-88, The Metropolitan Museum of Art), in pointillist dots
+  tapped on with `canvas.stipple` over a thin lay-in: about 85,000 dots, each
+  the colour the photograph shows where it falls, made a little purer, with
+  now and then a dot of its complement (~1.5 minutes).
+* `examples/courbet_loue.py`: Gustave Courbet's *The Source of the Loue*
+  (1864, The Metropolitan Museum of Art). Courbet built up his rocks with
+  sponges and rags as well as the palette knife: here the stone is a dark
+  lay-in with lighter `SPONGE` prints broken over it, and the falling water is
+  laid on with the knife (~1 minute).
+* `examples/turner_venice.py`: J. M. W. Turner's *Approach to Venice* (1844,
+  National Gallery of Art, Washington). The late Turner smudged and glazed
+  with his fingers and thumb as much as with a brush: thin colour laid in
+  wet, swept into haze with the `PALM`, rubbed along its forms with the
+  `FINGER`, and a few last accents softened with a fingertip (~2 minutes).
+* `examples/whistler_rocket.py`: James McNeill Whistler's *Nocturne in Black
+  and Gold: The Falling Rocket* (1875, Detroit Institute of Arts), the
+  painting John Ruskin said flung "a pot of paint in the public's face": thin
+  washes of fluid paint over a dark ground, and the sparks flicked on with
+  `canvas.spatter`, falling in showers (~2 minutes).
+
+![after seurat](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/seurat_grande_jatte.png)
+
+*After Seurat's* Gray Weather, Grande Jatte*: tens of thousands of dots of
+nearly pure colour, tapped on side by side, with his painted border of dots.*
+
+![after courbet](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/courbet_loue.png)
+
+*After Courbet's* The Source of the Loue*: the rock sponged light over a dark
+lay-in, the falling water laid on with the palette knife.*
+
+![after turner](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/turner_venice.png)
+
+*After Turner's* Approach to Venice*: colour smudged into haze with the palm
+and the fingertips, the city and the boats dissolving in light.*
+
+![after whistler](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/whistler_rocket.png)
+
+*After Whistler's* Nocturne in Black and Gold: The Falling Rocket*: thin washes
+of night and smoke, and the falling sparks spattered on.*
+
 ## API
 
 ### `Paint(color, opacity=1.0, strength=1.0, name=None, body=None)`
