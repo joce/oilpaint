@@ -480,11 +480,17 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
                 )
             rel = along - c
             if K.is_dab:
+                # pressed straight down, the edge is the same all round: how far
+                # out from the middle, not across a stroke
+                rr = math.sqrt(
+                    lr * lr + clip(rel / h, -1.0, 1.0) ** 2 * max(1.0 - lr * lr, 0.0)
+                )
+                # the paint builds up a little all round the rim (not in two
+                # lips, as along the sides of a stroke)
+                profile *= (0.92 + K.ridge * p * smoothstep(0.55, 0.95, rr)) / (
+                    0.92 + K.ridge * p * smoothstep(0.55, 0.95, lr)
+                )
                 if K.softness > 0:  # a soft brush pressed down: feathered all round
-                    rr = math.sqrt(
-                        lr * lr
-                        + clip(rel / h, -1.0, 1.0) ** 2 * max(1.0 - lr * lr, 0.0)
-                    )
                     profile *= smoothstep(1.0, 1.0 - K.softness, rr) ** soft_pow
                 # tapped lightly, only the tips of the bristles touch: a stippled,
                 # broken mark
@@ -508,6 +514,11 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
                     * clip(h + rel, 0.0, 2.0 * h)
                 )
             swept = overlap / (2.0 * h)  # fraction of a full pass
+            if K.is_dab:
+                # pressed down once: one full pass at most (where the mark is
+                # short, at its two ends, the nudge and the set-down and lift-off
+                # would otherwise count it two or three times)
+                swept = min(swept, 1.0)
             expo = profile * swept
             if K.feather > 0 and not K.is_dab:
                 s_pix = st.arc_i + along  # distance along the stroke
@@ -782,6 +793,38 @@ def settle_pending(cv, pend, stroke_id):
                 min(pcov[py, px], np.float32(1.0)),
             )
             ids[Y, X] = stroke_id
+
+
+@njit(cache=True, error_model="numpy")
+def share_by_reach(tip, taps, d):
+    """A brush pressed straight down splays its bristles over the whole mark:
+    each column gives its paint over the part of the mark it reaches. Shares
+    the paint in the tips out between the columns in proportion to what is
+    asked of each (a round's middle columns reach right across the mark, its
+    edge columns only the short ends), each keeping its own paint; the total
+    stays the same. Otherwise the ends of the mark, fed by full columns, would
+    come out thicker than its middle."""
+    cols, wts, ntap = taps
+    hh, ww = d.shape
+    demand = np.zeros(COLUMNS)
+    for y in range(hh):
+        for x in range(ww):
+            q = y * ww + x
+            for t in range(ntap[q]):
+                demand[cols[q, t]] += wts[q, t] * d[y, x]
+    held, asked = 0.0, 0.0
+    for b in range(COLUMNS):
+        if tip[b, IV] > 0:
+            held += tip[b, IV]
+            asked += demand[b]
+    if held <= 0 or asked <= 0:
+        return
+    for b in range(COLUMNS):
+        tv = tip[b, IV]
+        if tv > 0:
+            f = held * demand[b] / asked / tv
+            for c in range(PACKED):
+                tip[b, c] *= f
 
 
 @njit(cache=True, error_model="numpy")
@@ -1138,6 +1181,9 @@ def lay_ridges(cv, pend, br, K, st, ridges, grid, c_tab, h_tab):
                 else st.r
             )
     lmax, by_film = st.lmax, not K.rigid
+    # a soft tool's paint fades out before its outline: the squeezed-out paint
+    # lies against where the mark fades, not out at the outline
+    inset = 0.6 * K.softness * st.r
     g0, g1 = grid[0], grid[grid.shape[0] - 1]
     nt = c_tab.shape[0]
     w_t = np.empty((eh, ew))
@@ -1157,12 +1203,15 @@ def lay_ridges(cv, pend, br, K, st, ridges, grid, c_tab, h_tab):
                     el = e_lat[y, x] / e_r[y, x]
                     e_c = interp(el, g0, g1, c_tab, c_tab[0], c_tab[nt - 1]) * e_r[y, x]
                     e_h = interp(el, g0, g1, h_tab, 0.0, 0.0) * e_r[y, x]
-                    e = max(
-                        abs(e_lat[y, x]) - e_r[y, x] * lmax,
-                        abs(e_along[y, x] - e_c) - e_h,
+                    # how far outside: rounded past the ends of the mark, not
+                    # squared off (which left lips sticking out there)
+                    a = abs(e_lat[y, x]) - e_r[y, x] * lmax
+                    b = abs(e_along[y, x] - e_c) - e_h
+                    e = math.sqrt(max(a, 0.0) ** 2 + max(b, 0.0) ** 2) + min(
+                        max(a, b), 0.0
                     )
-                w_t[y, x] = _tent(e, w)
-                w_g[y, x] = _geo(e, w)
+                w_t[y, x] = _tent(e + inset, w)
+                w_g[y, x] = _geo(e + inset, w)
         spread(cv, pend, br, ey0, ex0, w_t, ring, w_g, K.stroke_id, by_film)
     if left[IV] > 0 or right[IV] > 0:
         w = clip(0.24 * st.r * lmax, 0.6, margin - 1.0)  # scales with the mark's width
@@ -1185,7 +1234,7 @@ def lay_ridges(cv, pend, br, K, st, ridges, grid, c_tab, h_tab):
                         box = smoothstep(
                             -st.ds - ramp, -st.ds + ramp, rel_e
                         ) * smoothstep(ramp, -ramp, rel_e)
-                        e_side = abs(lat) - e_r[y, x] * lmax
+                        e_side = abs(lat) - e_r[y, x] * lmax + inset
                         w_t[y, x] = _tent(e_side, w) * box
                         w_g[y, x] = _geo(e_side, w) * box
                     else:
@@ -1492,6 +1541,8 @@ def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
                     0.0,
                 )
                 d[y, x] = dd
+        if K.is_dab:
+            share_by_reach(tip, taps, d)
         lay(
             cv,
             pend,
