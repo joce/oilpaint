@@ -20,6 +20,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Spatter: `canvas.spatter(...)` flicks drops of paint off a brush, round where
   they land head-on, teardrops further off.
 - A demo of all four (`dabs_hands_spatter.png`).
+- Four studies after the masters, each with one of the new tools: Seurat's
+  *Gray Weather, Grande Jatte* (stippled dots), Courbet's *The Source of the
+  Loue* (sponge), Turner's *Approach to Venice* (fingers and palm) and
+  Whistler's *The Falling Rocket* (spatter), painted from public-domain
+  photographs in `examples/reference`.
 
 - Glass (`surfaces.GLASS`): a clear, perfectly smooth and slick support, with
   whatever is behind it showing through.
