@@ -2,12 +2,14 @@
 
 Painted from a photograph of the painting (The Metropolitan Museum of Art,
 New York; public domain; ``examples/reference``) the way Courbet painted his
-rocks: on a dark ground, the masses blocked in with broad strokes, then the
-stone built up light over dark, not only brushed but pressed on with
-sponges, whose uneven prints give it its grain, and the falling water put on
-with the palette knife; the mill, the timbers and the cracks in the rock
-drawn last with small brushes. Each layer looks at the canvas so far and
-paints only where it still differs from the photograph (see ``_studies``).
+rocks: on a dark ground, the masses laid in thinly with a broad brush, then
+the stone built up light over dark almost entirely with sponges, big ones
+first and smaller ones over them, their uneven prints, with the dark showing
+through their holes, giving it its grain; the falling water laid on with the
+palette knife; and only the darkest lines, the cracks, the timbers of the
+mill and its windows, drawn with a small brush. Each pass looks at the canvas
+so far and prints or paints only where it still differs from the photograph
+(see ``_studies``).
 
     python examples/courbet_loue.py [output.png]
 """
@@ -92,30 +94,33 @@ def paint_it(path):
     study = Study(c, ref, seed=1864, body=0.55)
     ys, xs = np.mgrid[0:h, 0:W]
     value = np.asarray(ref.value(xs, ys, scale=3))
-    detail = np.asarray(ref.detail(xs, ys, scale=4))
     water_mask = (value > 0.6) & (ys > 0.4 * h) & (xs > 0.2 * W)
-    stone = (value > 0.25) & ~water_mask
-    log("blocking in")
-    study.layer(56, brushes.FLAT_HOG, straight=True, load=0.55, pressure=0.5)
-    study.layer(28, brushes.FLAT_HOG, threshold=6.0, load=0.55, pressure=0.5)
+    log("lay-in")
+    study.layer(56, brushes.FLAT_HOG, straight=True, load=0.5, pressure=0.5)
     c.dry()
-    log("sponge: the stone")
-    n = sponged(study, 30, 11, 4, stone, 0.3)
-    c.dry()
-    log("the forms")
-    study.layer(13, brushes.FLAT_HOG, threshold=6.0, load=0.6, pressure=0.5)
-    c.dry()
+    # the rock, the moss, the mill wall: sponged, big sponges to small ones,
+    # pressed lightly so each print is a lacy web and they build up a grain
+    # (the dark showing through), each pass let dry so the next does not lift
+    # it again
+    n = 0
+    passes = (
+        (44, 12, 6, 0.0),
+        (44, 12, 6, 3.0),
+        (30, 8, 4, 3.0),
+        (20, 6, 2.5, 4.0),
+        (14, 4.5, 1.5, 5.0),
+    )
+    for size, spacing, scale, threshold in passes:
+        log(f"sponge {size}px ({n} prints so far)")
+        n += sponged(study, size, spacing, scale, ~water_mask, 0.2, threshold=threshold)
+        c.dry()
     log("knife: the water")
     k = water(study, water_mask)
     c.dry()
-    log("sponge: the lights on the stone")
-    n += sponged(
-        study, 18, 8, 2, stone & (value > 0.45) & (detail > 0.03), 0.22, lift=1.08
-    )
-    c.dry()
-    log("details")
-    study.layer(6, brushes.ROUND, threshold=7.0, length=3, load=0.8, pressure=0.5)
-    study.layer(3.5, brushes.ROUND, threshold=9.0, length=3, load=1.0, pressure=0.5)
+    # a small brush only for the darkest lines: short straight touches
+    log("the cracks, the timbers, the windows")
+    study.layer(4, brushes.ROUND, threshold=10.0, length=3, straight=True, load=0.7,
+                pressure=0.45, where=value < 0.35)  # fmt: skip
     c.save(path, relief=0.45, gloss=0.5)
     print(f"wrote {path}: {study.strokes} brush strokes, {n} sponge prints, "
           f"{k} knife strokes, in {time.time() - t0:.0f} s")  # fmt: skip

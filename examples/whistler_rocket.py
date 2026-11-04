@@ -77,7 +77,7 @@ def sparks(study, lit, cell=36):
                 direction=90,
                 spread=np.degrees(np.arctan2(spread_px, reach)),
                 reach=reach,
-                size=0.9,
+                size=0.8,
                 seed=int(study.rng.integers(1 << 31)),
             )
             flicks += 1
@@ -92,20 +92,23 @@ def paint_it(path):
     c = Canvas(W, h, surface=surfaces.CANVAS.with_(ground="#1e2420"), seed=1875)
     study = Study(c, ref, seed=1875, body=0.15)  # thin, fluid "sauce"
     lit = spark_points(study)
+    ys, xs = np.mgrid[0 : c.height, 0 : c.width]
+    busy = np.asarray(ref.detail(xs, ys, scale=3)) > 0.05
     # the brushes leave the sparks alone: they are flicked on at the end
     night = box_mean(lit.astype(float), 6) < 1e-6
     log("washes")
     # long washes, up and down the canvas, then narrower sweeps the same way
     for size, threshold in ((80, 0.0), (40, 4.0), (20, 5.0)):
         study.layer(size, brushes.MOP, angle=np.pi / 2, threshold=threshold,
-                    load=0.5, pressure=0.4, correct=0.8)  # fmt: skip
+                    length=6, load=0.5, pressure=0.4, correct=0.8)  # fmt: skip
     c.dry()
     log("smoke and lights")
-    # soft: the mop again, smaller, following the drifts of smoke
-    study.layer(14, brushes.MOP, threshold=6.0, load=0.6, pressure=0.35, where=night)
+    # soft: the mop again, following the drifts of smoke, gently
+    study.layer(16, brushes.MOP, threshold=7.0, load=0.4, pressure=0.3, correct=0.3,
+                where=night & busy)  # fmt: skip
     log("figures, the barge, the lights")
-    study.layer(6, brushes.ROUND, threshold=9.0, length=3, load=0.8, pressure=0.45,
-                where=night)  # fmt: skip
+    study.layer(5, brushes.ROUND, threshold=10.0, length=3, load=0.8, pressure=0.45,
+                where=night & busy)  # fmt: skip
     c.dry()
     log("sparks")
     flicks, drops = sparks(study, lit)

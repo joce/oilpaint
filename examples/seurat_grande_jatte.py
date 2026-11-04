@@ -19,7 +19,7 @@ import time
 from collections import defaultdict
 
 import numpy as np
-from _studies import Study
+from _studies import Study, box_mean
 from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -54,9 +54,15 @@ class Dots:
         return self.paints[key]
 
 
-def dots(study, palette, size, spacing, scale, correct):
-    """One layer of dots ``size`` px across, about ``spacing`` apart."""
+def dots(study, palette, size, spacing, scale, correct, contrast=1.6, sittings=3):
+    """One layer of dots ``size`` px across, about ``spacing`` apart. Each dot
+    differs from its neighbours ``contrast`` times as much as the photograph
+    does at that scale (blurred by the photograph and by the paint, his dots
+    look more alike than they are); the area keeps its colour. The layer is
+    tapped on in ``sittings``, each left to dry, so most dots sit on dry paint
+    and keep their own colour."""
     target, lacking, _ = study.gap(size, scale)
+    around = box_mean(target, 2 * size)
     xs, ys = study.points(spacing)
     # sort the dots by their paint, then tap each paint's dots in small batches
     # (a brushful at a time), the batches in random order
@@ -64,18 +70,22 @@ def dots(study, palette, size, spacing, scale, correct):
     paints = {}
     for x, y in zip(xs, ys, strict=True):
         yi, xi = int(y), int(x)
-        paint = palette.dot(target[yi, xi] + correct * lacking[yi, xi])
+        rgb = target[yi, xi] + correct * lacking[yi, xi]
+        paint = palette.dot(around[yi, xi] + contrast * (rgb - around[yi, xi]))
         by_paint[id(paint)].append((x, y))
         paints[id(paint)] = paint
     batches = []
     for key, pts in by_paint.items():
         batches.extend((paints[key], pts[k : k + 8]) for k in range(0, len(pts), 8))
     brush = brushes.ROUND.sized(size)
-    for k in study.rng.permutation(len(batches)):
-        paint, pts = batches[k]
-        study.c.stipple(
-            pts, paint, amount=1.6 * len(pts) + 2, pressure=0.5, brush=brush
-        )
+    order = study.rng.permutation(len(batches))
+    for sitting in np.array_split(order, sittings):
+        for k in sitting:
+            paint, pts = batches[k]
+            study.c.stipple(
+                pts, paint, amount=1.6 * len(pts) + 2, pressure=0.5, brush=brush
+            )
+        study.c.dry()
     return len(xs)
 
 
@@ -99,7 +109,6 @@ def paint_it(path):
     ):
         log(f"dots {size}px ({n} so far)")
         n += dots(study, palette, size, spacing, scale, correct)
-        c.dry()
     c.save(path)
     print(
         f"wrote {path}: {study.strokes} lay-in strokes and {n} dots "
