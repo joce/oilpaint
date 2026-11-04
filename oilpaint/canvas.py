@@ -222,6 +222,8 @@ class Canvas:
             tool = brush
         else:
             tool = Brush(brush if isinstance(brush, BrushType) else brushes.STIPPLER)
+        if width is not None:  # the paint it takes depends on its size
+            tool.width = float(width)
         load_paint(tool, paint, amount)
         press = np.broadcast_to(np.asarray(pressure, dtype=float), (len(pts),))
         for (x, y), p in zip(pts, press, strict=True):
@@ -258,7 +260,9 @@ class Canvas:
         path = np.asarray(at, dtype=float).reshape(-1, 2)
         # distance along the path the brush sweeps (a single point: none)
         arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(path, axis=0).T))]
-        n = max(1, round(120 * amount))
+        n = round(120 * amount)
+        if n <= 0:  # nothing flicked
+            return 0
         heading = np.deg2rad(direction)
         drops = 0
         for _ in range(n):
