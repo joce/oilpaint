@@ -2,11 +2,12 @@
 
 Painted from a photograph of the painting (The Metropolitan Museum of Art,
 New York; public domain; ``examples/reference``) the way Courbet painted his
-rocks: on a dark ground, the darks laid in first, then the stone built up
-light over dark, not brushed but pressed on with sponges (and rags), whose
-uneven prints give the rock its grain, and the falling water put on with the
-palette knife. Every mark is a `canvas.stroke`, `canvas.stipple` or knife
-stroke; numpy only works out where they go.
+rocks: on a dark ground, the masses blocked in with broad strokes, then the
+stone built up light over dark, not only brushed but pressed on with
+sponges, whose uneven prints give it its grain, and the falling water put on
+with the palette knife; the mill, the timbers and the cracks in the rock
+drawn last with small brushes. Each layer looks at the canvas so far and
+paints only where it still differs from the photograph (see ``_studies``).
 
     python examples/courbet_loue.py [output.png]
 """
@@ -17,124 +18,68 @@ import time
 from collections import defaultdict
 
 import numpy as np
+from _studies import Study
 from PIL import Image
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from oilpaint import Canvas, Paint, Reference, brushes, surfaces
+from oilpaint import Canvas, Reference, brushes, surfaces
 
 HERE = os.path.dirname(__file__)
 REF = os.path.join(HERE, "reference", "courbet_source_of_the_loue.jpg")
 W = 1000
-rng = np.random.default_rng(1864)
-
-
-_PAINTS: dict = {}
-
-
-def quantized(rgb, levels=24):
-    """A paint for this colour, one per small step of colour (cached)."""
-    key = tuple(np.round(np.clip(rgb, 0, 1) * levels).astype(int))
-    if key not in _PAINTS:
-        _PAINTS[key] = Paint(np.asarray(key) / levels, body=0.75)
-    return _PAINTS[key]
-
-
-def darker(rgb, k):
-    return np.clip(np.asarray(rgb) * k, 0, 1)
-
-
-def lay_in(c, ref):
-    """The whole picture laid in broadly, the darks a shade deeper."""
-    step = 14
-    brush = brushes.FLAT_HOG.sized(28)
-    for y in np.arange(step / 2, c.height, step):
-        for x in np.arange(step / 2, c.width, step):
-            jx, jy = x + rng.uniform(-6, 6), y + rng.uniform(-6, 6)
-            angle, _ = ref.direction(jx, jy, scale=10)
-            d = 14
-            pts = [(jx - d * np.cos(angle), jy - d * np.sin(angle)),
-                   (jx + d * np.cos(angle), jy + d * np.sin(angle))]  # fmt: skip
-            paint = quantized(darker(ref.color(jx, jy, scale=10), 0.72))
-            c.stroke(pts, paint, amount=4, brush=brush, pressure=0.45)
-
-
-def sponged(c, ref, size, spacing, scale, lightest, pressure, where=None, lift=1.0):
-    """Sponge prints of the picture's colour, about ``spacing`` apart, where it
-    is at least ``lightest`` light: the stone built up light over dark."""
-    ys, xs = np.mgrid[0 : c.height : spacing, 0 : c.width : spacing]
-    xs = xs.ravel() + rng.uniform(-0.5, 0.5, xs.size) * spacing
-    ys = ys.ravel() + rng.uniform(-0.5, 0.5, ys.size) * spacing
-    groups = defaultdict(list)
-    paints = {}
-    for x, y in zip(xs, ys, strict=True):
-        if ref.value(x, y, scale=scale) < lightest:
-            continue
-        rgb = ref.color(x, y, scale=scale)
-        if where is not None and not where(rgb):
-            continue
-        # a touch lighter (the dark ground shows through the sponge's holes),
-        # and never quite the same twice
-        paint = quantized(darker(rgb, lift * rng.uniform(0.9, 1.1)))
-        groups[id(paint)].append((x, y))
-        paints[id(paint)] = paint
-    batches = []
-    for key, pts in groups.items():
-        batches.extend((paints[key], pts[k : k + 5]) for k in range(0, len(pts), 5))
-    sponge = brushes.SPONGE.sized(size)
-    for k in rng.permutation(len(batches)):
-        paint, pts = batches[k]
-        c.stipple(
-            pts, paint, amount=3.0 * len(pts) + 4, pressure=pressure, brush=sponge
-        )
-    return sum(len(p) for _, p in batches)
-
-
-def greenish(rgb):
-    r, g, b = rgb
-    return g > r * 0.98 and g > b * 1.05
-
-
-def water(c, ref):
-    """The falling water and the foam: the palette knife, following the flow."""
-    knife = brushes.KNIFE_SMALL
-    n = 0
-    for y in np.arange(c.height * 0.45, c.height, 7):
-        for x in np.arange(0, c.width, 9):
-            jx, jy = x + rng.uniform(-4, 4), y + rng.uniform(-3, 3)
-            if ref.value(jx, jy, scale=2) < 0.62:
-                continue
-            angle, _ = ref.direction(jx, jy, scale=5)
-            d = rng.uniform(6, 14)
-            pts = [(jx - d * np.cos(angle), jy - d * np.sin(angle)),
-                   (jx + d * np.cos(angle), jy + d * np.sin(angle))]  # fmt: skip
-            paint = quantized(ref.color(jx, jy, scale=1.5))
-            c.stroke(pts, paint, amount=5, brush=knife, pressure=0.5, angle=90)
-            n += 1
-    return n
-
-
-def details(c, ref):
-    """The mill's windows and timbers, the cracks in the stone: short dark
-    accents, only where the picture is both dark and sharp."""
-    n = 0
-    for y in np.arange(3, c.height, 6):
-        for x in np.arange(3, c.width, 6):
-            jx, jy = x + rng.uniform(-2, 2), y + rng.uniform(-2, 2)
-            if ref.value(jx, jy, scale=1) > 0.22 or ref.detail(jx, jy, scale=2) < 0.12:
-                continue
-            angle, _ = ref.direction(jx, jy, scale=2)
-            d = 4
-            pts = [(jx - d * np.cos(angle), jy - d * np.sin(angle)),
-                   (jx + d * np.cos(angle), jy + d * np.sin(angle))]  # fmt: skip
-            paint = quantized(ref.color(jx, jy, scale=0.8))
-            c.stroke(pts, paint, amount=6, brush=brushes.ROUND.sized(3), pressure=0.5)
-            n += 1
-    return n
 
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def sponged(study, size, spacing, scale, where, pressure, lift=1.05, threshold=3.0):
+    """Sponge prints where the canvas still lacks the stone's colour: the
+    photograph's colour there, a touch lighter (the darker paint beneath shows
+    through the sponge's holes)."""
+    target, lacking, err = study.gap(size, scale)
+    xs, ys = study.points(spacing, where & (err > threshold))
+    groups = defaultdict(list)
+    paints = {}
+    for x, y in zip(xs, ys, strict=True):
+        yi, xi = int(y), int(x)
+        rgb = (
+            (target[yi, xi] + 0.6 * lacking[yi, xi])
+            * lift
+            * study.rng.uniform(0.94, 1.06)
+        )
+        paint = study.paint(rgb)
+        groups[id(paint)].append((x, y))
+        paints[id(paint)] = paint
+    batches = []
+    for key, pts in groups.items():
+        batches.extend((paints[key], pts[k : k + 4]) for k in range(0, len(pts), 4))
+    sponge = brushes.SPONGE.sized(size)
+    for k in study.rng.permutation(len(batches)):
+        paint, pts = batches[k]
+        study.c.stipple(
+            pts, paint, amount=3.0 * len(pts) + 4, pressure=pressure, brush=sponge
+        )
+    return len(xs)
+
+
+def water(study, where):
+    """The falling water and the foam: the palette knife, following the flow."""
+    target, lacking, err = study.gap(10, 1.5)
+    xs, ys = study.points(6, where & (err > 3.0))
+    knife = brushes.KNIFE_SMALL
+    for x, y in zip(xs, ys, strict=True):
+        a, _ = study.ref.direction(x, y, scale=4)
+        d = study.rng.uniform(5, 11)
+        pts = [
+            (x - d * np.cos(a), y - d * np.sin(a)),
+            (x + d * np.cos(a), y + d * np.sin(a)),
+        ]
+        yi, xi = int(y), int(x)
+        paint = study.paint(target[yi, xi] + 0.6 * lacking[yi, xi])
+        study.c.stroke(pts, paint, amount=5, brush=knife, pressure=0.5, angle=90)
+    return len(xs)
 
 
 def paint_it(path):
@@ -144,29 +89,36 @@ def paint_it(path):
     ref = Reference(REF, W, h)
     # Courbet worked up from a dark brown ground
     c = Canvas(W, h, surface=surfaces.LINEN_FINE.with_(ground="#2e2620"), seed=1864)
-    log("lay-in")
-    lay_in(c, ref)
+    study = Study(c, ref, seed=1864, body=0.55)
+    ys, xs = np.mgrid[0:h, 0:W]
+    value = np.asarray(ref.value(xs, ys, scale=3))
+    detail = np.asarray(ref.detail(xs, ys, scale=4))
+    water_mask = (value > 0.6) & (ys > 0.4 * h) & (xs > 0.2 * W)
+    stone = (value > 0.25) & ~water_mask
+    log("blocking in")
+    study.layer(56, brushes.FLAT_HOG, straight=True, load=0.55, pressure=0.5)
+    study.layer(28, brushes.FLAT_HOG, threshold=6.0, load=0.55, pressure=0.5)
     c.dry()
-    n = 0
-    for size, spacing, scale, lightest, pressure, lift in (
-        (32, 17, 3, 0.08, 0.24, 1.12),  # the stone, lighter over the dark lay-in
-        (24, 14, 2, 0.3, 0.22, 1.18),  # its lights
-        (16, 11, 1.2, 0.5, 0.2, 1.22),  # the brightest faces, barely touched
-    ):
-        log(f"sponge {size}px ({n} prints so far)")
-        n += sponged(c, ref, size, spacing, scale, lightest, pressure, lift=lift)
-        c.dry()
-    log("foliage")
-    n += sponged(c, ref, 18, 10, 2.5, 0.08, 0.35, where=greenish)
+    log("sponge: the stone")
+    n = sponged(study, 30, 11, 4, stone, 0.3)
     c.dry()
-    log("water")
-    knife = water(c, ref)
+    log("the forms")
+    study.layer(13, brushes.FLAT_HOG, threshold=6.0, load=0.6, pressure=0.5)
+    c.dry()
+    log("knife: the water")
+    k = water(study, water_mask)
+    c.dry()
+    log("sponge: the lights on the stone")
+    n += sponged(
+        study, 18, 8, 2, stone & (value > 0.45) & (detail > 0.03), 0.22, lift=1.08
+    )
     c.dry()
     log("details")
-    marks = details(c, ref)
-    c.save(path)
-    print(f"wrote {path}: {n} sponge prints, {knife} knife strokes, {marks} details, "
-          f"in {time.time() - t0:.0f} s")  # fmt: skip
+    study.layer(6, brushes.ROUND, threshold=7.0, length=3, load=0.8, pressure=0.5)
+    study.layer(3.5, brushes.ROUND, threshold=9.0, length=3, load=1.0, pressure=0.5)
+    c.save(path, relief=0.45, gloss=0.5)
+    print(f"wrote {path}: {study.strokes} brush strokes, {n} sponge prints, "
+          f"{k} knife strokes, in {time.time() - t0:.0f} s")  # fmt: skip
 
 
 if __name__ == "__main__":
