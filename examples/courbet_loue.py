@@ -119,24 +119,32 @@ def paint_it(path):
     log("lay-in, in the shadow tone")
     study.tone = shadow_tone
     study.layer(56, brushes.FLAT_HOG, straight=True, load=0.5, pressure=0.5)
-    study.layer(28, brushes.FLAT_HOG, threshold=5.0, load=0.5, pressure=0.5)
-    study.layer(14, brushes.FLAT_HOG, threshold=7.0, load=0.5, pressure=0.5)
+    study.layer(28, brushes.FILBERT_HOG, threshold=5.0, load=0.5, pressure=0.5)
+    study.layer(14, brushes.FILBERT_HOG, threshold=7.0, load=0.5, pressure=0.5)
     study.tone = None
     c.dry()
     # the sponge brings up the lights, in layers, each let dry: a print only
-    # where all of it falls on light (the darkest point under it is light
-    # enough), so the clefts stay dark
+    # where all of it falls on light enough stone (the darkest point under it
+    # is light enough), so the clefts stay dark; each layer lighter, smaller
+    # and pressed more lightly than the one before, on less of the rock (the
+    # levels are the photograph's own: so much of the rock is lighter)
+    rock = ~water
+
+    def level(share):
+        """The value that ``share`` of the rock is lighter than."""
+        return float(np.quantile(value[rock], 1.0 - share))
+
     n = 0
     layers = (
-        (36, 11, 4.0, 0.30, 0.40, 0.30, 1.0),
-        (24, 8, 2.5, 0.36, 0.48, 0.25, 1.05),
-        (16, 6, 1.5, 0.42, 0.56, 0.20, 1.1),
-        (10, 5, 1.0, 0.50, 0.66, 0.16, 1.14),
+        (36, 11, 4.0, 0.85, 0.75, 0.30, 1.0),
+        (24, 8, 2.5, 0.70, 0.50, 0.25, 1.05),
+        (16, 6, 1.5, 0.55, 0.30, 0.20, 1.1),
+        (10, 5, 1.0, 0.40, 0.15, 0.16, 1.14),
     )
     for size, spacing, scale, floor, light, pressure, lift in layers:
         log(f"sponge {size}px: the lights ({n} prints so far)")
-        under = darkest(value, 0.8 * size)
-        where = ~water & (under > floor) & (value > light)
+        under = darkest(value, 0.6 * size)
+        where = rock & (under > level(floor)) & (value > level(light))
         n += sponged(study, size, spacing, scale, where, pressure, lift)
         c.dry()
     log("sponge: the foam")
