@@ -123,44 +123,57 @@ glass, only colour.*
 ### Four masters, four tools
 
 Each of these studies is painted from a photograph of a real painting
-(`examples/reference`, all public domain) with one of the tools from
-**Dabbing, hands and spatter**, the way its painter is known to have used it.
+(`examples/reference`, all public domain), and painted mostly with one of the
+tools from **Dabbing, hands and spatter**, the way its painter is known to
+have used it. They are painted up coarse to fine, the way the Rembrandt study
+is: every pass looks at the canvas so far, compares it with the photograph as
+a tool of that size sees it, and paints only where the two still differ, in
+the colour that brings the canvas closer (`examples/_studies.py`).
 
 * `examples/seurat_grande_jatte.py`: Georges Seurat's *Gray Weather, Grande
   Jatte* (about 1886-88, The Metropolitan Museum of Art), in pointillist dots
-  tapped on with `canvas.stipple` over a thin lay-in: about 85,000 dots, each
-  the colour the photograph shows where it falls, made a little purer, with
-  now and then a dot of its complement (~1.5 minutes).
+  tapped on with `canvas.stipple` over a thin lay-in: about SEURAT_DOTS dots,
+  bigger ones first, each the colour the photograph shows where it falls,
+  made purer and set further apart from its neighbours' colours, with now and
+  then a dot of its complement. Each layer of dots is tapped on in sittings
+  left to dry, so the dots keep their own colour (SEURAT_TIME).
 * `examples/courbet_loue.py`: Gustave Courbet's *The Source of the Loue*
   (1864, The Metropolitan Museum of Art). Courbet built up his rocks with
-  sponges and rags as well as the palette knife: here the stone is a dark
-  lay-in with lighter `SPONGE` prints broken over it, and the falling water is
-  laid on with the knife (~1 minute).
+  sponges and rags as well as the palette knife: here, over a dark ground and
+  a thin lay-in, about COURBET_PRINTS `SPONGE` prints, big sponges to small,
+  pressed lightly so the dark shows through their holes and gives the stone
+  its grain, the smaller ones pressed along the planes of the rock; then a
+  few touches of the palette knife for the brightest foam and the lit rock,
+  and a liner for the darkest cracks and timbers (COURBET_TIME).
 * `examples/turner_venice.py`: J. M. W. Turner's *Approach to Venice* (1844,
   National Gallery of Art, Washington). The late Turner smudged and glazed
-  with his fingers and thumb as much as with a brush: thin colour laid in
-  wet, swept into haze with the `PALM`, rubbed along its forms with the
-  `FINGER`, and a few last accents softened with a fingertip (~2 minutes).
+  with his fingers and thumb as much as with a brush: a thin lay-in swept
+  into haze with the `PALM`, then the colour pushed on and rubbed along the
+  forms with the `FINGER` (TURNER_FINGERS finger strokes and rubs), the city
+  and the boats touched in with a fingertip, a few of them pressed so it
+  leaves its print; a small brush only for the masts (TURNER_TIME).
 * `examples/whistler_rocket.py`: James McNeill Whistler's *Nocturne in Black
   and Gold: The Falling Rocket* (1875, Detroit Institute of Arts), the
   painting John Ruskin said flung "a pot of paint in the public's face": thin
-  washes of fluid paint over a dark ground, and the sparks flicked on with
-  `canvas.spatter`, falling in showers (~2 minutes).
+  washes of fluid paint swept over a dark ground with a mop, the smoke soft;
+  and the sparks flicked on with `canvas.spatter`, a flick for each shower of
+  sparks in the photograph, falling from just above it (WHISTLER_DROPS
+  drops; WHISTLER_TIME).
 
 ![after seurat](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/seurat_grande_jatte.png)
 
-*After Seurat's* Gray Weather, Grande Jatte*: tens of thousands of dots of
-nearly pure colour, tapped on side by side, with his painted border of dots.*
+*After Seurat's* Gray Weather, Grande Jatte*: over a hundred thousand dots of
+nearly pure colour, tapped on side by side.*
 
 ![after courbet](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/courbet_loue.png)
 
-*After Courbet's* The Source of the Loue*: the rock sponged light over a dark
-lay-in, the falling water laid on with the palette knife.*
+*After Courbet's* The Source of the Loue*: the rock and the water built up
+light over dark with sponges, a few lights laid on with the palette knife.*
 
 ![after turner](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/turner_venice.png)
 
-*After Turner's* Approach to Venice*: colour smudged into haze with the palm
-and the fingertips, the city and the boats dissolving in light.*
+*After Turner's* Approach to Venice*: colour pushed on and smudged into haze
+with the fingers and the palm, the city and the boats dissolving in light.*
 
 ![after whistler](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/whistler_rocket.png)
 
