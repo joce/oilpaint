@@ -67,13 +67,14 @@ def sponged(study, size, spacing, scale, where, pressure, lift=1.05, threshold=3
 
 
 def water(study, where):
-    """The falling water and the foam: the palette knife, following the flow."""
+    """The brightest foam on the falling water: the palette knife, following
+    the flow."""
     target, lacking, err = study.gap(10, 1.5)
-    xs, ys = study.points(6, where & (err > 3.0))
+    xs, ys = study.points(6, where & (err > 5.0))
     knife = brushes.KNIFE_SMALL
     for x, y in zip(xs, ys, strict=True):
         a, _ = study.ref.direction(x, y, scale=4)
-        d = study.rng.uniform(5, 11)
+        d = study.rng.uniform(4, 8)
         pts = [
             (x - d * np.cos(a), y - d * np.sin(a)),
             (x + d * np.cos(a), y + d * np.sin(a)),
@@ -98,29 +99,33 @@ def paint_it(path):
     log("lay-in")
     study.layer(56, brushes.FLAT_HOG, straight=True, load=0.5, pressure=0.5)
     c.dry()
-    # the rock, the moss, the mill wall: sponged, big sponges to small ones,
-    # pressed lightly so each print is a lacy web and they build up a grain
-    # (the dark showing through), each pass let dry so the next does not lift
-    # it again
+    # everything sponged, big sponges to small ones: pressed lightly at first,
+    # so each print is a lacy web and they build up a grain (the dark showing
+    # through), then the small sponges pressed harder for the edges; each pass
+    # let dry so the next does not lift it again
     n = 0
     passes = (
-        (44, 12, 6, 0.0),
-        (44, 12, 6, 3.0),
-        (30, 8, 4, 3.0),
-        (20, 6, 2.5, 4.0),
-        (14, 4.5, 1.5, 5.0),
+        (44, 12, 6, 0.0, 0.2),
+        (44, 12, 6, 3.0, 0.2),
+        (30, 8, 4, 3.0, 0.2),
+        (20, 6, 2.5, 4.0, 0.22),
+        (14, 4.5, 1.5, 5.0, 0.25),
+        (10, 3.5, 1.0, 6.0, 0.35),
     )
-    for size, spacing, scale, threshold in passes:
+    everywhere = np.ones((h, W), bool)
+    for size, spacing, scale, threshold, pressure in passes:
         log(f"sponge {size}px ({n} prints so far)")
-        n += sponged(study, size, spacing, scale, ~water_mask, 0.2, threshold=threshold)
+        n += sponged(
+            study, size, spacing, scale, everywhere, pressure, threshold=threshold
+        )
         c.dry()
-    log("knife: the water")
-    k = water(study, water_mask)
+    log("knife: the foam")
+    k = water(study, water_mask & (value > 0.75))
     c.dry()
-    # a small brush only for the darkest lines: short straight touches
+    # a brush only for the darkest thin lines
     log("the cracks, the timbers, the windows")
-    study.layer(4, brushes.ROUND, threshold=10.0, length=3, straight=True, load=0.7,
-                pressure=0.45, where=value < 0.35)  # fmt: skip
+    study.layer(3, brushes.LINER, threshold=10.0, length=4, load=0.6, pressure=0.45,
+                where=value < 0.3)  # fmt: skip
     c.save(path, relief=0.45, gloss=0.5)
     print(f"wrote {path}: {study.strokes} brush strokes, {n} sponge prints, "
           f"{k} knife strokes, in {time.time() - t0:.0f} s")  # fmt: skip
