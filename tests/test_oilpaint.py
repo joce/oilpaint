@@ -776,6 +776,22 @@ def test_stipple_taps_one_brush_until_it_runs_out():
     assert last < 0.7 * first
 
 
+def test_stipple_loads_paint_for_the_width_it_taps_with():
+    # loaded, before any tap
+    by_width = Canvas(60, 60, seed=1).stipple([], "#336699", amount=4, width=13)
+    by_size = Canvas(60, 60, seed=1).stipple(
+        [], "#336699", amount=4, brush=brushes.STIPPLER.sized(13)
+    )
+    assert by_width.volume == pytest.approx(by_size.volume, rel=1e-6)
+
+
+def test_spatter_with_no_paint_flicks_nothing():
+    c = Canvas(120, 80, seed=2)
+    assert c.spatter((10, 40), "#aa3322", amount=0) == 0
+    assert c.spatter((10, 40), "#aa3322", amount=-1) == 0
+    assert c.thickness.max() == 0
+
+
 def test_a_sponge_stays_open_however_hard_it_is_pressed():
     sponge = _dab_coverage(brushes.SPONGE, 0.9, r=18)
     round_ = _dab_coverage(brushes.ROUND.sized(46), 0.9, r=18)
