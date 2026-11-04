@@ -42,7 +42,8 @@ def log(msg):
 def shadow_tone(img):
     """The photograph in its shadow tone: the lights brought down, the darks
     left about as they are."""
-    return img * (1.0 - 0.5 * img.mean(-1, keepdims=True))
+    lightness = np.clip(img.mean(-1, keepdims=True) / 0.5, 0.0, 1.0)
+    return img * (1.0 - 0.55 * lightness)
 
 
 def darkest(value, size):
@@ -136,10 +137,10 @@ def paint_it(path):
 
     n = 0
     layers = (
-        (36, 11, 4.0, 0.85, 0.75, 0.30, 1.0),
-        (24, 8, 2.5, 0.70, 0.50, 0.25, 1.05),
-        (16, 6, 1.5, 0.55, 0.30, 0.20, 1.1),
-        (10, 5, 1.0, 0.40, 0.15, 0.16, 1.14),
+        (36, 9, 4.0, 0.85, 0.75, 0.35, 1.05),
+        (24, 7, 2.5, 0.70, 0.50, 0.30, 1.12),
+        (16, 5, 1.5, 0.55, 0.30, 0.25, 1.2),
+        (10, 4, 1.0, 0.40, 0.15, 0.20, 1.28),
     )
     for size, spacing, scale, floor, light, pressure, lift in layers:
         log(f"sponge {size}px: the lights ({n} prints so far)")

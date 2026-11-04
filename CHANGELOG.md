@@ -12,8 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longest bristles, dots that fill in as the pressure rises; `BrushType.tips`
   sets how many. A new `STIPPLER` brush, and `canvas.stipple(points, ...)`
   taps one brush at many points without reloading it.
-- A natural `SPONGE` (`BrushType.pattern="sponge"`): it prints an irregular
-  web with holes, never a solid mark.
+- A natural `SPONGE` (`BrushType.pattern="sponge"`): it prints a scatter of
+  irregular specks and blots (the tips of its fibres), never a solid mark.
 - Spatter: `canvas.spatter(...)` flicks drops of paint off a brush, round where
   they land head-on, teardrops further off.
 - A demo of all three (`dabs_and_spatter.png`).

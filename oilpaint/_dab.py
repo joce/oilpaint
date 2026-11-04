@@ -8,9 +8,10 @@ one more of the face.
 
 * bristles: separate tips, clumps of bristle ends of slightly different
   lengths, each a little cone (a harder tap spreads it into a bigger dot);
-* sponge: an open web of walls around holes on an uneven lump, the outline
-  irregular; a light press prints a few clusters, and the holes stay open
-  however hard it is pressed.
+* sponge: the tips of a sea sponge's fibres, irregular blots with gaps
+  between them on an uneven lump: a light press prints a scatter of specks,
+  a harder one bigger blots, and the gaps stay open however hard it is
+  pressed.
 
 A brush keeps its layout (it comes from the brush type), turned to a new
 angle on every tap, as a painter's hand turns.
@@ -73,36 +74,32 @@ def _bristle_tips(n, spacing, rng):
     return out
 
 
-def _cells(X, Y, spacing, rng, wall):
-    """1 on the walls between irregular holes about ``spacing`` apart, 0 in
-    the holes; ``wall`` sets how thick the walls are."""
+def _sponge(n, spacing, rng):
+    """A sea sponge's face: the tips of its fibres, irregular blots about
+    ``spacing`` apart of random sizes and heights, with gaps between them, on
+    a lump (the middle and the proud bumps touch first) with an uneven
+    outline. A light press prints a scatter of specks; a harder one, bigger
+    blots that run together, the gaps between them still open."""
+    X, Y = _coords(n)
     m = int(np.ceil(2 * (SPAN + 0.3) / spacing)) + 1
     base = -SPAN - 0.3 + spacing * np.arange(m)
     gx, gy = np.meshgrid(base, base)
-    seeds = np.stack([gx, gy], -1) + rng.uniform(-0.45, 0.45, (m, m, 2)) * spacing
-    weight = rng.uniform(0.7, 1.35, (m, m))  # some holes bigger than others
+    seeds = np.stack([gx, gy], -1) + rng.uniform(-0.5, 0.5, (m, m, 2)) * spacing
+    height = rng.uniform(0.0, 1.0, (m, m)) ** 0.7
+    size = rng.uniform(0.35, 0.75, (m, m)) * spacing
     ix = np.clip(((X + SPAN + 0.3) / spacing).astype(int), 0, m - 1)
     iy = np.clip(((Y + SPAN + 0.3) / spacing).astype(int), 0, m - 1)
-    f1 = np.full(X.shape, np.inf)
-    f2 = np.full(X.shape, np.inf)
-    for dy in range(-2, 3):
-        for dx in range(-2, 3):
+    tips = np.zeros(X.shape)
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
             jx, jy = np.clip(ix + dx, 0, m - 1), np.clip(iy + dy, 0, m - 1)
             s = seeds[jy, jx]
-            d = np.hypot(X - s[..., 0], Y - s[..., 1]) / weight[jy, jx]
-            f2 = np.where(d < f1, f1, np.minimum(f2, d))
-            f1 = np.minimum(f1, d)
-    return 1.0 - _smoothstep(0.0, wall * spacing, f2 - f1)
-
-
-def _sponge(n, spacing, rng):
-    """A sea sponge's face: big holes and small pores in an open web, on a lump
-    (the middle and the proud bumps touch first, so a light press prints a
-    few clusters that spread as it is pressed harder), the outline uneven."""
-    X, Y = _coords(n)
-    web = _cells(X, Y, spacing, rng, 0.5) * (
-        0.15 + 0.85 * _cells(X, Y, 0.4 * spacing, rng, 0.7)
-    )
+            d = np.hypot(X - s[..., 0], Y - s[..., 1]) / size[jy, jx]
+            np.maximum(tips, height[jy, jx] * np.clip(1.0 - d * d, 0.0, 1.0), out=tips)
+    # ragged blots
+    grain = fractal_noise_2d(n, n, n * spacing / 8.0, rng, octaves=2)
+    grain = (grain - grain.min()) / max(np.ptp(grain), 1e-9)
+    tips *= 0.6 + 0.4 * grain
     bumps = fractal_noise_2d(n, n, n / 4.0, rng, octaves=3)
     bumps = (bumps - bumps.min()) / max(np.ptp(bumps), 1e-9)
     # an uneven outline, and a dome under it
@@ -115,8 +112,9 @@ def _sponge(n, spacing, rng):
     )
     r = np.hypot(X, Y) / edge
     dome = np.sqrt(np.clip(1.0 - r * r, 0.0, 1.0))
-    face = web * (0.1 + 0.45 * dome + 0.45 * bumps)
-    return face * _smoothstep(1.0, 0.85, r)
+    face = tips * (0.25 + 0.4 * dome + 0.35 * bumps)
+    face *= _smoothstep(1.0, 0.85, r)
+    return face / max(float(face.max()), 1e-9)
 
 
 @functools.lru_cache(maxsize=64)
@@ -124,9 +122,10 @@ def _layout(pattern: str, seed: int, r_px: float, tips: int, bristles: float):
     n = grid_size(r_px)
     rng = np.random.default_rng(seed)
     if pattern == "sponge":
-        # holes about a fifth of the sponge across, or as many as asked for
-        spacing = float(np.sqrt(np.pi / tips)) if tips > 0 else 0.22
-        out = _sponge(n, spacing, rng)
+        # the fibres' tips about 5 px apart whatever the size of the piece of
+        # sponge, or as many as asked for
+        spacing = float(np.sqrt(np.pi / tips)) if tips > 0 else 5.0 / r_px
+        out = _sponge(n, min(spacing, 0.6), rng)
     else:
         # tips about 1.5 px apart on fine hair to 4 px on coarse hog, or as many
         # as asked for

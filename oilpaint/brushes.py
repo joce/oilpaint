@@ -158,9 +158,9 @@ FAN_SOFT = make(
 STIPPLER = make(
     "round", 26, "hog", length=0.1, bristles=0.55, spread=0.0, name="Stippler"
 )
-#: Natural sponge: dabbed on, it prints an irregular web with holes, never a
-#: solid mark: rocks, foliage, snow, weathered walls. Clean, it lifts some of
-#: the wet paint it touches.
+#: Natural sponge: dabbed on, it prints a scatter of irregular specks and
+#: blots, never a solid mark: rocks, foliage, snow, weathered walls. Clean, it
+#: lifts some of the wet paint it touches.
 SPONGE = BrushType(
     shape="round",
     width=46,

@@ -266,7 +266,7 @@ dataclass with the same fields and call `canvas.paint(stroke1, stroke2, ...)`.
 | `RAG` | Lifts wet paint without laying any down: wipe out lights or correct mistakes. |
 | `BRUSH_HANDLE` | The other end of the brush, scratched through wet paint (sgraffito): a groove down to the paint beneath, deeper with more pressure. |
 | `STIPPLER` | A short, dense, flat-topped round, tapped straight down (`canvas.stipple`): clusters of dots for foliage, textures, broken colour. |
-| `SPONGE` | A natural sponge: dabbed on, it prints an irregular web with holes, never a solid mark (rocks, foliage, snow, weathered walls). |
+| `SPONGE` | A natural sponge: dabbed on, it prints a scatter of irregular specks and blots, never a solid mark (rocks, foliage, snow, weathered walls). |
 
 ```python
 from oilpaint import BrushType, brushes
@@ -302,7 +302,7 @@ custom = BrushType(shape="filbert", width=26, aspect=0.45, stiffness=0.6, capaci
 | `dig` | 0..1: how deep a point cuts into the wet paint under it (1: down to the dry paint or canvas), pushing it aside into low ridges (the brush handle). |
 | `blending` | How readily different paints loaded on the brush merge as it is used. |
 | `tips` | How many separate tips (clumps of bristle ends) a dab prints when the brush is tapped lightly; 0 works it out from the size and the hair (fine hair: more, smaller tips). A light tap touches only the longest; harder taps bring in more until the mark closes up. Each brush keeps its own layout, turned a little on every tap. |
-| `pattern` | The tool's face where it is pressed down: `bristles` (separate tips) or `sponge` (an irregular web with holes that stays open however hard it is pressed; `tips` is then the number of holes). |
+| `pattern` | The tool's face where it is pressed down: `bristles` (separate tips) or `sponge` (the tips of a sea sponge's fibres: specks on a light press, bigger blots on a harder one, the gaps between them open however hard it is pressed; `tips` is then how many, 0 for about 5 px apart). |
 | `streaks`, `pickup`, `drag`, `mixing`, `rough` | Explicit overrides of the behavior otherwise derived from stiffness and bristles. |
 
 `brushes.make(shape, width, hair, length)` picks sensible values from the
@@ -331,7 +331,8 @@ Some marks aren't brushed at all: they are tapped, pressed or flicked.
   so it runs out as it goes; it turns a little on every tap. Tapped lightly,
   a bristle brush prints only the tips of its longest bristles: sparse dots
   that fill in as the pressure rises (`tips` sets how many). A `SPONGE`
-  prints its web of holes at any pressure. `pressure` can be one value per
+  prints a scatter of specks, bigger blots as it is pressed harder, never a
+  solid mark. `pressure` can be one value per
   point. Returns the brush.
 * `canvas.spatter(at, paint, amount=1, direction=0, spread=25, reach=120, size=3)`
   flicks paint off a loaded brush: a spray of drops leaving from `at` (a

@@ -200,9 +200,10 @@ class BrushType:
         tips). Each brush keeps its own layout, turned a little on every tap.
     pattern:
         The face of the tool where it is pressed down: ``"bristles"``
-        (separate tips, see ``tips``) or ``"sponge"`` (an irregular web with
-        holes, which stays open however hard it is pressed; ``tips`` is then
-        the number of holes).
+        (separate tips, see ``tips``) or ``"sponge"`` (the tips of a sea
+        sponge's fibres: specks on a light press, bigger blots on a harder
+        one, with gaps between them that stay open however hard it is
+        pressed; ``tips`` is then how many, 0 for about 5 px apart).
     streaks, pickup, drag, mixing, rough:
         Explicit physics overrides. ``None`` derives them from stiffness and
         bristles (``rough`` is the raggedness of the stroke edges).
@@ -992,7 +993,8 @@ class _Run:
         swell = value_noise_1d(int(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
         self.lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
         self.blade_tilt = float(_clip(rng.normal(0.0, 0.08), -0.2, 0.2))
-        # the tool's face pressed straight down: bristle tips or a sponge's web
+        # the tool's face pressed straight down: bristle tips or a sponge's
+        # fibres
         # (see _dab)
         if is_dab:
             self.tex2 = dab_pattern(bt, 0.5 * w_typ, rng)
@@ -1081,7 +1083,7 @@ class _Run:
             softness=float(bt.softness),
             slant=float(bt.slant),
             clumps=float(bt.clumps),
-            # a sponge's holes stay open however hard it is pressed
+            # the gaps in a sponge stay open however hard it is pressed
             porous=0.22 if bt.pattern == "sponge" else 0.0,
             feather=float(self.feather),
             # soft brushes are lowered and lifted gently, so their ends feather
