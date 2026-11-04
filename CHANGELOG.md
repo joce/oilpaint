@@ -14,19 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   taps one brush at many points without reloading it.
 - A natural `SPONGE` (`BrushType.pattern="sponge"`): it prints an irregular
   web with holes, never a solid mark.
-- Hands: `FINGER` and `PALM` blend and soften wet paint without brush marks; a
-  fingertip touched lightly into paint leaves its print
-  (`BrushType.pattern="skin"`).
 - Spatter: `canvas.spatter(...)` flicks drops of paint off a brush, round where
   they land head-on, teardrops further off.
-- A demo of all four (`dabs_hands_spatter.png`).
-- Four studies after the masters, each painted mostly with one of the new
+- A demo of all three (`dabs_and_spatter.png`).
+- Three studies after the masters, each painted mostly with one of the new
   tools: Seurat's *Gray Weather, Grande Jatte* (stippled dots), Courbet's
-  *The Source of the Loue* (sponge), Turner's *Approach to Venice* (fingers
-  and palm) and Whistler's *The Falling Rocket* (spatter). Each is painted up
-  coarse to fine from a public-domain photograph in `examples/reference`,
-  every pass going only where the canvas still differs from it
-  (`examples/_studies.py`).
+  *The Source of the Loue* (sponge) and Whistler's *The Falling Rocket*
+  (spatter). Each is painted up coarse to fine from a public-domain
+  photograph in `examples/reference`, every pass going only where the canvas
+  still differs from it (`examples/_studies.py`).
 
 - Glass (`surfaces.GLASS`): a clear, perfectly smooth and slick support, with
   whatever is behind it showing through.
@@ -49,9 +45,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Dabs press down evenly: a round or oval dab was up to twice as thick at
   the two ends of its outline as in its middle, and its rim built up in two
   lips instead of all round.
-- Paint squeezed out of an overloaded soft tool (a fingertip, the palm, a
-  mop) pressed hard now lies against the edge of its mark, instead of
-  floating around it in a ring.
+- Paint squeezed out of an overloaded soft tool (a small mop, say) pressed
+  hard now lies against the edge of its mark, instead of floating around it
+  in a ring.
 
 ### Changed
 

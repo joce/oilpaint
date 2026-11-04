@@ -120,11 +120,11 @@ rather than copied: painted on the back of the glass, black lines first and
 the sky last, and seen through the front. No brush relief shows through the
 glass, only colour.*
 
-### Four masters, four tools
+### Three masters, three tools
 
 Each of these studies is painted from a photograph of a real painting
 (`examples/reference`, all public domain), and painted mostly with one of the
-tools from **Dabbing, hands and spatter**, the way its painter is known to
+tools from **Dabbing and spatter**, the way its painter is known to
 have used it. They are painted up coarse to fine, the way the Rembrandt study
 is: every pass looks at the canvas so far, compares it with the photograph as
 a tool of that size sees it, and paints only where the two still differ, in
@@ -145,13 +145,6 @@ the colour that brings the canvas closer (`examples/_studies.py`).
   its grain, the smallest pressed harder for the edges; then a few touches
   of the palette knife for the brightest foam, and a liner for the darkest
   cracks and timbers (~1.5 minutes).
-* `examples/turner_venice.py`: J. M. W. Turner's *Approach to Venice* (1844,
-  National Gallery of Art, Washington). The late Turner smudged and glazed
-  with his fingers and thumb as much as with a brush: a thin lay-in swept
-  into haze with the `PALM`, then the colour pushed on and rubbed along the
-  forms with the `FINGER` (about 2,000 finger strokes and rubs), the city
-  and the boats touched in with a fingertip, a few of them pressed so it
-  leaves its print; a small brush only for the masts (~2 minutes).
 * `examples/whistler_rocket.py`: James McNeill Whistler's *Nocturne in Black
   and Gold: The Falling Rocket* (1875, Detroit Institute of Arts), the
   painting John Ruskin said flung "a pot of paint in the public's face": thin
@@ -170,11 +163,6 @@ nearly pure colour, tapped on side by side.*
 *After Courbet's* The Source of the Loue*: the rock and the water built up
 light over dark with sponges, the brightest foam laid on with the palette
 knife.*
-
-![after turner](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/turner_venice.png)
-
-*After Turner's* Approach to Venice*: colour pushed on and smudged into haze
-with the fingers and the palm, the city and the boats dissolving in light.*
 
 ![after whistler](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/whistler_rocket.png)
 
@@ -279,7 +267,6 @@ dataclass with the same fields and call `canvas.paint(stroke1, stroke2, ...)`.
 | `BRUSH_HANDLE` | The other end of the brush, scratched through wet paint (sgraffito): a groove down to the paint beneath, deeper with more pressure. |
 | `STIPPLER` | A short, dense, flat-topped round, tapped straight down (`canvas.stipple`): clusters of dots for foliage, textures, broken colour. |
 | `SPONGE` | A natural sponge: dabbed on, it prints an irregular web with holes, never a solid mark (rocks, foliage, snow, weathered walls). |
-| `FINGER`, `PALM` | A fingertip and the heel of the hand: no bristles, so no brush marks. Rubbed over wet paint they blend and smooth; a fingertip touched lightly into paint leaves its print. |
 
 ```python
 from oilpaint import BrushType, brushes
@@ -315,7 +302,7 @@ custom = BrushType(shape="filbert", width=26, aspect=0.45, stiffness=0.6, capaci
 | `dig` | 0..1: how deep a point cuts into the wet paint under it (1: down to the dry paint or canvas), pushing it aside into low ridges (the brush handle). |
 | `blending` | How readily different paints loaded on the brush merge as it is used. |
 | `tips` | How many separate tips (clumps of bristle ends) a dab prints when the brush is tapped lightly; 0 works it out from the size and the hair (fine hair: more, smaller tips). A light tap touches only the longest; harder taps bring in more until the mark closes up. Each brush keeps its own layout, turned a little on every tap. |
-| `pattern` | The tool's face where it is pressed down: `bristles` (separate tips), `sponge` (an irregular web with holes that stays open however hard it is pressed; `tips` is then the number of holes) or `skin` (a fingertip, with faint ridges that print on a light touch). |
+| `pattern` | The tool's face where it is pressed down: `bristles` (separate tips) or `sponge` (an irregular web with holes that stays open however hard it is pressed; `tips` is then the number of holes). |
 | `streaks`, `pickup`, `drag`, `mixing`, `rough` | Explicit overrides of the behavior otherwise derived from stiffness and bristles. |
 
 `brushes.make(shape, width, hair, length)` picks sensible values from the
@@ -335,9 +322,9 @@ on the brush's edge, and a stroke that twists from broadside to edge-on.*
 deer-foot stippling, a mop blending two wet colors, palette-knife slabs, rigger
 branches, an angled flat cutting a corner, dagger strokes.*
 
-### Dabbing, hands and spatter
+### Dabbing and spatter
 
-Some marks aren't brushed at all: they are tapped, pressed, rubbed or flicked.
+Some marks aren't brushed at all: they are tapped, pressed or flicked.
 
 * `canvas.stipple(points, paint, amount=6, width=None, pressure=0.3, brush=STIPPLER)`
   taps one brush straight down at each point in turn, without reloading it,
@@ -346,9 +333,6 @@ Some marks aren't brushed at all: they are tapped, pressed, rubbed or flicked.
   that fill in as the pressure rises (`tips` sets how many). A `SPONGE`
   prints its web of holes at any pressure. `pressure` can be one value per
   point. Returns the brush.
-* `FINGER` and `PALM` are tools like any other: rub them over wet paint to
-  blend and soften it without brush marks, or touch a fingertip lightly into
-  paint to leave its print.
 * `canvas.spatter(at, paint, amount=1, direction=0, spread=25, reach=120, size=3)`
   flicks paint off a loaded brush: a spray of drops leaving from `at` (a
   point, or a path the brush sweeps along as it is flicked), flying
@@ -365,20 +349,17 @@ from oilpaint import brushes
 
 canvas.stipple(points, "#3c6e2f", amount=12, pressure=0.25)               # stippled foliage
 canvas.stipple(points, "#8a5a2b", pressure=0.5, brush=brushes.SPONGE)      # sponged rock
-canvas.stroke([(100, 300), (400, 306), (110, 304)], brush=brushes.FINGER)  # rubbed with a fingertip
 canvas.spatter((80, 400), "#f2c230", direction=-20, spread=15, reach=250, size=1.5)  # a fine flick
 ```
 
-![dabbing, hands and spatter](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/dabs_hands_spatter.png)
+![dabbing and spatter](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/dabs_and_spatter.png)
 
 *Top left: the stippler tapped from light to firm, then with 10, 40 and 160
 tips at the same pressure, and a bush stippled dark to light. Top right: sponge
 prints from light to hard, a rock face sponged over a dry umber ground, and a
-sponged tree. Bottom left: yellow and red rubbed together along their edge
-with a fingertip (right half), four light fingertip prints, and a sky
-smoothed with the palm (right half). Bottom right, on a dark wash: a fine flick
-of yellow, a coarse one of white, and orange flicked from a brush swept along
-as it went.*
+sponged tree. Bottom, on a dark wash: a fine flick of yellow, a coarse one of
+white, orange flicked from a brush swept along as it went, and a shower of
+ochre falling straight down.*
 
 ### Painting from a reference: `Reference(image, width, height, box=None)`
 

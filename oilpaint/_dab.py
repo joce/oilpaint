@@ -9,8 +9,7 @@ one more of the face.
 * bristles: separate tips, clumps of bristle ends of slightly different
   lengths, each a little cone (a harder tap spreads it into a bigger dot);
 * sponge: an irregular web of walls around holes, the surface uneven, the
-  outline ragged; the holes stay open however hard it is pressed;
-* skin: a fingertip's pad, highest in the middle, with faint ridges.
+  outline ragged; the holes stay open however hard it is pressed.
 
 A brush keeps its layout (it comes from the brush type), turned to a new
 angle on every tap, as a painter's hand turns.
@@ -115,26 +114,11 @@ def _sponge(n, spacing, rng):
     return face * _smoothstep(edge, edge - 0.18, np.hypot(X, Y))
 
 
-def _skin(n, r_px, rng):
-    """A fingertip's pad: highest in the middle, with ridges about 2.5 px apart
-    in a whorl."""
-    X, Y = _coords(n)
-    period = max(2.5 / max(r_px, 1.0), 0.05)
-    cx, cy = rng.normal(0.0, 0.15, 2)
-    wobble = fractal_noise_2d(n, n, n / 4.0, rng, octaves=2)
-    q = np.hypot(X - cx, (Y - cy) / 0.8) + 0.6 * period * (wobble - 0.5)
-    ridges = 0.5 + 0.5 * np.cos(2 * np.pi * q / period)
-    pad = np.clip(1.0 - 0.4 * (X * X + Y * Y), 0.0, 1.0)
-    return pad * (0.5 + 0.5 * ridges)
-
-
 @functools.lru_cache(maxsize=64)
 def _layout(pattern: str, seed: int, r_px: float, tips: int, bristles: float):
     n = grid_size(r_px)
     rng = np.random.default_rng(seed)
-    if pattern == "skin":
-        out = _skin(n, r_px, rng)
-    elif pattern == "sponge":
+    if pattern == "sponge":
         # holes about a fifth of the sponge across, or as many as asked for
         spacing = float(np.sqrt(np.pi / tips)) if tips > 0 else 0.22
         out = _sponge(n, spacing, rng)

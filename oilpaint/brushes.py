@@ -177,31 +177,6 @@ SPONGE = BrushType(
     name="Sponge",
 )
 
-# --- hands -------------------------------------------------------------------
-#: A fingertip: no bristles, so no brush marks. Rubbed over wet paint it blends
-#: and smooths, picking a little up and spreading it; pressed lightly into
-#: thick paint it leaves its print.
-FINGER = BrushType(
-    shape="round",
-    width=30,
-    aspect=0.8,
-    stiffness=0.35,
-    bristles=1.0,
-    capacity=0.5,
-    streaks=0.0,
-    pickup=0.5,
-    drag=0.35,
-    mixing=0.95,
-    rough=0.0,
-    softness=0.45,
-    pattern="skin",
-    name="Finger",
-)
-#: The heel of the hand: broad, soft blending of large areas (skies, haze).
-PALM = FINGER.with_(
-    width=110, aspect=0.7, softness=0.6, mixing=0.85, pickup=0.4, drag=0.25, name="Palm"
-)
-
 # --- knives ------------------------------------------------------------------
 _BLADE_ASPECT = {
     "trowel": 0.4,

@@ -1259,9 +1259,9 @@ def reverse_glass():
 
 
 # ---------------------------------------------------------------------------
-# 14. Dabbing, hands and spatter: the stippler, the sponge, fingers, flicked paint
+# 14. Dabbing and spatter: the stippler, the sponge, flicked paint
 # ---------------------------------------------------------------------------
-def dabs_hands_spatter():
+def dabs_and_spatter():
     c = Canvas(1300, 700, seed=14)
     greens = [
         Paint.mix((P.SAP_GREEN, 2), (P.IVORY_BLACK, 0.3)),
@@ -1309,60 +1309,34 @@ def dabs_hands_spatter():
     c.stroke(
         [(1160, 215), (1166, 270)], P.BURNT_UMBER, amount=8, brush=B.ROUND.sized(10)
     )
-    # fingers: two wet colours, the right half blended across their edge with a
-    # fingertip; fingerprints; the palm smoothing a sky
-    c.stroke(
-        [(40, 330), (600, 330)], P.CADMIUM_YELLOW, amount=14, brush=B.FLAT_HOG.sized(50)
-    )
-    c.stroke(
-        [(40, 380), (600, 380)], P.CADMIUM_RED, amount=14, brush=B.FLAT_HOG.sized(50)
-    )
-    for k, y in enumerate((346, 358, 366, 352)):  # rubbed back and forth along it
-        rub = [(330, y), (600, y + 3), (340, y + 2)]
-        c.stroke(rub, brush=B.FINGER, pressure=0.5, seed=k)
-    for k, x in enumerate(range(60, 300, 60)):
-        c.stroke(
-            [(x, 470)],
-            P.ULTRAMARINE_BLUE,
-            amount=6,
-            brush=B.FINGER,
-            pressure=0.1,
-            seed=k,
-        )
-    for k, y in enumerate(range(440, 560, 26)):
-        sky = Paint.mix((P.TITANIUM_WHITE, 1 + k), (P.COBALT_BLUE, 1))
-        c.stroke([(340, y), (620, y)], sky, amount=10, brush=B.FLAT_HOG.sized(30))
-    for k, y in enumerate(range(445, 560, 30)):
-        c.stroke(
-            [(480, y), (620, y + 8), (480, y + 4)], brush=B.PALM, pressure=0.5, seed=k
-        )
-    # spatter: on a dark wash, a fine mist, a coarse flick, and a brush swept
-    # as it is flicked
+    # spatter: on a dark wash, a fine mist, a coarse flick, a brush swept as it
+    # is flicked, and a shower falling straight down
     for y in range(290, 700, 30):
-        c.stroke(
-            [(680, y), (1290, y)], "#1d2733", amount=14, brush=B.FLAT_HOG.sized(44)
-        )
+        for x0, x1 in ((30, 480), (440, 890), (850, 1290)):
+            c.stroke(
+                [(x0, y), (x1, y)], "#1d2733", amount=14, brush=B.FLAT_HOG.sized(44)
+            )
     c.spatter(
-        (700, 360),
+        (60, 360),
         P.CADMIUM_YELLOW,
         amount=1.5,
         direction=-5,
         spread=12,
-        reach=200,
+        reach=260,
         size=1.4,
         seed=1,
     )
     c.spatter(
-        (720, 560),
+        (80, 570),
         P.TITANIUM_WHITE,
         amount=0.8,
         direction=10,
         spread=20,
-        reach=160,
+        reach=200,
         size=4,
         seed=2,
     )
-    swept = [(1050, 320), (1250, 380)]
+    swept = [(700, 320), (940, 380)]
     c.spatter(
         swept,
         P.CADMIUM_ORANGE,
@@ -1373,7 +1347,17 @@ def dabs_hands_spatter():
         size=2.5,
         seed=3,
     )
-    save(c, "dabs_hands_spatter.png", light=RAKING)
+    c.spatter(
+        (1150, 330),
+        P.YELLOW_OCHRE,
+        amount=1.0,
+        direction=90,
+        spread=25,
+        reach=160,
+        size=1.3,
+        seed=4,
+    )
+    save(c, "dabs_and_spatter.png", light=RAKING)
 
 
 if __name__ == "__main__":
@@ -1392,7 +1376,7 @@ if __name__ == "__main__":
         knife_drag,
         dirty_brush,
         reverse_glass,
-        dabs_hands_spatter,
+        dabs_and_spatter,
     ):
         t0 = time.time()
         fn()

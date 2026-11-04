@@ -799,18 +799,12 @@ def test_a_sponge_stays_open_however_hard_it_is_pressed():
     assert _dab_coverage(brushes.SPONGE, 0.15, r=18) < sponge
 
 
-def test_a_light_fingertip_prints_its_ridges():
-    light = _dab_coverage(brushes.FINGER, 0.1, r=8)
-    firm = _dab_coverage(brushes.FINGER, 0.45, r=8)
-    assert 0.2 < light < 0.85 and firm > 0.95
-
-
 def test_paint_squeezed_from_a_soft_tool_hugs_its_edge_all_round():
-    # an overloaded fingertip pressed hard squeezes paint out around itself
+    # a small mop that holds little paint, overloaded and pressed hard, squeezes
+    # paint out around itself
     c = Canvas(80, 80, seed=1)
-    c.stroke(
-        [(40, 40)], P.ULTRAMARINE_BLUE, amount=6, brush=brushes.FINGER, pressure=0.9
-    )
+    mop = brushes.MOP.with_(capacity=0.5).sized(30)
+    c.stroke([(40, 40)], P.ULTRAMARINE_BLUE, amount=6, brush=mop, pressure=0.9)
     t = c.thickness
     yy, xx = np.mgrid[0:80, 0:80]
     # no bare ring between the print and the squeezed-out paint: going out from
@@ -821,29 +815,8 @@ def test_paint_squeezed_from_a_soft_tool_hugs_its_edge_all_round():
         last = int(np.flatnonzero(painted).max())
         assert painted[: last + 1].all(), (dy, dx)
     # and no lips poking out at two ends: about as far all round
-    reach = np.hypot(xx - 40, (yy - 40) / 0.8)[t > 0.05]
+    reach = np.hypot(xx - 40, yy - 40)[t > 0.05]
     assert reach.max() < 1.15 * np.percentile(reach, 97)
-
-
-def test_a_finger_blends_the_edge_between_two_wet_colours():
-    def transition(blend):
-        c = Canvas(160, 160, seed=13)
-        c.stroke([(10, 55), (150, 55)], P.CADMIUM_RED, amount=14, width=50, seed=1)
-        c.stroke(
-            [(10, 105), (150, 105)], P.ULTRAMARINE_BLUE, amount=14, width=50, seed=2
-        )
-        if blend:
-            for k, x in enumerate(range(30, 140, 18)):
-                c.stroke(
-                    [(x, 60), (x + 4, 100), (x, 60)], brush=brushes.FINGER, seed=3 + k
-                )
-        reds = np.array([sp.parse_color(c.color_at(80, y))[0] for y in range(50, 111)])
-        mid = (reds > reds.min() + 0.2 * np.ptp(reds)) & (
-            reds < reds.max() - 0.2 * np.ptp(reds)
-        )
-        return int(mid.sum())
-
-    assert transition(True) > transition(False) + 4
 
 
 def test_spatter_flies_the_way_it_is_flicked():
