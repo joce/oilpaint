@@ -132,33 +132,33 @@ the colour that brings the canvas closer (`examples/_studies.py`).
 
 * `examples/seurat_grande_jatte.py`: Georges Seurat's *Gray Weather, Grande
   Jatte* (about 1886-88, The Metropolitan Museum of Art), in pointillist dots
-  tapped on with `canvas.stipple` over a thin lay-in: about SEURAT_DOTS dots,
+  tapped on with `canvas.stipple` over a thin lay-in: about 134,000 dots,
   bigger ones first, each the colour the photograph shows where it falls,
   made purer and set further apart from its neighbours' colours, with now and
   then a dot of its complement. Each layer of dots is tapped on in sittings
-  left to dry, so the dots keep their own colour (SEURAT_TIME).
+  left to dry, so the dots keep their own colour (~3 minutes).
 * `examples/courbet_loue.py`: Gustave Courbet's *The Source of the Loue*
   (1864, The Metropolitan Museum of Art). Courbet built up his rocks with
   sponges and rags as well as the palette knife: here, over a dark ground and
-  a thin lay-in, about COURBET_PRINTS `SPONGE` prints, big sponges to small,
+  a thin lay-in, about 25,000 `SPONGE` prints, big sponges to small,
   pressed lightly so the dark shows through their holes and gives the stone
   its grain, the smallest pressed harder for the edges; then a few touches
   of the palette knife for the brightest foam, and a liner for the darkest
-  cracks and timbers (COURBET_TIME).
+  cracks and timbers (~1.5 minutes).
 * `examples/turner_venice.py`: J. M. W. Turner's *Approach to Venice* (1844,
   National Gallery of Art, Washington). The late Turner smudged and glazed
   with his fingers and thumb as much as with a brush: a thin lay-in swept
   into haze with the `PALM`, then the colour pushed on and rubbed along the
-  forms with the `FINGER` (TURNER_FINGERS finger strokes and rubs), the city
+  forms with the `FINGER` (about 2,000 finger strokes and rubs), the city
   and the boats touched in with a fingertip, a few of them pressed so it
-  leaves its print; a small brush only for the masts (TURNER_TIME).
+  leaves its print; a small brush only for the masts (~2 minutes).
 * `examples/whistler_rocket.py`: James McNeill Whistler's *Nocturne in Black
   and Gold: The Falling Rocket* (1875, Detroit Institute of Arts), the
   painting John Ruskin said flung "a pot of paint in the public's face": thin
   washes of fluid paint swept over a dark ground with a mop, the smoke soft;
   and the sparks flicked on with `canvas.spatter`, a flick for each shower of
-  sparks in the photograph, falling from just above it (WHISTLER_DROPS
-  drops; WHISTLER_TIME).
+  sparks in the photograph, falling from just above it (about 1,700
+  drops; ~1.5 minutes).
 
 ![after seurat](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/seurat_grande_jatte.png)
 
