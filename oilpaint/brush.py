@@ -109,7 +109,6 @@ def _pack(paint: Paint, volume: float) -> np.ndarray:
 KNIFE_SHAPES = ("trowel", "pear", "straight", "angled", "spoon")
 SHAPES = ("round", "flat", "filbert", "fan") + KNIFE_SHAPES
 #: What a tool's face looks like where it is pressed straight down (a dab).
-PATTERNS = ("bristles", "sponge")
 
 
 @dataclass(frozen=True)
@@ -198,12 +197,6 @@ class BrushType:
         sparse dots; harder taps bring in more until the mark closes up. 0
         works it out from the size and the hair (fine hair has more, smaller
         tips). Each brush keeps its own layout, turned a little on every tap.
-    pattern:
-        The face of the tool where it is pressed down: ``"bristles"``
-        (separate tips, see ``tips``) or ``"sponge"`` (the tips of a sea
-        sponge's fibres: specks on a light press, bigger blots on a harder
-        one, with gaps between them that stay open however hard it is
-        pressed; ``tips`` is then how many, 0 for about 5 px apart).
     streaks, pickup, drag, mixing, rough:
         Explicit physics overrides. ``None`` derives them from stiffness and
         bristles (``rough`` is the raggedness of the stroke edges).
@@ -226,7 +219,6 @@ class BrushType:
     blending: float | None = None
     taper: float = 0.0
     tips: int = 0
-    pattern: str = "bristles"
     streaks: float | None = None
     pickup: float | None = None
     drag: float | None = None
@@ -239,8 +231,6 @@ class BrushType:
             raise ValueError(f"unknown brush shape {self.shape!r}; use one of {SHAPES}")
         if self.width <= 0 or self.aspect <= 0:
             raise ValueError("width and aspect must be positive")
-        if self.pattern not in PATTERNS:
-            raise ValueError(f"unknown pattern {self.pattern!r}; use one of {PATTERNS}")
         if self.tips < 0:
             raise ValueError("tips must be 0 (automatic) or more")
 
@@ -993,9 +983,7 @@ class _Run:
         swell = value_noise_1d(int(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
         self.lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
         self.blade_tilt = float(_clip(rng.normal(0.0, 0.08), -0.2, 0.2))
-        # the tool's face pressed straight down: bristle tips or a sponge's
-        # fibres
-        # (see _dab)
+        # the bristle tips a dab prints (see _dab)
         if is_dab:
             self.tex2 = dab_pattern(bt, 0.5 * w_typ, rng)
         aspect = self.aspect = 1.0 if circle else bt.aspect
@@ -1083,8 +1071,6 @@ class _Run:
             softness=float(bt.softness),
             slant=float(bt.slant),
             clumps=float(bt.clumps),
-            # the gaps in a sponge stay open however hard it is pressed
-            porous=0.22 if bt.pattern == "sponge" else 0.0,
             feather=float(self.feather),
             # soft brushes are lowered and lifted gently, so their ends feather
             end_k=1.0 if is_dab else max(0.0, 1.0 - 1.5 * float(bt.softness)),

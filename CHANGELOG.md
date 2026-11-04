@@ -12,17 +12,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longest bristles, dots that fill in as the pressure rises; `BrushType.tips`
   sets how many. A new `STIPPLER` brush, and `canvas.stipple(points, ...)`
   taps one brush at many points without reloading it.
-- A natural `SPONGE` (`BrushType.pattern="sponge"`): it prints a scatter of
-  irregular specks and blots (the tips of its fibres), never a solid mark.
 - Spatter: `canvas.spatter(...)` flicks drops of paint off a brush, round where
   they land head-on, teardrops further off.
-- A demo of all three (`dabs_and_spatter.png`).
-- Three studies after the masters, each painted mostly with one of the new
-  tools: Seurat's *Gray Weather, Grande Jatte* (stippled dots), Courbet's
-  *The Source of the Loue* (sponge) and Whistler's *The Falling Rocket*
-  (spatter). Each is painted up coarse to fine from a public-domain
-  photograph in `examples/reference`, every pass going only where the canvas
-  still differs from it (`examples/_studies.py`).
+- A demo of both (`dabs_and_spatter.png`).
+- Two studies after the masters, each painted mostly with one of the new
+  tools: Seurat's *Gray Weather, Grande Jatte* (stippled dots) and
+  Whistler's *The Falling Rocket* (spatter). Each is painted up coarse to
+  fine from a public-domain photograph in `examples/reference`, every pass
+  going only where the canvas still differs from it (`examples/_studies.py`).
 
 - Glass (`surfaces.GLASS`): a clear, perfectly smooth and slick support, with
   whatever is behind it showing through.

@@ -792,13 +792,6 @@ def test_spatter_with_no_paint_flicks_nothing():
     assert c.thickness.max() == 0
 
 
-def test_a_sponge_stays_open_however_hard_it_is_pressed():
-    sponge = _dab_coverage(brushes.SPONGE, 0.9, r=18)
-    round_ = _dab_coverage(brushes.ROUND.sized(46), 0.9, r=18)
-    assert round_ > 0.95 and sponge < 0.92
-    assert _dab_coverage(brushes.SPONGE, 0.15, r=18) < sponge
-
-
 def test_paint_squeezed_from_a_soft_tool_hugs_its_edge_all_round():
     # a small mop that holds little paint, overloaded and pressed hard, squeezes
     # paint out around itself
@@ -835,8 +828,6 @@ def test_spatter_flies_the_way_it_is_flicked():
 
 
 def test_brush_type_validation_for_the_new_fields():
-    with pytest.raises(ValueError):
-        BrushType(pattern="velvet")
     with pytest.raises(ValueError):
         BrushType(tips=-1)
 

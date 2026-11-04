@@ -158,25 +158,6 @@ FAN_SOFT = make(
 STIPPLER = make(
     "round", 26, "hog", length=0.1, bristles=0.55, spread=0.0, name="Stippler"
 )
-#: Natural sponge: dabbed on, it prints a scatter of irregular specks and
-#: blots, never a solid mark: rocks, foliage, snow, weathered walls. Clean, it
-#: lifts some of the wet paint it touches.
-SPONGE = BrushType(
-    shape="round",
-    width=46,
-    aspect=0.85,
-    stiffness=0.25,
-    bristles=0.9,
-    capacity=2.5,
-    streaks=0.1,
-    pickup=1.5,
-    drag=0.1,
-    mixing=0.2,
-    rough=0.05,
-    pattern="sponge",
-    name="Sponge",
-)
-
 # --- knives ------------------------------------------------------------------
 _BLADE_ASPECT = {
     "trowel": 0.4,

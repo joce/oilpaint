@@ -1259,7 +1259,7 @@ def reverse_glass():
 
 
 # ---------------------------------------------------------------------------
-# 14. Dabbing and spatter: the stippler, the sponge, flicked paint
+# 14. Dabbing and spatter: the stippler, flicked paint
 # ---------------------------------------------------------------------------
 def dabs_and_spatter():
     c = Canvas(1300, 700, seed=14)
@@ -1283,29 +1283,26 @@ def dabs_and_spatter():
             1,
         )
         c.stipple(pts, paint, amount=12, pressure=0.25)
-    # the sponge: prints from light to hard; a sponged rock face; blotting wet paint
-    for k, p in enumerate((0.15, 0.4, 0.9)):
-        c.stroke(
-            [(720 + 80 * k, 60)], P.BURNT_SIENNA, amount=6, brush=B.SPONGE, pressure=p
-        )
+    # a rock face stippled light over a dry umber ground, and a stippled tree
     c.stroke(
-        [(700, 175), (960, 175)], P.RAW_UMBER, amount=20, brush=B.FLAT_HOG.sized(70)
+        [(700, 120), (960, 120)], P.RAW_UMBER, amount=20, brush=B.FLAT_HOG.sized(110)
     )
     c.dry()
     rocks = np.random.default_rng(2)
+    big = B.STIPPLER.sized(34)
     for paint, n, p in (
-        (P.BURNT_UMBER, 22, 0.5),
-        (P.YELLOW_OCHRE, 18, 0.3),
-        ("#d8d2c4", 14, 0.2),
+        (P.BURNT_UMBER, 40, 0.4),
+        (P.YELLOW_OCHRE, 34, 0.25),
+        ("#d8d2c4", 26, 0.15),
     ):
-        pts = np.stack([rocks.uniform(690, 970, n), rocks.uniform(140, 215, n)], 1)
-        c.stipple(pts, paint, amount=10, pressure=p, brush=B.SPONGE)
+        pts = np.stack([rocks.uniform(690, 970, n), rocks.uniform(70, 170, n)], 1)
+        c.stipple(pts, paint, amount=12, pressure=p, brush=big)
     leaves = np.random.default_rng(3)
-    for k, paint in enumerate(greens):  # sponged foliage, dark to light
-        ang = leaves.uniform(0, 2 * np.pi, 16)
-        rad = 75 * np.sqrt(leaves.uniform(0, 1, 16)) * (1 - 0.2 * k)
+    for k, paint in enumerate(greens):  # dark to light
+        ang = leaves.uniform(0, 2 * np.pi, 40)
+        rad = 75 * np.sqrt(leaves.uniform(0, 1, 40)) * (1 - 0.2 * k)
         x, y = 1160 - 10 * k + rad * np.cos(ang), 130 - 12 * k + rad * np.sin(ang)
-        c.stipple(np.stack([x, y], 1), paint, amount=12, pressure=0.35, brush=B.SPONGE)
+        c.stipple(np.stack([x, y], 1), paint, amount=14, pressure=0.3, brush=big)
     c.stroke(
         [(1160, 215), (1166, 270)], P.BURNT_UMBER, amount=8, brush=B.ROUND.sized(10)
     )

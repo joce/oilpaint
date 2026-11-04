@@ -119,7 +119,6 @@ StrokeConsts = namedtuple(
         "softness",
         "slant",
         "clumps",
-        "porous",
         "feather",
         "end_k",
         "surface_acts",
@@ -494,7 +493,7 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
                     profile *= smoothstep(1.0, 1.0 - K.softness, rr) ** soft_pow
                 # tapped lightly, only the tips of the bristles touch: a stippled,
                 # broken mark
-                tip_thr = max(0.75 - 1.5 * p, K.porous)
+                tip_thr = 0.75 - 1.5 * p
                 if tip_thr > 0:
                     profile *= smoothstep(tip_thr - 0.12, tip_thr + 0.12, hair)
             overlap = max(min(0.0, rel + h) - max(-ds, rel - h), 0.0)

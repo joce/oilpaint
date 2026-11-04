@@ -120,7 +120,7 @@ rather than copied: painted on the back of the glass, black lines first and
 the sky last, and seen through the front. No brush relief shows through the
 glass, only colour.*
 
-### Three masters, three tools
+### Two masters, two tools
 
 Each of these studies is painted from a photograph of a real painting
 (`examples/reference`, all public domain), and painted mostly with one of the
@@ -137,17 +137,6 @@ the colour that brings the canvas closer (`examples/_studies.py`).
   made purer and set further apart from its neighbours' colours, with now and
   then a dot of its complement. Each layer of dots is tapped on in sittings
   left to dry, so the dots keep their own colour (~3 minutes).
-* `examples/courbet_loue.py`: Gustave Courbet's *The Source of the Loue*
-  (1864, The Metropolitan Museum of Art). Courbet built up his rocks light
-  over dark, with sponges and rags as well as the palette knife. Here the
-  picture is laid in with a brush over a dark ground in its shadow tone (the
-  lights brought down); then a lightly loaded `SPONGE` brings the lights up:
-  about 26,000 prints in layers left to dry, each lighter, smaller and
-  pressed more lightly than the one before, on less of the rock, and only
-  where all of a print falls on light, so the clefts stay dark and the dark
-  shows between the specks as the grain of the stone. The foam is sponged
-  too, and the brightest water laid on with the palette knife
-  (~2 minutes).
 * `examples/whistler_rocket.py`: James McNeill Whistler's *Nocturne in Black
   and Gold: The Falling Rocket* (1875, Detroit Institute of Arts), the
   painting John Ruskin said flung "a pot of paint in the public's face": thin
@@ -160,12 +149,6 @@ the colour that brings the canvas closer (`examples/_studies.py`).
 
 *After Seurat's* Gray Weather, Grande Jatte*: over a hundred thousand dots of
 nearly pure colour, tapped on side by side.*
-
-![after courbet](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/courbet_loue.png)
-
-*After Courbet's* The Source of the Loue*: the rock and the foam brought up
-light over a dark lay-in with a sponge, the brightest water laid on with the
-palette knife.*
 
 ![after whistler](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/whistler_rocket.png)
 
@@ -269,7 +252,6 @@ dataclass with the same fields and call `canvas.paint(stroke1, stroke2, ...)`.
 | `RAG` | Lifts wet paint without laying any down: wipe out lights or correct mistakes. |
 | `BRUSH_HANDLE` | The other end of the brush, scratched through wet paint (sgraffito): a groove down to the paint beneath, deeper with more pressure. |
 | `STIPPLER` | A short, dense, flat-topped round, tapped straight down (`canvas.stipple`): clusters of dots for foliage, textures, broken colour. |
-| `SPONGE` | A natural sponge: dabbed on, it prints a scatter of irregular specks and blots, never a solid mark (rocks, foliage, snow, weathered walls). |
 
 ```python
 from oilpaint import BrushType, brushes
@@ -305,7 +287,6 @@ custom = BrushType(shape="filbert", width=26, aspect=0.45, stiffness=0.6, capaci
 | `dig` | 0..1: how deep a point cuts into the wet paint under it (1: down to the dry paint or canvas), pushing it aside into low ridges (the brush handle). |
 | `blending` | How readily different paints loaded on the brush merge as it is used. |
 | `tips` | How many separate tips (clumps of bristle ends) a dab prints when the brush is tapped lightly; 0 works it out from the size and the hair (fine hair: more, smaller tips). A light tap touches only the longest; harder taps bring in more until the mark closes up. Each brush keeps its own layout, turned a little on every tap. |
-| `pattern` | The tool's face where it is pressed down: `bristles` (separate tips) or `sponge` (the tips of a sea sponge's fibres: specks on a light press, bigger blots on a harder one, the gaps between them open however hard it is pressed; `tips` is then how many, 0 for about 5 px apart). |
 | `streaks`, `pickup`, `drag`, `mixing`, `rough` | Explicit overrides of the behavior otherwise derived from stiffness and bristles. |
 
 `brushes.make(shape, width, hair, length)` picks sensible values from the
@@ -333,9 +314,7 @@ Some marks aren't brushed at all: they are tapped, pressed or flicked.
   taps one brush straight down at each point in turn, without reloading it,
   so it runs out as it goes; it turns a little on every tap. Tapped lightly,
   a bristle brush prints only the tips of its longest bristles: sparse dots
-  that fill in as the pressure rises (`tips` sets how many). A `SPONGE`
-  prints a scatter of specks, bigger blots as it is pressed harder, never a
-  solid mark. `pressure` can be one value per
+  that fill in as the pressure rises (`tips` sets how many). `pressure` can be one value per
   point. Returns the brush.
 * `canvas.spatter(at, paint, amount=1, direction=0, spread=25, reach=120, size=3)`
   flicks paint off a loaded brush: a spray of drops leaving from `at` (a
@@ -352,16 +331,15 @@ Some marks aren't brushed at all: they are tapped, pressed or flicked.
 from oilpaint import brushes
 
 canvas.stipple(points, "#3c6e2f", amount=12, pressure=0.25)               # stippled foliage
-canvas.stipple(points, "#8a5a2b", pressure=0.5, brush=brushes.SPONGE)      # sponged rock
 canvas.spatter((80, 400), "#f2c230", direction=-20, spread=15, reach=250, size=1.5)  # a fine flick
 ```
 
 ![dabbing and spatter](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/dabs_and_spatter.png)
 
 *Top left: the stippler tapped from light to firm, then with 10, 40 and 160
-tips at the same pressure, and a bush stippled dark to light. Top right: sponge
-prints from light to hard, a rock face sponged over a dry umber ground, and a
-sponged tree. Bottom, on a dark wash: a fine flick of yellow, a coarse one of
+tips at the same pressure, and a bush stippled dark to light. Top right: a
+rock face stippled light over a dry umber ground with a bigger stippler, and a
+stippled tree. Bottom, on a dark wash: a fine flick of yellow, a coarse one of
 white, orange flicked from a brush swept along as it went, and a shower of
 ochre falling straight down.*
 
