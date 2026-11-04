@@ -42,6 +42,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dragged through thin, medium and thick wet paint, then used again on clean
   canvas.
 
+### Fixed
+
+- Dabs press down evenly: a round or oval dab was up to twice as thick at
+  the two ends of its outline as in its middle, and its rim built up in two
+  lips instead of all round.
+- Paint squeezed out of an overloaded soft tool (a fingertip, the palm, a
+  mop) pressed hard now lies against the edge of its mark, instead of
+  floating around it in a ring.
+
 ### Changed
 
 - Brushes stay dirty longer after working through thick wet paint. What a

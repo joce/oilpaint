@@ -805,6 +805,26 @@ def test_a_light_fingertip_prints_its_ridges():
     assert 0.2 < light < 0.85 and firm > 0.95
 
 
+def test_paint_squeezed_from_a_soft_tool_hugs_its_edge_all_round():
+    # an overloaded fingertip pressed hard squeezes paint out around itself
+    c = Canvas(80, 80, seed=1)
+    c.stroke(
+        [(40, 40)], P.ULTRAMARINE_BLUE, amount=6, brush=brushes.FINGER, pressure=0.9
+    )
+    t = c.thickness
+    yy, xx = np.mgrid[0:80, 0:80]
+    # no bare ring between the print and the squeezed-out paint: going out from
+    # the centre, the paint thins and stops once, it doesn't stop and start again
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (-1, -1)):
+        line = np.array([t[40 + k * dy, 40 + k * dx] for k in range(30)])
+        painted = line > 0.05
+        last = int(np.flatnonzero(painted).max())
+        assert painted[: last + 1].all(), (dy, dx)
+    # and no lips poking out at two ends: about as far all round
+    reach = np.hypot(xx - 40, (yy - 40) / 0.8)[t > 0.05]
+    assert reach.max() < 1.15 * np.percentile(reach, 97)
+
+
 def test_a_finger_blends_the_edge_between_two_wet_colours():
     def transition(blend):
         c = Canvas(160, 160, seed=13)
