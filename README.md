@@ -138,13 +138,16 @@ the colour that brings the canvas closer (`examples/_studies.py`).
   then a dot of its complement. Each layer of dots is tapped on in sittings
   left to dry, so the dots keep their own colour (~3 minutes).
 * `examples/courbet_loue.py`: Gustave Courbet's *The Source of the Loue*
-  (1864, The Metropolitan Museum of Art). Courbet built up his rocks with
-  sponges and rags as well as the palette knife: here, over a dark ground and
-  a thin lay-in, about 25,000 `SPONGE` prints, big sponges to small,
-  pressed lightly so the dark shows through their holes and gives the stone
-  its grain, the smallest pressed harder for the edges; then a few touches
-  of the palette knife for the brightest foam, and a liner for the darkest
-  cracks and timbers (~1.5 minutes).
+  (1864, The Metropolitan Museum of Art). Courbet built up his rocks light
+  over dark, with sponges and rags as well as the palette knife. Here the
+  picture is laid in with a brush over a dark ground in its shadow tone (the
+  lights brought down); then a lightly loaded `SPONGE` brings the lights up:
+  about 26,000 prints in layers left to dry, each lighter, smaller and
+  pressed more lightly than the one before, on less of the rock, and only
+  where all of a print falls on light, so the clefts stay dark and the dark
+  shows between the specks as the grain of the stone. The foam is sponged
+  too, and the brightest water laid on with the palette knife
+  (~2 minutes).
 * `examples/whistler_rocket.py`: James McNeill Whistler's *Nocturne in Black
   and Gold: The Falling Rocket* (1875, Detroit Institute of Arts), the
   painting John Ruskin said flung "a pot of paint in the public's face": thin
@@ -160,9 +163,9 @@ nearly pure colour, tapped on side by side.*
 
 ![after courbet](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/courbet_loue.png)
 
-*After Courbet's* The Source of the Loue*: the rock and the water built up
-light over dark with sponges, the brightest foam laid on with the palette
-knife.*
+*After Courbet's* The Source of the Loue*: the rock and the foam brought up
+light over a dark lay-in with a sponge, the brightest water laid on with the
+palette knife.*
 
 ![after whistler](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/whistler_rocket.png)
 

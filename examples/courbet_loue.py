@@ -95,14 +95,14 @@ def foam(study, where, threshold=5.0):
     knife = brushes.KNIFE_SMALL
     for x, y in zip(xs, ys, strict=True):
         a, _ = study.ref.direction(x, y, scale=4)
-        d = study.rng.uniform(5, 10)
+        d = study.rng.uniform(3, 7)
         pts = [
             (x - d * np.cos(a), y - d * np.sin(a)),
             (x + d * np.cos(a), y + d * np.sin(a)),
         ]
         yi, xi = int(y), int(x)
         paint = study.paint(target[yi, xi] + 0.6 * lacking[yi, xi])
-        study.c.stroke(pts, paint, amount=5, brush=knife, pressure=0.5, angle=90)
+        study.c.stroke(pts, paint, amount=3, brush=knife, pressure=0.5, angle=90)
     return len(xs)
 
 
@@ -153,7 +153,7 @@ def paint_it(path):
     n += sponged(study, 14, 5, 1.2, water & (value > 0.7), 0.22, 1.1)
     c.dry()
     log("knife: the brightest water")
-    k = foam(study, water & (value > 0.8), threshold=4.0)
+    k = foam(study, water & (value > 0.85), threshold=6.0)
     c.save(path, relief=0.45, gloss=0.5)
     print(f"wrote {path}: {study.strokes} brush strokes, {n} sponge prints, "
           f"{k} knife strokes, in {time.time() - t0:.0f} s")  # fmt: skip
