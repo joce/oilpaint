@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable
 
 import numpy as np
 
@@ -46,7 +47,7 @@ class Study:
         self.body, self.levels = body, levels
         self.paints: dict = {}
         self.strokes = 0
-        self.tone = None
+        self.tone: Callable[[np.ndarray], np.ndarray] | None = None
         ys, xs = np.mgrid[0 : canvas.height, 0 : canvas.width]
         self._xy = (xs, ys)
 
