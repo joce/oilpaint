@@ -1763,20 +1763,27 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
     y0, y1 = max(by0 - pad, 0), min(by1 + pad + 1, H)
     x0, x1 = max(bx0 - pad, 0), min(bx1 + pad + 1, W)
     h, w = y1 - y0, x1 - x0
+    # the paint's volume and the dry surface under it, over the box (the
+    # volume kept up to date as paint moves)
     Vs = np.empty((h, w), np.float32)
+    Dh = np.empty((h, w), np.float32)
+    for y in range(h):
+        for x in range(w):
+            Vs[y, x] = V[y0 + y, x0 + x]
+            Dh[y, x] = dry_h[ry0 + y0 + y, rx0 + x0 + x]
     fa = np.zeros((h, w), np.float32)
     fb = np.zeros((h, w), np.float32)
     ta = np.empty(PACKED, np.float32)
     ua = np.empty(PACKED, np.float32)
     tb = np.empty(PACKED, np.float32)
     ub = np.empty(PACKED, np.float32)
+    # (the same, for every column)
+    tcol = np.empty((w, PACKED), np.float32)
+    ucol = np.empty((w, PACKED), np.float32)
+    saved_col = np.empty(w, np.bool_)
     for _ in range(iters):
         flowed = False
         for axis in range(2):
-            for y in range(h):
-                for x in range(w):
-                    Y, X = ry0 + y0 + y, rx0 + x0 + x
-                    Vs[y, x] = top[Y, X, IV] + und[Y, X, IV]
             # downhill flow beyond what the paint can hold; onto bare canvas only from a
             # sheer edge. Pair (a, b): b is the next pixel down (axis 0) or to the right
             # (axis 1).
@@ -1784,8 +1791,8 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
             for y in range(h - (1 if axis == 0 else 0)):
                 for x in range(w - (1 if axis == 1 else 0)):
                     yb, xb = (y + 1, x) if axis == 0 else (y, x + 1)
-                    Sa = dry_h[ry0 + y0 + y, rx0 + x0 + x] + Vs[y, x]
-                    Sb = dry_h[ry0 + y0 + yb, rx0 + x0 + xb] + Vs[yb, xb]
+                    Sa = Dh[y, x] + Vs[y, x]
+                    Sb = Dh[yb, xb] + Vs[yb, xb]
                     dS = Sa - Sb
                     zero, quarter = np.float32(0.0), np.float32(0.25)
                     qa = (
@@ -1816,17 +1823,46 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
             # move it, all pairs at once (from the paint as it was before this pass):
             # walk each line; a pixel changed by the pair behind it keeps a copy of how
             # it was
-            n_lines = w if axis == 0 else h
-            n_along = h if axis == 0 else w
-            for line in range(n_lines):
+            if axis == 0:
+                # (the columns side by side, a row at a time: each column is walked
+                # down as on its own, and the rows are read in the order they lie)
+                for x in range(w):
+                    saved_col[x] = False
+                for k in range(1, h):
+                    yp, y = k - 1, k
+                    Ya, Yb = ry0 + y0 + yp, ry0 + y0 + y
+                    for x in range(w):
+                        f_a, f_b = fa[yp, x], fb[yp, x]
+                        if not (f_a > 0 or f_b > 0):
+                            saved_col[x] = False
+                            continue
+                        X = rx0 + x0 + x
+                        sv = saved_col[x]
+                        for c in range(PACKED):
+                            t_a = tcol[x, c] if sv else top[Ya, X, c]
+                            u_a = ucol[x, c] if sv else und[Ya, X, c]
+                            t_b, u_b = top[Yb, X, c], und[Yb, X, c]
+                            tcol[x, c], ucol[x, c] = t_b, u_b
+                            mt = t_a * f_a - t_b * f_b
+                            mu = u_a * f_a - u_b * f_b
+                            top[Ya, X, c] -= mt
+                            und[Ya, X, c] -= mu
+                            top[Yb, X, c] += mt
+                            und[Yb, X, c] += mu
+                        saved_col[x] = True
+                        # (both pixels changed)
+                        Vs[yp, x] = top[Ya, X, IV] + und[Ya, X, IV]
+                        Vs[y, x] = top[Yb, X, IV] + und[Yb, X, IV]
+                continue
+            for line in range(h):
                 saved = False  # (ta, ua) hold the previous pixel as it was
-                for k in range(1, n_along):
-                    yp, xp = (k - 1, line) if axis == 0 else (line, k - 1)
+                for k in range(1, w):
+                    yp, xp = line, k - 1
                     f_a, f_b = fa[yp, xp], fb[yp, xp]
                     if not (f_a > 0 or f_b > 0):
                         saved = False
                         continue
-                    y, x = (k, line) if axis == 0 else (line, k)
+                    y, x = line, k
                     Ya, Xa = ry0 + y0 + yp, rx0 + x0 + xp
                     Yb, Xb = ry0 + y0 + y, rx0 + x0 + x
                     for c in range(PACKED):
@@ -1843,6 +1879,9 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
                     for c in range(PACKED):
                         ta[c], ua[c] = tb[c], ub[c]
                     saved = True
+                    # (both pixels changed)
+                    Vs[yp, xp] = top[Ya, Xa, IV] + und[Ya, Xa, IV]
+                    Vs[y, x] = top[Yb, Xb, IV] + und[Yb, Xb, IV]
         if not flowed:  # it has settled: nothing more will move
             break
 
