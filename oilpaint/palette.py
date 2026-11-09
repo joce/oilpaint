@@ -5,7 +5,9 @@ strength follow the usual behavior of the real pigments (e.g. phthalo is
 transparent and very strong, titanium white is opaque and strong).
 """
 
+import functools
 import itertools
+import math
 from typing import NamedTuple
 
 import numpy as np
@@ -96,6 +98,42 @@ class Match(NamedTuple):
     error: float
 
 
+#: Proportions :func:`match` tries, from a pinch to equal parts, on a log scale.
+_STEPS = np.geomspace(1 / 64, 1.0, 10)
+#: About how many mixes :func:`match` evaluates in one batch.
+_BATCH_ROWS = 2048
+
+
+def _blocks(n_paints: int, n: int):
+    """The mixes of ``n`` of ``n_paints`` paints that :func:`match` tries
+    first, in blocks: one for each combination of paints with each of them in
+    turn as the main one (one part), going through every proportion of the
+    others. Returns the main paint of each block (blocks,), the others
+    (blocks, n - 1), and the proportions of the others (rows, n - 1)."""
+    grid = np.array(list(itertools.product(_STEPS, repeat=n - 1)))
+    combos = itertools.combinations(range(n_paints), n)
+    lead_others = [(c[i], c[:i] + c[i + 1 :]) for c in combos for i in range(n)]
+    leads = np.array([lead for lead, _ in lead_others], dtype=np.intp)
+    others = np.array([o for _, o in lead_others], dtype=np.intp)
+    return leads, others, grid
+
+
+#: :func:`_blocks`, remembered for small palettes and mixes (under 1 MB each).
+_small_blocks = functools.lru_cache(maxsize=32)(_blocks)
+
+
+def _volumes(n_paints, leads, others, grid) -> np.ndarray:
+    """The volume parts of the mixes of some blocks of :func:`_blocks`, as
+    (blocks, rows, n_paints)."""
+    W = np.zeros((len(leads), len(grid), n_paints))
+    blocks = np.arange(len(leads))
+    # W[blocks, :, leads] is (blocks, rows): the main paint's column of each
+    W[blocks, :, leads] = 1.0
+    for k in range(others.shape[1]):
+        W[blocks, :, others[:, k]] = grid[:, k]
+    return W
+
+
 def match(
     color: ColorLike,
     paints,
@@ -133,31 +171,39 @@ def match(
     Ss = np.array([p.S for p in paints])
 
     def errors(W):
-        """Delta E of the mixes with volume parts W (m, n_paints)."""
-        tot = W.sum(axis=1, keepdims=True)
+        """Delta E of the mixes with volume parts W (..., m, n_paints): one
+        result per row. Stacked ``@`` makes one BLAS call per (m, n_paints)
+        block and the rest is elementwise, so each block gets the same bits
+        as it would on its own (_km_layer_batch: as sp.km_layer)."""
+        tot = W.sum(axis=-1, keepdims=True)
         K = (W @ Ks) / tot * thickness
-        S = (W @ Ss) / tot[:, 0] * thickness
-        lab = sp.srgb_to_lab(sp.reflectance_to_srgb(sp.km_layer(K, S, ground)))
+        S = (W @ Ss) / tot[..., 0] * thickness
+        R = sp._km_layer_batch(K, S, ground)
+        lab = sp.srgb_to_lab(sp.reflectance_to_srgb(R))
         return np.linalg.norm(lab - target, axis=-1)
 
-    # proportions from a pinch to equal parts, on a log scale
-    steps = np.geomspace(1 / 64, 1.0, 10)
+    # Try the blocks of _blocks in order, many at a time, keeping the first
+    # mix with the smallest error: within a block the first minimum, and a
+    # block only if its minimum is strictly below the best so far (one with
+    # a NaN error is passed over: np.argmin points at the NaN).
     best_w, best_e = None, np.inf
     for n in range(1, min(max_paints, len(paints)) + 1):
-        grid = np.array(list(itertools.product(steps, repeat=n - 1)))
-        for combo in itertools.combinations(range(len(paints)), n):
-            # each paint in turn as the main one
-            for lead in range(n):
-                W = np.zeros((max(len(grid), 1), len(paints)))
-                W[:, combo[lead]] = 1.0
-                others = [c for c in combo if c != combo[lead]]
-                if others:
-                    W[:, others] = grid
-                e = errors(W)
-                i = int(np.argmin(e))
-                if e[i] < best_e:
-                    best_w, best_e = W[i].copy(), float(e[i])
-    # refine: nudge each part up and down, shrinking the step
+        size = math.comb(len(paints), n) * n + 10 ** (n - 1) * (n - 1)
+        small = size <= 100_000  # numbers in the arrays of _blocks
+        leads, others, grid = (_small_blocks if small else _blocks)(len(paints), n)
+        step = max(1, _BATCH_ROWS // len(grid))
+        for s in range(0, len(leads), step):
+            W = _volumes(len(paints), leads[s : s + step], others[s : s + step], grid)
+            e = errors(W)
+            i = np.argmin(e, axis=1)
+            e_min = e[np.arange(len(e)), i]
+            b = int(np.argmin(np.where(np.isnan(e_min), np.inf, e_min)))
+            if e_min[b] < best_e:
+                best_w, best_e = W[b, i[b]], float(e_min[b])
+    # refine: nudge each part up and down, shrinking the step. A pass takes
+    # the parts in turn: evaluate all its remaining nudges (two per part) from
+    # the current mix, accept the first that helps (the smaller of its two,
+    # the first if they tie) and continue from the part after it.
     if best_w is None:  # every mix was NaN: a NaN thickness or ground
         raise ValueError(
             "match found no mix to compare: thickness and over must be finite"
@@ -167,14 +213,21 @@ def match(
         improved = True
         while improved:
             improved = False
-            for j in np.flatnonzero(w > 0):
-                trial = np.repeat(w[None, :], 2, axis=0)
-                trial[0, j] *= factor
-                trial[1, j] /= factor
-                e = errors(trial)
-                k = int(np.argmin(e))
-                if e[k] < best_e - 1e-6:
-                    w, best_e, improved = trial[k], float(e[k]), True
+            todo = np.flatnonzero(w > 0)
+            while len(todo):
+                trials = np.tile(w, (len(todo), 2, 1))
+                rows = np.arange(len(todo))
+                trials[rows, 0, todo] *= factor
+                trials[rows, 1, todo] /= factor
+                e = errors(trials)
+                k = np.argmin(e, axis=1)
+                e_min = e[rows, k]
+                better = np.flatnonzero(e_min < best_e - 1e-6)
+                if not len(better):
+                    break
+                j = better[0]
+                w, best_e, improved = trials[j, k[j]], float(e_min[j]), True
+                todo = todo[j + 1 :]
     w = w / w[w > 0].min()
     parts = [(paints[j], float(w[j])) for j in np.flatnonzero(w > 0)]
     return Match(Paint.mix(*parts), parts, best_e)

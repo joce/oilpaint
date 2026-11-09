@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 import numpy as np
+from numba import njit
 
 # --------------------------------------------------------------------------
 # Wavelength sampling
@@ -394,6 +395,73 @@ def km_layer(kappa, sigma, ground):
     num = sigma * tau - ground * ((sigma + kappa) * tau - 1.0)
     den = (sigma + kappa - ground * sigma) * tau + 1.0
     return num / den
+
+
+def _km_layer_batch(kappa, sigma, ground):
+    """:func:`km_layer` for a large batch of layers over one ground: ``kappa``
+    (..., N_BANDS) and ``sigma`` (...) float64 arrays, ``ground`` (N_BANDS,).
+
+    The same operations in the same order, so the same result to the last
+    bit, but in two compiled passes over the batch (and numpy's ``tanh``
+    between them, so that too is the very same function) instead of some
+    twenty numpy passes. Anything else (other dtypes or shapes, array
+    subclasses) goes to :func:`km_layer`.
+    """
+    plain = (
+        type(kappa) is np.ndarray
+        and type(sigma) is np.ndarray
+        and type(ground) is np.ndarray
+        and kappa.dtype == sigma.dtype == np.float64
+        and kappa.shape[:-1] == sigma.shape
+        and kappa.shape[-1:] == ground.shape == (N_BANDS,)
+        and ground.dtype.kind == "f"
+        and ground.dtype.itemsize <= 8  # so float64 holds it exactly
+    )
+    if not plain:
+        return km_layer(kappa, sigma, ground)
+    # one signature for the kernels: C-contiguous float64
+    kappa2 = np.ascontiguousarray(kappa.reshape(-1, N_BANDS))
+    sigma1 = np.ascontiguousarray(sigma.reshape(-1))
+    ground = np.array(ground, dtype=np.float64)
+    B = np.empty(kappa2.shape)
+    _km_b(kappa2, sigma1, B)
+    R = np.empty(kappa2.shape)
+    _km_reflectance(kappa2, sigma1, ground, B, np.tanh(B), R)
+    return R.reshape(kappa.shape)
+
+
+# Plain IEEE arithmetic only (no fastmath): numba then neither reorders nor
+# fuses the operations, so each matches numpy's to the bit. "x <= 0.0: 0.0"
+# is np.maximum(x, 0.0): -0.0 becomes +0.0 and NaN stays NaN.
+@njit(cache=True, error_model="numpy")
+def _km_b(kappa, sigma, B):
+    for i in range(kappa.shape[0]):
+        s = sigma[i]
+        if s <= 0.0:
+            s = 0.0
+        for j in range(kappa.shape[1]):
+            k = kappa[i, j]
+            if k <= 0.0:
+                k = 0.0
+            B[i, j] = np.sqrt(k * k + 2.0 * k * s)
+
+
+@njit(cache=True, error_model="numpy")
+def _km_reflectance(kappa, sigma, ground, B, tanh_B, R):
+    for i in range(kappa.shape[0]):
+        s = sigma[i]
+        if s <= 0.0:
+            s = 0.0
+        for j in range(kappa.shape[1]):
+            k = kappa[i, j]
+            if k <= 0.0:
+                k = 0.0
+            b = B[i, j]
+            tau = 1.0 - b * b / 3.0 if b < 1e-4 else tanh_B[i, j] / b
+            g = ground[j]
+            num = s * tau - g * ((s + k) * tau - 1.0)
+            den = (s + k - g * s) * tau + 1.0
+            R[i, j] = num / den
 
 
 def km_film(kappa, sigma):
