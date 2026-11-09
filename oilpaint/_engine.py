@@ -1816,8 +1816,6 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
     fb = np.zeros((h, w), np.float32)
     ta = np.empty(PACKED, np.float32)
     ua = np.empty(PACKED, np.float32)
-    tb = np.empty(PACKED, np.float32)
-    ub = np.empty(PACKED, np.float32)
     # (the same, for every column)
     tcol = np.empty((w, PACKED), np.float32)
     ucol = np.empty((w, PACKED), np.float32)
@@ -1910,15 +1908,14 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
                         t_a = ta[c] if saved else top[Ya, Xa, c]
                         u_a = ua[c] if saved else und[Ya, Xa, c]
                         t_b, u_b = top[Yb, Xb, c], und[Yb, Xb, c]
-                        tb[c], ub[c] = t_b, u_b
+                        # (b as it was: a, for the next pair)
+                        ta[c], ua[c] = t_b, u_b
                         mt = t_a * f_a - t_b * f_b
                         mu = u_a * f_a - u_b * f_b
                         top[Ya, Xa, c] -= mt
                         und[Ya, Xa, c] -= mu
                         top[Yb, Xb, c] += mt
                         und[Yb, Xb, c] += mu
-                    for c in range(PACKED):
-                        ta[c], ua[c] = tb[c], ub[c]
                     saved = True
                     # (both pixels changed)
                     Vs[yp, xp] = top[Ya, Xa, IV] + und[Ya, Xa, IV]
