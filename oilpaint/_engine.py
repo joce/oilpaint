@@ -244,7 +244,9 @@ def harmless(top, und):
         tot += abs(
             math.log1p(max(top[c], zero) / va) - math.log1p(max(und[c], zero) / vb)
         )
-    return tot / IV < SAME_LAYER
+        if not tot / IV < SAME_LAYER:  # (the differences only add up)
+            return False
+    return True
 
 
 @njit(cache=True, error_model="numpy")
@@ -790,14 +792,18 @@ def deposit(
                     laid, touched, old = True, False, False
             # an earlier top layer worth keeping out of the layer below: hold the new
             # paint back until we know how well the stroke covers it
+            hold = False
+            known_harmless = False  # (as worked out here: it is the same below)
             if (
                 holding
                 and old
                 and pinfo[1] <= Y < pinfo[1] + pinfo[3]
                 and pinfo[2] <= X < pinfo[2] + pinfo[4]
                 and top[Y, X, IV] > 1e-4
-                and not harmless(top[Y, X], und[Y, X])
             ):
+                known_harmless = harmless(top[Y, X], und[Y, X])
+                hold = not known_harmless
+            if hold:
                 py, px = Y - pinfo[1], X - pinfo[2]
                 for c in range(PACKED):
                     paint[py, px, c] += np.float32(dep[y, x, c])
@@ -836,7 +842,7 @@ def deposit(
                     k = buries(dd)
                     if has_reach:
                         k = max(k, smoothstep(BODY0, BODY1, reach[y, x]))
-                    if k < 1.0 and harmless(top[Y, X], und[Y, X]):
+                    if k < 1.0 and (known_harmless or harmless(top[Y, X], und[Y, X])):
                         k = 1.0
                     k32 = np.float32(k)
                     for c in range(PACKED):
