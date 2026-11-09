@@ -996,16 +996,39 @@ def spread(cv, pend, br, sy0, sx0, w, pk, cover, stroke_id, by_film):
             for c in range(PACKED):
                 tip[b, c] += pk[c] / COLUMNS
         return
+    # (only where it lands: elsewhere there is nothing to lay, and it covers
+    # nothing)
     hh, ww = w.shape
-    dep = np.empty((hh, ww, PACKED))
-    d = np.empty((hh, ww))
+    y0, y1, x0, x1 = hh, 0, ww, 0
     for y in range(hh):
         for x in range(ww):
+            if w[y, x] != 0 or cover[y, x] != 0:
+                y0, y1 = min(y0, y), max(y1, y + 1)
+                x0, x1 = min(x0, x), max(x1, x + 1)
+    if y0 >= y1:
+        return
+    dep = np.empty((y1 - y0, x1 - x0, PACKED))
+    d = np.empty((y1 - y0, x1 - x0))
+    for y in range(y0, y1):
+        for x in range(x0, x1):
             share = w[y, x] / tot
-            d[y, x] = share * pk[IV]
+            d[y - y0, x - x0] = share * pk[IV]
             for c in range(PACKED):
-                dep[y, x, c] = share * pk[c]
-    deposit(cv, pend, sy0, sx0, dep, d, cover, stroke_id, True, by_film, d, False)
+                dep[y - y0, x - x0, c] = share * pk[c]
+    deposit(
+        cv,
+        pend,
+        sy0 + y0,
+        sx0 + x0,
+        dep,
+        d,
+        cover[y0:y1, x0:x1],
+        stroke_id,
+        True,
+        by_film,
+        d,
+        False,
+    )
 
 
 @njit(cache=True, error_model="numpy")
