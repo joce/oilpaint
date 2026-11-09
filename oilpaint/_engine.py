@@ -1963,6 +1963,44 @@ def box_blur(a, r):
 
 
 @njit(cache=True, error_model="numpy")
+def box_blur_rows(a, r, lo, hi, out):
+    """:func:`box_blur` of ``a`` only in each row y's columns lo[y]..hi[y] (the
+    same numbers there), into ``out``. It reads ``a`` within r px of them."""
+    h, w = a.shape
+    n = 2 * r + 1
+    tmp = np.empty(w)
+    for y in range(h):
+        if lo[y] >= hi[y]:
+            continue
+        for x in range(max(lo[y] - r, 0), min(hi[y] + r, w)):
+            acc = 0.0
+            for k in range(-r, r + 1):
+                acc += a[min(max(y + k, 0), h - 1), x]
+            tmp[x] = acc / n
+        for x in range(lo[y], hi[y]):
+            acc = 0.0
+            for k in range(-r, r + 1):
+                acc += tmp[min(max(x + k, 0), w - 1)]
+            out[y, x] = acc / n
+
+
+@njit(cache=True, error_model="numpy")
+def grown(lo, hi, r, w):
+    """Row spans (lo[y]..hi[y] in each row y) grown by r px all round, within
+    0..w."""
+    h = lo.shape[0]
+    lo2 = np.full(h, w, np.int64)
+    hi2 = np.zeros(h, np.int64)
+    for y in range(h):
+        if lo[y] >= hi[y]:
+            continue
+        for yy in range(max(y - r, 0), min(y + r + 1, h)):
+            lo2[yy] = min(lo2[yy], max(lo[y] - r, 0))
+            hi2[yy] = max(hi2[yy], min(hi[y] + r, w))
+    return lo2, hi2
+
+
+@njit(cache=True, error_model="numpy")
 def layer_speed(z0, z1, gap, slip):
     """Speed, as a fraction of the blade's, of a wet layer between heights z0
     and z1 above the canvas, with the blade at height ``gap``: below the blade
@@ -2031,33 +2069,45 @@ def flow_under_blade(
     inside = np.empty((hh, ww))
     u_src = np.empty((hh, ww))
     t_src = np.empty((hh, ww))
-    c_u = np.empty((hh, ww))
-    c_t = np.empty((hh, ww))
-    fx = np.empty((hh, ww), np.float32)
-    fy = np.empty((hh, ww), np.float32)
+    u = np.empty((hh, ww))
+    t = np.empty((hh, ww))
+    # Nothing moves where the blade isn't (there the speeds are 0): the work is
+    # done only where it is, and where the paint it moves goes, as the columns
+    # lo[y]..hi[y] of each row y.
+    in_lo = np.empty(hh, np.int64)
+    in_hi = np.empty(hh, np.int64)
+    c_lo = np.empty(hh, np.int64)
+    c_hi = np.empty(hh, np.int64)
     for k in range(1, n_sub + 1):
         # the blade's position along the motion
         pos = -ds + k * step
         any_in = False
         for y in range(hh):
+            in_lo[y], in_hi[y] = ww, 0
             for x in range(ww):
                 v = lateral[y, x] * clip(
                     half[y, x] - abs(along[y, x] - pos - c[y, x]) + 0.5, 0.0, 1.0
                 )
                 inside[y, x] = v
-                any_in = any_in or v != 0
+                if v != 0:
+                    any_in = True
+                    in_lo[y], in_hi[y] = min(in_lo[y], x), x + 1
         if not any_in:
             continue
         # the flow is smooth over a pixel or two: speeds from lightly smoothed heights
+        lo1, hi1 = grown(in_lo, in_hi, 1, ww)
         for y in range(hh):
-            for x in range(ww):
+            for x in range(lo1[y], hi1[y]):
                 u_src[y, x] = und[sy0 + y, sx0 + x, IV]
                 t_src[y, x] = 0.0 if own[y, x] else top[sy0 + y, sx0 + x, IV]
-        u = box_blur(u_src, 1)
-        t = box_blur(t_src, 1)
+        box_blur_rows(u_src, 1, in_lo, in_hi, u)
+        box_blur_rows(t_src, 1, in_lo, in_hi, t)
+        c_u = np.zeros((hh, ww))
+        c_t = np.zeros((hh, ww))
         any_c = False
         for y in range(hh):
-            for x in range(ww):
+            c_lo[y], c_hi[y] = ww, 0
+            for x in range(in_lo[y], in_hi[y]):
                 # (heights in single precision, like the paint: a film too thin to
                 # change the height of the paint below has no thickness, and no speed of
                 # its own)
@@ -2073,18 +2123,27 @@ def flow_under_blade(
                     np.float32(0.0), uu, gap[y, x], slip[y, x]
                 )
                 c_t[y, x] = contact * layer_speed(uu, uu + tt, gap[y, x], slip[y, x])
-                any_c = any_c or contact != 0
+                if contact != 0:
+                    any_c = True
+                    c_lo[y], c_hi[y] = min(c_lo[y], x), x + 1
         if not any_c:
             continue
         # viscosity: neighbouring paint drags each other along, so the speed varies
         # smoothly (without it, the paint tears into foam)
-        frac_u = box_blur(c_u, viscous)
-        frac_t = box_blur(c_t, viscous)
+        f_lo, f_hi = grown(c_lo, c_hi, viscous, ww)
+        frac_u = np.zeros((hh, ww))
+        frac_t = np.zeros((hh, ww))
+        box_blur_rows(c_u, viscous, f_lo, f_hi, frac_u)
+        box_blur_rows(c_t, viscous, f_lo, f_hi, frac_t)
+        # (and the pixels next to those, which they pass paint on to)
+        g_lo, g_hi = grown(f_lo, f_hi, 1, ww)
+        fx = np.zeros((hh, ww), np.float32)
+        fy = np.zeros((hh, ww), np.float32)
         for li in range(2):
             layer = und if li == 0 else top
             frac = frac_u if li == 0 else frac_t
             for y in range(hh):
-                for x in range(ww):
+                for x in range(f_lo[y], f_hi[y]):
                     f = clip(frac[y, x], 0.0, 1.0) * step
                     if li == 1 and own[y, x]:
                         f = 0.0
@@ -2094,8 +2153,9 @@ def flow_under_blade(
             # and in y (walking upstream, so the neighbours are still as they were)
             for j in range(hh):
                 y = hh - 1 - j if ydir > 0 else j
-                for i in range(ww):
-                    x = ww - 1 - i if xdir > 0 else i
+                lo_y, hi_y = g_lo[y], g_hi[y]
+                for i in range(hi_y - lo_y):
+                    x = hi_y - 1 - i if xdir > 0 else lo_y + i
                     Y, X = sy0 + y, sx0 + x
                     xs, ys = x - xdir, y - ydir
                     for ch in range(PACKED):
