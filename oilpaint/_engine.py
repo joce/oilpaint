@@ -805,6 +805,10 @@ def deposit(
                 if has_reach:
                     prch[py, px] += reach[y, x]
                 pon[py, px] = True
+                # (where paint is held: rows pinfo[5]..pinfo[6], columns
+                # pinfo[7]..pinfo[8])
+                pinfo[5], pinfo[6] = min(pinfo[5], py), max(pinfo[6], py + 1)
+                pinfo[7], pinfo[8] = min(pinfo[7], px), max(pinfo[8], px + 1)
                 # the body of the brush has been over it, or it laid a covering film:
                 # bury the old top now
                 if buried(paint[py, px, IV], prch[py, px]) >= BURIED:
@@ -863,8 +867,8 @@ def settle_pending(cv, pend, stroke_id):
     paint, pcov, prch, pon, pinfo = pend
     if pinfo[0] == 0:
         return
-    for py in range(pinfo[3]):
-        for px in range(pinfo[4]):
+    for py in range(pinfo[5], pinfo[6]):
+        for px in range(pinfo[7], pinfo[8]):
             if not pon[py, px]:
                 continue
             Y, X = pinfo[1] + py, pinfo[2] + px

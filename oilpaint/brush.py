@@ -854,14 +854,16 @@ def _pending(y0, y1, x0, x1):
     feathered edge are settled when the stroke ends: the old top keeps its
     place, the share the faint new film would bury goes under, and the new
     paint stirs into the rest. Returns (paint, cover, reach, held, (on, y0,
-    x0, h, w)), as :func:`_engine.deposit` takes it."""
+    x0, h, w, and the rows y0..y1 and columns x0..x1 of it where any is held)),
+    as :func:`_engine.deposit` takes it."""
     h, w = y1 - y0, x1 - x0
     return (
         np.zeros((h, w, PACKED), np.float32),
         np.zeros((h, w), np.float32),
         np.zeros((h, w), np.float32),
         np.zeros((h, w), bool),
-        np.array([1, y0, x0, h, w], np.int64),
+        # (and where any is held: none yet)
+        np.array([1, y0, x0, h, w, h, 0, w, 0], np.int64),
     )
 
 
@@ -871,7 +873,7 @@ _NO_PENDING = (
     np.zeros((1, 1), np.float32),
     np.zeros((1, 1), np.float32),
     np.zeros((1, 1), bool),
-    np.zeros(5, np.int64),
+    np.zeros(9, np.int64),
 )
 # (chord tables of a round footprint: not needed)
 _NO_TABLES = (np.zeros(2), np.zeros(2), np.zeros(2))
