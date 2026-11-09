@@ -382,11 +382,15 @@ canvas.stroke(path, paint=paint, width=14)
   glazes layer over it optically.
 * `canvas.render(lighting=True, light=(-0.6, -0.8, 1.1), relief=1.0, gloss=1.0)`
   returns an `(H, W, 3)` sRGB float image, lit to show impasto and the surface
-  texture: shading of the relief, cast shadows, darker hollows and the gloss
-  of oil. `light` is the direction of the light (x, y, z; y points down the
-  image): a smaller z rakes across the surface and brings out the relief
+  texture as if photographed under a studio lamp: shading of the relief, soft
+  cast shadows, darker grooves and hollows, and the gloss of oil: sharp
+  highlights on the crests and lips of thick wet paint, duller once dry,
+  while thin paint stays matte. Flat paint keeps its colour. `light` is the
+  direction of the lamp (x, y, z; y points down the image; z must be
+  positive, or `ValueError`): a smaller z rakes across the surface and brings out the relief
   (the impasto images here use `(-0.6, -0.8, 0.7)`). `relief` scales the
-  height of the paint, `gloss` the highlights.
+  height of the paint, `gloss` the highlights (0 for none; neither may be
+  negative).
 * `canvas.surface_height()` is the height map used for lighting, in pixels.
 * `canvas.save("out.png", **render_options)` and `canvas.to_pil()` export the image.
 * `canvas.color_at(x, y)`, `canvas.thickness`, `canvas.wet_thickness` and
@@ -868,9 +872,12 @@ and its twisted ribbons.
 **Light.** Rendering lights the same surface the paint is pushed around on:
 the canvas weave, dried paint and wet paint. Thin strokes get soft
 shoulders; impasto keeps every ridge and groove.
-It then shades it with the light, casts shadows from ridges onto the paint
-behind them, darkens deep hollows, and adds the gloss of oil, sharper while
-it's wet.
+It then shades it with a lamp of some size: ridges cast shadows onto the
+paint behind them, sharp at their foot and softer further away; grooves,
+hollows and the foot of thick paint get less light from the room; and the oil
+mirrors the lamp in sharp highlights on the slopes that face it, brighter and
+sharper while the paint is wet. Highlights roll off towards white rather than
+clip.
 
 ## Limitations
 

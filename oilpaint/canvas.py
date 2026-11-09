@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 import numpy as np
 
-from . import brushes
+from . import _render, brushes
 from . import spectral as sp
 from ._filters import _box_blur, _max_filter, _smooth121
 from .brush import (
@@ -445,7 +445,7 @@ class Canvas:
     def render(
         self,
         lighting: bool = True,
-        light: Sequence[float] = (-0.6, -0.8, 1.1),
+        light: Sequence[float] | None = (-0.6, -0.8, 1.1),
         relief: float = 1.0,
         gloss: float = 1.0,
     ) -> np.ndarray:
@@ -455,17 +455,32 @@ class Canvas:
         a raking light from ``light`` (x, y, z; y points down the image).
         ``relief`` scales the apparent height of paint, ``gloss`` the oily
         highlights. A reverse painting is seen through flat glass: no relief.
+
+        When lit, raises ValueError, before any work, unless ``light`` is
+        three finite numbers with z > 0 (the lamp in front of the picture),
+        and ``relief`` and ``gloss`` are finite and not negative. Unlit (or
+        reverse), they are not used and not checked.
         """
+        lamp = None
+        if lighting and not self.reverse:  # (else none of these is used)
+            lamp = _check_light(light)
+            for name, value in (("relief", relief), ("gloss", gloss)):
+                if not (np.isfinite(value) and value >= 0):
+                    raise ValueError(f"{name} must be finite and >= 0, got {value!r}")
         lin = self._render_linear()
         matte = self._matte()
         if matte is not None:
             # Paint sunk into an absorbent ground loses its gloss: the ~4% of light
             # a glossy surface reflects away is scattered back diffusely instead,
             # so darks look lighter and duller.
-            lin = lin + (0.04 * matte)[..., None] * (1.0 - lin)
-        if lighting and not self.reverse:
-            lin = self._light(lin, np.asarray(light, float), relief, gloss, matte)
-        return sp.linear_to_srgb(lin).astype(np.float32)
+            lin = lin + (OIL_F0 * matte)[..., None] * (1.0 - lin)
+        if lamp is not None:
+            lin = self._light(lin, lamp, float(relief), float(gloss), matte)
+        # to sRGB in place (lin is our own float32 array), in float64 a few
+        # rows at a time
+        for s in self._row_chunks():
+            lin[s] = sp.linear_to_srgb(lin[s])
+        return lin
 
     def _matte(self):
         """Per-pixel mattness of paint sunk into an absorbent ground (None if not
@@ -475,67 +490,113 @@ class Canvas:
             return None
         t = self.top_v + self.und_v + self.dry_height
         coverage = np.clip(t / MIN_FILM, 0.0, 1.0)
-        return (a * np.exp(-t / 2.0) * coverage).astype(np.float32)
+        return (a * np.exp(-t / SINK_DEPTH) * coverage).astype(np.float32)
 
     def _render_linear(self) -> np.ndarray:
         out = np.empty((self.height, self.width, 3), np.float32)
-        for s in self._row_chunks():
-            out[s] = sp.reflectance_to_linear_rgb(self._reflectance_rows(s))
+        if self.reverse:
+            for s in self._row_chunks():
+                out[s] = sp.reflectance_to_linear_rgb(self._reflectance_rows(s))
+        else:
+            _render.paint_rgb(
+                self.top,
+                self.und,
+                self.top_a,
+                self.und_a,
+                self.ground,
+                sp.SPECTRUM_TO_RGB,
+                MIN_FILM,
+                out,
+            )
         return out
 
     def surface_height(self, relief: float = 1.0) -> np.ndarray:
         """Height of the painted surface in pixels, as used for lighting: the
         same surface the paint is pushed around on (the canvas weave, dried
         paint and wet paint)."""
-        paint = self.top_v + self.und_v + self.dry_height
-        surface = self._floor + self.top_v + self.und_v
+        wet = self.top_v + self.und_v
+        paint = wet + self.dry_height
+        surface = self._floor + wet
         # Thin strokes thin out towards their edges (soft shoulders, low
         # relief); impasto keeps every ridge, groove and sharp edge, and bare
         # canvas its weave.
-        broad = _box_blur(_box_blur(surface, 2), 2)
+        broad = _blur(_blur(surface, 2), 2)
         fine = _smooth121(surface)
-        detail = 0.4 + 0.6 * _smoothstep(0.6, 2.0, _box_blur(np.abs(fine - broad), 2))
-        detail = np.maximum(detail, np.exp(-paint / 0.3))
-        return (HEIGHT_PX * relief) * (broad + detail * (fine - broad))
+        detail = DETAIL_MIN + (1.0 - DETAIL_MIN) * _smoothstep(
+            DETAIL_VAR[0], DETAIL_VAR[1], _blur(np.abs(fine - broad), 2)
+        )
+        detail = np.maximum(detail, np.exp(-paint / WEAVE_FILM))
+        return ((HEIGHT_PX * relief) * (broad + detail * (fine - broad))).astype(
+            np.float32
+        )
 
     def _light(self, lin, light, relief, gloss, matte=None):
-        h = self.surface_height(relief)
-        gy, gx = np.gradient(h)
-        n = np.stack([-gx, -gy, np.ones_like(h)], -1)
-        n /= np.linalg.norm(n, axis=-1, keepdims=True)
+        """Light the linear colour ``lin`` (H, W, 3) as a painting under a
+        studio lamp in the direction ``light``, seen from straight in front.
+        Shaded with the colour multiplied, so flat paint lit by the lamp keeps
+        exactly its colour:
+
+        * the lamp: Lambert on the slope of each pixel (normalised so that
+          flat paint gets 1), less where higher paint between it and the lamp
+          casts a shadow. The lamp has a size (LIGHT_SIZE), so shadows are
+          sharp at their foot and soften further from what casts them, and
+          some of its light still gets round (SHADOW_DEPTH);
+        * the room (AMBIENT): light from all around, less in grooves and
+          hollows and at the foot of thick paint, from how high the surface
+          stands around each pixel at a few scales (AO_SCALES); fine
+          crevices also see less of the lamp (CAVITY);
+        * gloss: the surface of the oil mirrors the lamp (Fresnel 4%) on the
+          slopes that face halfway between the lamp and the viewer: a sharp
+          highlight (GGX, ROUGH_WET; weaker and a little broader once dry) on
+          the crests and lips of thick paint, spread by the curvature inside
+          each pixel. Only facets near that mirror slope shine (GLOSS_CUT),
+          less what flat paint shows, so paint that does not mirror the lamp
+          keeps its colour: no veil of reflected light over it. Thin, lean
+          paint barely shines (GLOSS_FILM), paint sunk into an absorbent
+          ground less;
+        * brighter-than-paint values roll off towards white rather than clip.
+        """
+        h = np.ascontiguousarray(self.surface_height(relief), dtype=np.float32)
         L = light / np.linalg.norm(light)
-        flat = L[2]
-        ndotl = np.clip(n @ L, 0, None)
-        # Raking light: impasto ridges cast shadows on the paint behind them...
-        shadow = _cast_shadow(h, L)
-        # ...and deep grooves and hollows get less light from all around.
-        cavity = np.clip(_box_blur(h, 3) - h, 0.0, None)
-        ambient = 1.0 - 0.35 * _smoothstep(0.3, 2.0, cavity)
-        direct = (ndotl / flat) * (1.0 - 0.6 * shadow)
-        diffuse = ambient * (0.2 + 0.8 * direct)
-        # Oil gloss: a broad sheen plus sharp highlights on the slopes facing
-        # the light (stronger while wet). Flat paint seen from the front shows none.
-        Hv = L + np.array([0.0, 0.0, 1.0])
-        Hv /= np.linalg.norm(Hv)
-        flat_h = Hv[2]
-        tilt = np.clip((np.clip(n @ Hv, 0, None) - flat_h) / (1 - flat_h), 0, None)
-        paint_h = self.top_v + self.und_v + self.dry_height
-        coverage = np.clip(paint_h / 0.5, 0, 1)
-        wet = np.clip((self.top_v + self.und_v) / 0.5, 0, 1)
-        spec = (
-            gloss
-            * coverage
-            * (1.0 - shadow)
-            * ((0.03 + 0.07 * wet) * tilt**3 + (0.05 + 0.15 * wet) * tilt**8)
+        lx, ly, lz = (float(v) for v in L)
+        vis = np.empty_like(h)
+        _render.shadows(h, lx, ly, lz, LIGHT_SIZE, SHADOW_REACH, vis)
+        aos = np.empty((len(AO_SCALES),) + h.shape, np.float32)
+        for k, (r, _) in enumerate(AO_SCALES):
+            _render.box_blur(h, r, aos[k])
+        wet = self.top_v + self.und_v
+        out = np.empty_like(lin)
+        _render.shade(
+            h=h,
+            vis=vis,
+            aos=aos,
+            ao=np.array(AO_SCALES, np.float64).reshape(-1, 2),
+            lin=np.ascontiguousarray(lin, dtype=np.float32),
+            paint=wet + self.dry_height,
+            wet=wet,
+            matte=matte if matte is not None else np.zeros((0, 0), np.float32),
+            lx3=lx,
+            ly3=ly,
+            lz3=lz,
+            ambient=AMBIENT,
+            shadow_depth=SHADOW_DEPTH,
+            cavity=CAVITY,
+            ao_eps=AO_EPS,
+            footprint=FOOTPRINT,
+            oil_f0=OIL_F0,
+            rough_wet=ROUGH_WET,
+            rough_dry=ROUGH_DRY,
+            gloss_wet=gloss * GLOSS_WET,
+            gloss_dry=gloss * GLOSS_DRY,
+            gloss_taper=GLOSS_TAPER,
+            gloss_cut=GLOSS_CUT,
+            film0=GLOSS_FILM[0],
+            film1=GLOSS_FILM[1],
+            dry0=GLOSS_DRY_FILM[0],
+            dry1=GLOSS_DRY_FILM[1],
+            out=out,
         )
-        if matte is not None:
-            spec = spec * (
-                1.0
-                - 0.9
-                * np.clip(matte / max(self.surface.absorbency, 1e-6), 0, 1)
-                * self.surface.absorbency
-            )
-        return np.clip(lin * diffuse[..., None] + spec[..., None], 0, None)
+        return out
 
     def save(self, path: str, **render_options) -> None:
         """Render and save as PNG."""
@@ -553,6 +614,59 @@ class Canvas:
 #: Rendered height of one unit of paint thickness, in pixels (``relief`` in
 #: :meth:`Canvas.render` scales it).
 HEIGHT_PX = 0.6
+
+#: Lighting (see Canvas._light). Share of the light that comes from all
+#: around (the room) rather than from the lamp.
+AMBIENT = 0.2
+#: How much of the lamp's light a cast shadow takes away (the rest gets
+#: round the paint, from the width of the lamp and the room).
+SHADOW_DEPTH = 0.75
+#: Angular radius of the lamp, in radians: the softness of cast shadows.
+LIGHT_SIZE = 0.1
+#: Furthest a cast shadow is looked for, in pixels: as far as the tallest
+#: relief could cast one at the lamp's elevation, but no further than this
+#: (beyond it, shadows fade out rather than stop).
+SHADOW_REACH = 256.0
+#: Darkening of fine crevices (the first AO scale) for all light, not only
+#: the ambient share.
+CAVITY = 0.8
+#: Ambient occlusion: (radius in pixels, weight) of each scale.
+AO_SCALES = ((2, 1.0), (8, 0.8), (24, 0.5))
+#: Hollows shallower than this (times the radius) are not occluded: the
+#: weave of bare canvas stays even.
+AO_EPS = 0.04
+#: Reflectance of the oil surface seen head-on (refractive index ~1.5).
+OIL_F0 = 0.04
+#: Roughness (GGX alpha) of wet and of dried oil paint.
+ROUGH_WET, ROUGH_DRY = 0.08, 0.15
+#: Strength of the highlight on wet and on dried paint (dried oil has sunk
+#: and is far less glossy).
+GLOSS_WET, GLOSS_DRY = 1.5, 0.25
+#: The lamp is mirrored only by facets within GLOSS_CUT alphas (roughness)
+#: of the mirror slope, tapering off smoothly from GLOSS_TAPER: the oil shows
+#: highlights without hard edges, never a veil of reflected light over paint
+#: that does not face the lamp's mirror direction.
+GLOSS_TAPER, GLOSS_CUT = 0.5, 2.0
+#: Wet paint thickness (in units of paint thickness) from which it starts to
+#: shine, and from which it is fully glossy; the same for dried paint.
+GLOSS_FILM = (0.5, 2.5)
+GLOSS_DRY_FILM = (2.0, 6.0)
+#: How much the spread of slopes across a pixel and its neighbours (its
+#: curvature) widens its highlight: enough that a highlight on a steep ridge
+#: fades out over a pixel or two instead of stopping between neighbours.
+FOOTPRINT = 2.0
+
+#: Share of the fine relief kept on gently modelled paint, and the local
+#: relief (in units of paint thickness) from which all of it is kept.
+DETAIL_MIN = 0.4
+DETAIL_VAR = (0.15, 0.8)
+
+#: Paint thinner than this (units of paint thickness) keeps the full detail
+#: of the weave under it: a film that thin follows the threads.
+WEAVE_FILM = 0.3
+#: Paint about this thick (units of paint thickness) is mostly out of reach
+#: of an absorbent ground: thinner paint sinks in and goes matte.
+SINK_DEPTH = 2.0
 
 #: Height of the canvas weave, in units of paint thickness: paint about this
 #: thick fills the valleys between the threads.
@@ -618,26 +732,36 @@ def _film(kappa, sigma, volume, alpha):
     return r_avg, cov * t * t + (1.0 - cov) * (1.0 - r_avg)
 
 
-def _cast_shadow(h: np.ndarray, L: np.ndarray, max_steps: int = 32) -> np.ndarray:
-    """0..1: how much each pixel is shadowed from the light direction ``L``
-    by higher paint (heights ``h`` in pixels) between it and the light."""
-    horiz = float(np.hypot(L[0], L[1]))
-    if horiz < 1e-6:
-        return np.zeros_like(h)
-    lx, ly = L[0] / horiz, L[1] / horiz
-    rise = L[2] / horiz  # how fast the light ray climbs per pixel
-    span = float(h.max() - h.min())
-    steps = int(min(max_steps, np.ceil(span / max(rise, 1e-3)) + 1))
-    if steps < 1 or span < 0.05:
-        return np.zeros_like(h)
-    H, W = h.shape
-    blocked = np.zeros_like(h)
-    for t in range(1, steps + 1):
-        dx, dy = int(round(t * lx)), int(round(t * ly))
-        ys = np.clip(np.arange(H) + dy, 0, H - 1)
-        xs = np.clip(np.arange(W) + dx, 0, W - 1)
-        np.maximum(blocked, h[ys][:, xs] - h - t * rise, out=blocked)
-    return np.clip(blocked / 0.8, 0.0, 1.0).astype(np.float32)
+#: The lamp must stand at least this far above the picture's plane (the z of
+#: its unit direction): any lower and its light would reach no flat paint.
+MIN_LIGHT_Z = 1e-6
+
+
+def _check_light(light) -> np.ndarray:
+    """``light`` as a unit vector (float array of 3), or ValueError."""
+    try:
+        L = np.asarray(light, dtype=np.float64)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"light must be three numbers (x, y, z), got {light!r}") from e
+    if L.shape != (3,) or not np.isfinite(L).all():
+        raise ValueError(f"light must be three finite numbers (x, y, z): {light!r}")
+    big = np.abs(L).max()
+    if big > 0:
+        L = L / big  # (scaled first, so the norm neither overflows nor underflows)
+        L = L / np.linalg.norm(L)
+    if not L[2] >= MIN_LIGHT_Z:
+        raise ValueError(
+            f"light must shine from in front of the picture (z > 0), got {light!r}"
+        )
+    return L
+
+
+def _blur(a: np.ndarray, r: int) -> np.ndarray:
+    """Box blur of a float32 map (compiled ``_box_blur``)."""
+    a = np.ascontiguousarray(a, dtype=np.float32)
+    out = np.empty_like(a)
+    _render.box_blur(a, r, out)
+    return out
 
 
 def _smoothstep(e0, e1, x):

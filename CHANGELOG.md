@@ -53,6 +53,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   further up the hairs, more so under pressure and with soft hair, and part
   of it goes into the body of the brush, where it lasts into the next
   strokes. A thin film still only dirties the tips.
+- New lighting of the relief, closer to a painting photographed under a
+  studio lamp: crisper bristle marks and edges on thick paint; sharp oil
+  highlights on the crests and lips of wet impasto (duller once dry, none on
+  thin lean paint); cast shadows from a lamp of some size, sharp at their
+  foot and fading further away; less light from the room in grooves,
+  hollows and at the foot of thick paint; highlights that roll off to white
+  instead of clipping. Flat paint still renders in its own colour.
+  `surface_height()` keeps more of the fine relief, so its values change (by
+  up to about 0.8 px on impasto), and a very high `relief` can now shade
+  deep grooves down to black.
+- A lit `render()` checks its arguments before doing any work: `light` must be
+  three finite numbers with z > 0 (a lamp in front of the picture), and
+  `relief` and `gloss` finite and not negative; otherwise it raises
+  `ValueError`. Unlit and reverse renders do not use them and do not check
+  them.
+- Rendering is faster: compositing, colour conversion and lighting run as
+  compiled kernels, about 1.8 to 2.8 times faster lit and 3.5 to 8 times
+  unlit (measured on 500 x 650 to 1300 x 1000 canvases), and renders in
+  separate threads run in parallel.
 
 ## [0.1.0] - 2026-11-03
 
