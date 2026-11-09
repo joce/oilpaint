@@ -6,9 +6,10 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from . import _engine as eng
 from . import brushes
 from . import spectral as sp
-from ._filters import _box_blur, _max_filter, _smooth121
+from ._filters import _box_blur, _smooth121
 from .brush import (
     IB,
     PACKED,
@@ -367,8 +368,8 @@ class Canvas:
             np.float32
         )
         r_fine = max(1, int(round(0.5 * self.surface.scale)))
-        self._peaks_fine = _box_blur(_max_filter(self._floor, r_fine), 1)
-        self._peaks_wide = _box_blur(_max_filter(self._floor, 3 * r_fine + 3), 2)
+        self._peaks_fine = _box_blur(eng.max_filter(self._floor, r_fine), 1)
+        self._peaks_wide = _box_blur(eng.max_filter(self._floor, 3 * r_fine + 3), 2)
 
     # ------------------------------------------------------------------
     # inspection

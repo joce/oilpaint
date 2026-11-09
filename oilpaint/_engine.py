@@ -1968,6 +1968,31 @@ def fix_coverage(top, und, top_a, und_a, ry0, ry1, rx0, rx1):
 
 
 @njit(cache=True, error_model="numpy")
+def max_filter(a, r):
+    """Maximum over the (2r+1)-square around each pixel, edges clamped, in
+    single precision: what ``_filters._max_filter`` gives."""
+    h, w = a.shape
+    tmp = np.empty((h, w), np.float32)
+    for y in range(h):
+        for x in range(w):
+            m = np.float32(a[max(y - r, 0), x])
+            for yy in range(max(y - r, 0) + 1, min(y + r + 1, h)):
+                v = np.float32(a[yy, x])
+                if v > m:
+                    m = v
+            tmp[y, x] = m
+    out = np.empty((h, w), np.float32)
+    for y in range(h):
+        for x in range(w):
+            m = tmp[y, max(x - r, 0)]
+            for xx in range(max(x - r, 0) + 1, min(x + r + 1, w)):
+                if tmp[y, xx] > m:
+                    m = tmp[y, xx]
+            out[y, x] = m
+    return out
+
+
+@njit(cache=True, error_model="numpy")
 def box_blur(a, r):
     """Separable box blur with edge clamping (radius r)."""
     h, w = a.shape

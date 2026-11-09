@@ -48,7 +48,6 @@ from . import _engine as eng
 from . import spectral as sp
 from ._dab import dab_pattern
 from ._engine import COLUMNS, IB, IS, IV, PACKED
-from ._filters import _max_filter
 from .noise import aniso_noise, value_noise_1d, value_noise_2d
 from .paint import ColorLike, Paint, as_paint
 from .spline import Path, Profile, as_path, evaluate_profile
@@ -1369,7 +1368,7 @@ def _knife_step(run: _Run, s: _Step) -> None:
         under_blade = (s.aa * _clip(s.h - np.abs(s.rel) + 0.5, 0.0, 1.0))[wsl] > 0.5
         if under_blade.any():
             span = int(_clip(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2, 10))
-            hi = _max_filter(floor + old_v, 1)
+            hi = eng.max_filter(floor + old_v, 1)
             high = _along_blade(s.lat_px[wsl], under_blade, hi, span)
             base = _along_blade(s.lat_px[wsl], under_blade, rest, span)
             rest = np.maximum(rest, high - depth * np.maximum(high - base, 0.0))
