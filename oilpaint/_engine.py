@@ -1045,10 +1045,15 @@ def shift(a, sx, sy):
             wgt = np.float32(wx * wy)
             if wx * wy < 1e-6 or abs(dx) >= w or abs(dy) >= h:
                 continue
+            # (a row at a time: its pixels' channels lie in one run)
+            C = a.shape[2]
+            x_lo, x_hi = max(dx, 0), min(w + dx, w)
+            n = (x_hi - x_lo) * C
             for y in range(max(dy, 0), min(h + dy, h)):
-                for x in range(max(dx, 0), min(w + dx, w)):
-                    for c in range(a.shape[2]):
-                        out[y, x, c] += wgt * a[y - dy, x - dx, c]
+                src = a[y - dy].reshape(-1)[(x_lo - dx) * C :]
+                dst = out[y].reshape(-1)[x_lo * C :]
+                for i in range(n):
+                    dst[i] += wgt * src[i]
     return out
 
 
@@ -1151,10 +1156,13 @@ def drag(top, und, f, x0, y0, sx, sy, p, wx0, wy0, wh, ww):
                     for c in range(PACKED):
                         moved[y, x, c] = fr * layer[ry0 + y, rx0 + x, c]
         shifted = shift(moved, sx, sy)
+        n = rw * PACKED
         for y in range(rh):
-            for x in range(rw):
-                for c in range(PACKED):
-                    layer[ry0 + y, rx0 + x, c] += shifted[y, x, c] - moved[y, x, c]
+            # (a row at a time: its pixels' channels lie in one run)
+            row = layer[ry0 + y, rx0 : rx0 + rw].reshape(-1)
+            s_row, m_row = shifted[y].reshape(-1), moved[y].reshape(-1)
+            for i in range(n):
+                row[i] += s_row[i] - m_row[i]
 
 
 @njit(cache=True, error_model="numpy")
