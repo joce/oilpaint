@@ -48,7 +48,6 @@ from . import _engine as eng
 from . import spectral as sp
 from ._dab import dab_pattern
 from ._engine import COLUMNS, IB, IS, IV, PACKED
-from ._filters import _max_filter
 from .noise import aniso_noise, value_noise_1d, value_noise_2d
 from .paint import ColorLike, Paint, as_paint
 from .spline import Path, Profile, as_path, evaluate_profile
@@ -854,14 +853,16 @@ def _pending(y0, y1, x0, x1):
     feathered edge are settled when the stroke ends: the old top keeps its
     place, the share the faint new film would bury goes under, and the new
     paint stirs into the rest. Returns (paint, cover, reach, held, (on, y0,
-    x0, h, w)), as :func:`_engine.deposit` takes it."""
+    x0, h, w, and the rows y0..y1 and columns x0..x1 of it where any is held)),
+    as :func:`_engine.deposit` takes it."""
     h, w = y1 - y0, x1 - x0
     return (
         np.zeros((h, w, PACKED), np.float32),
         np.zeros((h, w), np.float32),
         np.zeros((h, w), np.float32),
         np.zeros((h, w), bool),
-        np.array([1, y0, x0, h, w], np.int64),
+        # (and where any is held: none yet)
+        np.array([1, y0, x0, h, w, h, 0, w, 0], np.int64),
     )
 
 
@@ -871,7 +872,7 @@ _NO_PENDING = (
     np.zeros((1, 1), np.float32),
     np.zeros((1, 1), np.float32),
     np.zeros((1, 1), bool),
-    np.zeros(5, np.int64),
+    np.zeros(9, np.int64),
 )
 # (chord tables of a round footprint: not needed)
 _NO_TABLES = (np.zeros(2), np.zeros(2), np.zeros(2))
@@ -1019,7 +1020,16 @@ class _Run:
         if bt.rigid:
             # The wet paint lying on the canvas before the stroke: the blade's ends
             # push it aside into lips (a pile it is carrying mostly rides along).
-            self.wet_before = canvas.top_v + canvas.und_v
+            # (Over the part of the canvas the steps' windows cover, from
+            # (wet_y0, wet_x0); see step.)
+            pad = float(radii.max()) * self.reach + 3.0
+            H, W = canvas.height, canvas.width
+            self.wet_y0 = min(max(math.floor(float(pts[:, 1].min()) - pad - 1), 0), H)
+            self.wet_x0 = min(max(math.floor(float(pts[:, 0].min()) - pad - 1), 0), W)
+            wet_y1 = max(math.ceil(float(pts[:, 1].max()) + pad + 1) + 1, self.wet_y0)
+            wet_x1 = max(math.ceil(float(pts[:, 0].max()) + pad + 1) + 1, self.wet_x0)
+            box = (slice(self.wet_y0, wet_y1), slice(self.wet_x0, wet_x1))
+            self.wet_before = canvas.top_v[box] + canvas.und_v[box]
             # Paint on a blade isn't held in lanes like paint in bristles: its
             # colour bands wander a little from side to side along the stroke.
             period = max(0.5 * w_typ, 4.0)
@@ -1358,7 +1368,7 @@ def _knife_step(run: _Run, s: _Step) -> None:
         under_blade = (s.aa * _clip(s.h - np.abs(s.rel) + 0.5, 0.0, 1.0))[wsl] > 0.5
         if under_blade.any():
             span = int(_clip(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2, 10))
-            hi = _max_filter(floor + old_v, 1)
+            hi = eng.max_filter(floor + old_v, 1)
             high = _along_blade(s.lat_px[wsl], under_blade, hi, span)
             base = _along_blade(s.lat_px[wsl], under_blade, rest, span)
             rest = np.maximum(rest, high - depth * np.maximum(high - base, 0.0))
@@ -1397,7 +1407,11 @@ def _knife_step(run: _Run, s: _Step) -> None:
         # distance in from the mark's edge, px
         from_edge = half - np.abs(s.lat_px[wsl])
         near = _smoothstep(_KNIFE_SPILL_PX, 0.0, from_edge)
-        excess = _KNIFE_SPILL * near * np.minimum(excess, run.wet_before[sl])
+        wet_sl = (
+            slice(st.cy0 - run.wet_y0, st.cy0 - run.wet_y0 + st.ch),
+            slice(st.cx0 - run.wet_x0, st.cx0 - run.wet_x0 + st.cw),
+        )
+        excess = _KNIFE_SPILL * near * np.minimum(excess, run.wet_before[wet_sl])
     if excess.max() > 1e-3:
         moved = eng.take(canvas.top, canvas.und, st.cy0, st.cx0, excess, tv)
         if flowing:
