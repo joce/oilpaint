@@ -62,8 +62,14 @@ def canvas_state(canvas, tools=()) -> dict[str, np.ndarray]:
     """Everything painting leaves behind: the canvas's arrays, and the paint
     on the brushes used."""
     state = {n: getattr(canvas, n) for n in STATE if hasattr(canvas, n)}
+    # how many strokes it has seen, and where its random numbers have got to
+    rng = canvas._rng.bit_generator.state["state"]
+    state["counters"] = np.array(
+        [canvas._stroke_counter, rng["state"], rng["inc"]], dtype=object
+    ).astype(str)
     for i, brush in enumerate(tools):
         state[f"brush{i}"] = np.stack([brush.tip, brush.reservoir, brush.heel])
+        state[f"brush{i}_wet_width"] = np.array([brush.wet, brush.width])
     return state
 
 
@@ -87,6 +93,9 @@ def compare(state: dict[str, np.ndarray], path: str) -> list[str]:
             a, b = state[name], kept[name]
             if a.shape != b.shape or a.dtype != b.dtype:
                 lines.append(f"{name}: {a.dtype}{a.shape} was {b.dtype}{b.shape}")
+            elif a.dtype.kind not in "fiub":
+                if not np.array_equal(a, b):
+                    lines.append(f"{name}: {a.tolist()} was {b.tolist()}")
             elif not np.array_equal(a, b, equal_nan=True):
                 a64, b64 = a.astype(np.float64), b.astype(np.float64)
                 diff = np.abs(a64 - b64)
