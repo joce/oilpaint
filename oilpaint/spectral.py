@@ -78,7 +78,7 @@ _CIE_1931 = np.array(
 )
 
 # CIE standard illuminant D65, 380..780 nm, 10 nm steps.
-_D65 = np.array(
+_D65_SPD = np.array(
     [
         49.98,
         54.65,
@@ -142,7 +142,7 @@ def _build_spectrum_to_rgb(wavelengths: np.ndarray) -> np.ndarray:
     """
     fine = np.arange(380.0, 781.0, 1.0)
     cmf = np.stack([np.interp(fine, _CIE_WL, _CIE_1931[:, i]) for i in range(3)], -1)
-    weights = cmf * np.interp(fine, _CIE_WL, _D65)[:, None]
+    weights = cmf * np.interp(fine, _CIE_WL, _D65_SPD)[:, None]
     hats = np.empty((wavelengths.size, fine.size))
     for i in range(wavelengths.size):
         unit = np.zeros(wavelengths.size)
@@ -176,12 +176,29 @@ def linear_to_srgb(c) -> np.ndarray:
 
 _HEX = re.compile(r"^#?([0-9a-fA-F]{6})$")
 
+# How far above 1 a colour on the 0..1 scale may stray by rounding.
+_OVERSHOOT = 1e-6
+
 
 def parse_color(color) -> np.ndarray:
     """Return an sRGB triple in 0..1.
 
     Accepts ``"#rrggbb"`` strings, float triples in 0..1, or int triples in
-    0..255 (any component > 1 means the 0..255 scale).
+    0..255:
+
+    * numpy ``uint8`` values (an image's pixel) are always on the 0..255
+      scale, so ``np.array([1, 1, 1], np.uint8)`` is near-black;
+    * otherwise a triple whose components are all at most 1 is on the 0..1
+      scale (so ``(1, 1, 1)`` is white), counting a float a hair above 1
+      (rounding in a colour computed on the 0..1 scale) as 1;
+    * a triple with a component of 2 or more is on the 0..255 scale, floats
+      included (``(123.4, 56.7, 89.1)``);
+    * a triple whose largest component is above 1 but below 2, such as
+      ``(1.02, 0.5, 0.5)``, is refused: read as 0..255 it would be almost
+      black, which is never what it means (it is a colour on the 0..1 scale
+      pushed a little too far).
+
+    Components outside the scale are clipped to it.
     """
     if isinstance(color, str):
         m = _HEX.match(color.strip())
@@ -192,11 +209,26 @@ def parse_color(color) -> np.ndarray:
             np.array([int(h[i : i + 2], 16) for i in (0, 2, 4)], dtype=np.float64)
             / 255.0
         )
-    c = np.asarray(color, dtype=np.float64).reshape(-1)
+    try:
+        raw = np.asarray(color)
+        c = raw.astype(np.float64).reshape(-1)
+    except (TypeError, ValueError):
+        raise TypeError(
+            f"cannot parse color {color!r}; use '#rrggbb', a float triple in "
+            "0..1 or an int triple in 0..255"
+        ) from None
     if c.size != 3:
         raise ValueError(f"expected 3 color components, got {c.size}")
-    if c.max() > 1.0:
+    if not np.isfinite(c).all():
+        raise ValueError(f"color components must be finite numbers, got {color!r}")
+    top = c.max()
+    if raw.dtype == np.uint8 or top >= 2.0:
         c = c / 255.0
+    elif top > 1.0 + _OVERSHOOT:  # (no whole numbers lie in between)
+        raise ValueError(
+            f"cannot tell the scale of color {color!r}: give floats in 0..1 "
+            "or numbers in 0..255 (with one of 2 or more)"
+        )
     return np.clip(c, 0.0, 1.0)
 
 
@@ -212,13 +244,15 @@ _RGB_TO_XYZ = np.array(
         [0.0193339, 0.1191920, 0.9503041],
     ]
 )
-_D65 = np.array([0.95047, 1.0, 1.08883])
+# The D65 white point in XYZ (not to be confused with _D65_SPD, the
+# illuminant's spectrum above).
+_D65_WHITE_XYZ = np.array([0.95047, 1.0, 1.08883])
 
 
 def srgb_to_lab(srgb) -> np.ndarray:
     """sRGB (..., 3) in 0..1 -> CIELAB (D65): L* 0..100, where a difference
     of ~2.3 is just noticeable."""
-    xyz = srgb_to_linear(srgb) @ _RGB_TO_XYZ.T / _D65
+    xyz = srgb_to_linear(srgb) @ _RGB_TO_XYZ.T / _D65_WHITE_XYZ
     f = np.where(
         xyz > (6 / 29) ** 3,
         np.cbrt(np.maximum(xyz, 0.0)),
@@ -409,9 +443,24 @@ def solve_absorption(target_R, sigma) -> np.ndarray:
     hi = np.full(target_R.shape, 12.0)
     for _ in range(70):
         mid = 0.5 * (lo + hi)
-        R = km_layer(np.exp(mid), sigma, 1.0)
-        too_dark = target_R > R
+        too_dark = target_R > _layer_over_white(np.exp(mid), sigma)
         hi = np.where(too_dark, mid, hi)
         lo = np.where(too_dark, lo, mid)
     kappa = np.exp(0.5 * (lo + hi))
     return np.where(target_R >= 0.99999, 0.0, kappa)
+
+
+def _layer_over_white(kappa, sigma: float):
+    """``km_layer(kappa, sigma, 1.0)`` for kappa >= 0 and a scalar sigma >= 0,
+    without the general case's checks: the bisection above calls it 70 times
+    per paint. The arithmetic is km_layer's, operation for operation
+    (multiplying by a ground of exactly 1 changes nothing), so the result is
+    the same to the last bit."""
+    B = np.sqrt(kappa * kappa + 2.0 * kappa * sigma)
+    small = B < 1e-4
+    tau = np.tanh(B) / np.where(small, 1.0, B)
+    if small.any():
+        tau = np.where(small, 1.0 - B * B / 3.0, tau)
+    num = sigma * tau - ((sigma + kappa) * tau - 1.0)
+    den = (sigma + kappa - sigma) * tau + 1.0
+    return num / den

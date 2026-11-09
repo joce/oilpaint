@@ -115,6 +115,14 @@ def match(
         m.parts   # [(Lead White, 1.0), (Lead-Tin Yellow, 1.6), (Red Lake, 3.9)]
         canvas.stroke(path, paint=m.paint)
     """
+    whole = isinstance(max_paints, (int, np.integer)) or (
+        isinstance(max_paints, (float, np.floating)) and float(max_paints).is_integer()
+    )
+    if not whole:
+        raise TypeError(f"max_paints must be a whole number, got {max_paints!r}")
+    if max_paints < 1:
+        raise ValueError(f"max_paints must be 1 or more, got {max_paints!r}")
+    max_paints = int(max_paints)
     paints = [as_paint(p) for p in paints]
     if not paints:
         raise ValueError("match needs at least one paint")
@@ -150,7 +158,10 @@ def match(
                 if e[i] < best_e:
                     best_w, best_e = W[i].copy(), float(e[i])
     # refine: nudge each part up and down, shrinking the step
-    assert best_w is not None
+    if best_w is None:  # every mix was NaN: a NaN thickness or ground
+        raise ValueError(
+            "match found no mix to compare: thickness and over must be finite"
+        )
     w = best_w
     for factor in (1.5, 1.2, 1.08, 1.03):
         improved = True

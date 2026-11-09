@@ -130,7 +130,10 @@ class Surface:
         N = sp.N_BANDS
         out = np.empty((h, w, N), np.float32)
         if image is not None:
-            img = image.astype(np.float64) / (255.0 if image.dtype == np.uint8 else 1.0)
+            # whole numbers are 0..255, whatever their width (uint8, or the
+            # int64 of a computed image); floats are 0..1
+            integer = np.issubdtype(image.dtype, np.integer)
+            img = image.astype(np.float64) / (255.0 if integer else 1.0)
             for y in range(h):
                 out[y] = sp.linear_rgb_to_reflectance(sp.srgb_to_linear(img[y, :, :3]))
         else:
@@ -142,7 +145,10 @@ class Surface:
                 np.float32
             )
         if self.toning is not None and self.toning_strength > 0:
-            wash = Paint(self.toning, opacity=0.25)
+            # a bare colour is laid as a thin, transparent wash; a paint is
+            # used as it is
+            toning = self.toning
+            wash = toning if isinstance(toning, Paint) else Paint(toning, opacity=0.25)
             # brushed on loosely: broad, soft variations rather than fine streaks
             sweep = nz.aniso_noise(
                 h, w, 90, 28, self.priming_angle + 30, rng, octaves=2

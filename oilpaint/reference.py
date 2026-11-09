@@ -23,6 +23,8 @@ pixels. Only numpy and Pillow are needed::
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import numpy as np
 
 from . import spectral as sp
@@ -71,7 +73,15 @@ class Reference:
 
     ``image`` is a path, a PIL image or an (H, W, 3) array (0..1 floats or
     0..255 ints). ``box`` optionally crops it first: (left, top, right,
-    bottom) in the image's own pixels."""
+    bottom) in the image's own pixels.
+
+    Each softened map (one per kind of query and scale) is the size of the
+    canvas, so only the ``max_maps`` used most recently are kept; one asked
+    for again after that is made again. A painting works at a few scales at
+    a time, so that is rare."""
+
+    #: How many softened maps to keep (each one canvas-sized).
+    max_maps: int = 16
 
     def __init__(self, image, width: int, height: int, box=None):
         from PIL import Image
@@ -97,14 +107,31 @@ class Reference:
         lab = sp.srgb_to_lab(self.image.astype(np.float64))
         # perceptual, 0..1
         self.lightness = (lab[..., 0] / 100.0).astype(np.float32)
-        self._cache = {}
+        self._cache: OrderedDict = OrderedDict()
+        # the scale each map was first made at (a few floats per scale used)
+        self._made_at: dict = {}
+
+    def __setstate__(self, state) -> None:
+        # References pickled before the maps were limited kept them in a plain
+        # dict, and had no record of the scales they were made at.
+        self.__dict__.update(state)
+        self._cache = OrderedDict(self.__dict__.get("_cache", {}))
+        self.__dict__.setdefault("_made_at", {})
 
     # ------------------------------------------------------------------ maps
     def _map(self, name, scale):
         key = (name, round(float(scale), 2))
         m = self._cache.get(key)
         if m is None:
+            # Scales that round alike share a map. Made again after being
+            # dropped, it is made at the same scale as the first time, so it is
+            # the same map whatever was asked for in between.
+            scale = self._made_at.setdefault(key, scale)
             m = self._cache[key] = getattr(self, "_make_" + name)(scale)
+            while len(self._cache) > max(int(self.max_maps), 1):
+                self._cache.popitem(last=False)
+        else:
+            self._cache.move_to_end(key)
         return m
 
     def _make_color(self, scale):
