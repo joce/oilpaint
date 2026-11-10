@@ -165,6 +165,9 @@ StrokeConsts = namedtuple(
         "hair_x0",
         "hair_ds",
         "hair_dx",
+        # the least and the most of it (see may_touch)
+        "hair_lo",
+        "hair_hi",
         # the stroke's nominal step along its path (px)
         "spacing",
         # the brush's own size: how wide it paints on average (px)
@@ -668,7 +671,47 @@ def hair_field(n_s, n_x, ds, dx, cells, grids, lanes, lane_cells, wander):
 
 
 @njit(cache=True, error_model="numpy")
-def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
+def may_touch(st, K, c_tab):
+    """The box (y0, y1, x0, x1) of the step's window outside which the
+    footprint (see :func:`footprint`) covers no pixel it sweeps over: none
+    further across the motion than its widest (its edge roughened by the
+    hair at most as much as the stroke's hair pattern, ``K.hair_lo`` to
+    ``K.hair_hi``, lets it) and its anti-aliasing, and none further along it
+    than its chords reach, at the step's start and end, plus the
+    anti-aliasing of the solid ends (a margin of 0.01 px for rounding)."""
+    half_aa, m = 0.5 * EDGE_PX, 0.01
+    rs = (st.r0, st.r1, st.r)
+    rmax = max(rs[0], rs[1], rs[2])
+    # across: |lat| (1 + rough (hair - 0.5)) / lmax is at least lr there
+    f_lo = min(1.0 + K.rough * (K.hair_lo - 0.5), 1.0 + K.rough * (K.hair_hi - 0.5))
+    lat_max = (rmax * st.lmax + half_aa + m) / f_lo if f_lo > 0 else np.inf
+    # along: the chord's centre and half-length at most as far as at either end
+    if K.circle:
+        c_lo, c_hi, h_hi = 0.0, 0.0, max(rmax, 0.5)
+    else:
+        lo, hi = c_tab.min(), c_tab.max()
+        c_lo = min(lo * rs[0], lo * rs[1], lo * rs[2])
+        c_hi = max(hi * rs[0], hi * rs[1], hi * rs[2])
+        h_hi = max(st.h_tab_max * rmax, 0.5)
+    a_lo = c_lo - h_hi - half_aa - st.ds - m
+    a_hi = c_hi + h_hi + half_aa + m
+    y0, y1, x0, x1 = st.hh, 0, st.ww, 0
+    for yy in range(st.hh):
+        gy = (st.y0 + yy) + 0.5 - st.cy
+        for xx in range(st.ww):
+            gx = (st.x0 + xx) + 0.5 - st.cx
+            along = gx * st.tx + gy * st.ty
+            lat_px = -gx * st.ty + gy * st.tx
+            if abs(lat_px) < lat_max and a_lo < along < a_hi:
+                y0, y1 = min(y0, yy), max(y1, yy + 1)
+                x0, x1 = min(x0, xx), max(x1, xx + 1)
+    if y0 >= y1:
+        return 0, 0, 0, 0
+    return y0, y1, x0, x1
+
+
+@njit(cache=True, error_model="numpy")
+def footprint(st, K, tex, tex2, grid, c_tab, h_tab, bounded):
     """The footprint of one step on its window: planes F_* of per-pixel
     geometry, exposure and coverage, and whether it exposes any pixel of the
     canvas.
@@ -679,8 +722,19 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
     low ridges at the edges when pressed, ragged edges from the hair pattern,
     a long feathered falloff on soft brushes, stippled when dabbed lightly.
     Its *cover* is how much of the pixel the footprint passes over (the
-    anti-aliased edge), which is geometry, not paint thickness."""
-    F = np.empty((_NF, st.hh, st.ww))
+    anti-aliased edge), which is geometry, not paint thickness.
+
+    ``bounded`` (a brush's step): only over the box of the window where the
+    footprint may cover a pixel and sweep over it (see :func:`may_touch`);
+    elsewhere all planes are 0, as is a pixel's cover, coverage or sweep
+    there (everything the step reads of a pixel it doesn't touch: see
+    :func:`touched`). A knife reads all of the window."""
+    if bounded:
+        F = np.zeros((_NF, st.hh, st.ww))
+        by0, by1, bx0, bx1 = may_touch(st, K, c_tab)
+    else:
+        F = np.empty((_NF, st.hh, st.ww))
+        by0, by1, bx0, bx1 = 0, st.hh, 0, st.ww
     cx, cy, tx, ty, ds = st.cx, st.cy, st.tx, st.ty, st.ds
     r0, r1, r, p, lmax = st.r0, st.r1, st.r, st.p, st.lmax
     n2 = tex2.shape[0] - 1
@@ -688,9 +742,9 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
     soft_pow = 1.0 + 4.0 * K.softness
     span = max(K.feather * 2.0 * r, 1.0)
     hit = False
-    for yy in range(st.hh):
+    for yy in range(by0, by1):
         gy = (st.y0 + yy) + 0.5 - cy
-        for xx in range(st.ww):
+        for xx in range(bx0, bx1):
             gx = (st.x0 + xx) + 0.5 - cx
             along = gx * tx + gy * ty  # <= 0 behind the brush centre
             lat_px = -gx * ty + gy * tx
@@ -2419,7 +2473,7 @@ def brush_step(st, K, tex, tex2, tables, cv, aux, pend, br, col_u):
     """One step of a brush along its stroke: where it touches the canvas, and
     what it does there. Returns (how coated the bristles are with wet paint,
     whether the brush has run dry)."""
-    F, hit = footprint(st, K, tex, tex2, tables[0], tables[1], tables[2])
+    F, hit = footprint(st, K, tex, tex2, tables[0], tables[1], tables[2], True)
     if not hit and not _touches_off(st, F):
         return st.wet, st.dry
     # most of the work is only where the tool passes over in this step
