@@ -11,7 +11,7 @@ import numpy as np
 
 from . import _engine as eng
 from ._engine import COLUMNS, IB, IV, PACKED
-from ._filters import _bilinear, _smoothstep
+from ._filters import _smoothstep
 from ._geometry import _Step
 from ._hair import _NO_TEX2
 from .noise import aniso_noise, value_noise_2d
@@ -87,20 +87,39 @@ def _before_the_blade(canvas, rng, pts, pad, w_typ, arc) -> _BladeStart:
     return _BladeStart(wet_y0, wet_x0, wet_before, bands, period)
 
 
-def _wandering_bands(run: _Run, st, along, u_px):
-    """Where across the blade (``u_px``, -1..1 per pixel of the part of the
-    canvas step ``st`` covers, ``along`` the motion there) the paint a knife
-    lays comes from: paint on a blade isn't held in lanes, so its colour
+def _wandering_bands(run: _Run, F, st, part):
+    """Where across the blade (-1..1) the paint a knife lays on each pixel of
+    ``part`` (wy0, wx0, ch, cw) of the window of step ``st`` (footprint
+    ``F``) comes from: paint on a blade isn't held in lanes, so its colour
     bands wander a little from side to side along the stroke."""
-    along_stroke = np.clip(
-        (run.arc[st.i] + along) / run.blade.band_period * 8.0,
-        0.0,
-        run.blade.bands.shape[0] - 1.001,
+    blade = run.blade
+    wy0, wx0, ch, cw = part
+    return eng.wandering_bands(
+        F,
+        wy0,
+        wx0,
+        ch,
+        cw,
+        float(run.arc[st.i]),
+        blade.band_period,
+        blade.bands,
+        _KNIFE_BAND_WANDER,
     )
-    u_band = np.clip((u_px + 1.0) * 0.5 * 63.0, 0.0, 62.999)
-    return u_px + _KNIFE_BAND_WANDER * (
-        2.0 * _bilinear(run.blade.bands, along_stroke, u_band) - 1.0
-    )
+
+
+def _knife_taps(run: _Run, st, F):
+    """The bristle taps of a knife's step ``st`` (footprint ``F``) over its
+    part of the canvas, and (None if that is all of its window) over all of
+    its window, past the edge of the canvas too (see :func:`_whole_window`):
+    worked out once over the window, and cropped to the canvas."""
+    ring = run.brush.ring
+    if st.ch == st.hh and st.cw == st.ww:
+        u = _wandering_bands(run, F, st, (st.wy0, st.wx0, st.ch, st.cw))
+        return eng.bristle_taps(u, st.span, st.nsub, ring, st.rho), None
+    u = _wandering_bands(run, F, st, (0, 0, st.hh, st.ww))
+    taps_all = eng.bristle_taps(u, st.span, st.nsub, ring, st.rho)
+    taps = eng.crop_taps(taps_all, st.ww, st.wy0, st.wx0, st.ch, st.cw)
+    return taps, taps_all
 
 
 def _knife_step(run: _Run, s: _Step) -> None:
@@ -133,11 +152,11 @@ def _knife_step(run: _Run, s: _Step) -> None:
     )
     gap, hold = _blade_gap(run, st.p)  # 2)
     if whole is None:
-        level, ride = _blade_level(run, s, gap, area)  # 3)
+        level, ride = _blade_level(run, s, gap, _film(run, s, area))  # 3)
     else:
-        level_w, ride_w = _blade_level(run, whole.s, gap, area)
-        level = level_w[s.wsl]
-        ride = ride_w[s.wsl] if isinstance(ride_w, np.ndarray) else ride_w
+        level_w, ride_w = _blade_level(run, whole.s, gap, _film(run, whole.s, area))
+        level = np.ascontiguousarray(level_w[s.wsl])
+        ride = np.ascontiguousarray(ride_w[s.wsl])
         whole = whole._replace(level=level_w, ride=ride_w)
     ridges = _push_aside(run, s, level)  # 4)
     if run.bt.clumps == 0:
@@ -181,67 +200,102 @@ def _film(run: _Run, s: _Step, area: float):
 def _blade_rest(run: _Run, s: _Step):
     """3) Where the blade sits: on the high points of the surface below
     (thread tops for a flexible blade, the highest ridges around for a stiff
-    one)."""
-    canvas, bt, st = run.canvas, run.bt, s.st
-    p, sl, wsl = st.p, s.sl, s.wsl
-    top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
-    fine, wide = run.relief.peaks_fine[sl], run.relief.peaks_wide[sl]
-    rest = fine + run.stiff_blade * (wide - fine)
+    one). (Worked out pixel by pixel by _engine.blade_rest, blade_bins and
+    blade_sink.)"""
+    canvas, bt, st, relief = run.canvas, run.bt, s.st, run.relief
+    rest, old_v, vmax, under_blade, any_under, top_ib, und_ib = eng.blade_rest(
+        canvas.top,
+        canvas.und,
+        canvas.top_id,
+        relief.peaks_fine,
+        relief.peaks_wide,
+        st.cy0,
+        st.cx0,
+        st.ch,
+        st.cw,
+        run.stroke_id,
+        run.stiff_blade,
+        s.F,
+        st.wy0,
+        st.wx0,
+        s.sl is None,
+    )
     # Wet paint from earlier strokes holds the blade up too, the heap it pushes
     # included (a knife rides on a wave of paint): it rests on its high points
     # and sinks in the harder it is pressed (less into stiff paint). A light
     # touch lays new paint on top of the old.
-    earlier = canvas.top_id[sl] != run.stroke_id
-    old_v = und[..., IV] + np.where(earlier, top[..., IV], 0.0)
-    if old_v.max() > 0.05:
-        old_body = float(
-            (und[..., IB].sum() + np.where(earlier, top[..., IB], 0.0).sum())
-            / max(float(old_v.sum()), 1e-9)
-        )
-        # How far into it the blade sinks, as a share of its thickness: a light
-        # touch skims, a firm one cuts in, pressing hard goes nearly down to
-        # the canvas, however thick the paint. Stiff paint resists a little.
-        depth = float(
-            np.clip(p**_KNIFE_SINK * (1.15 - 0.3 * min(old_body, 1.0)), 0.0, 1.0)
-        )
-        # narrow teeth concentrate the pressure: they cut right through
-        if bt.clumps > 0:
-            depth = max(depth, 0.9)
-        # The blade is rigid along the direction it moves: its height varies only
-        # along its length. It rests on the high points under it (not on the pile
-        # it pushes ahead), bending to follow them over a span set by its stiffness.
-        under_blade = (s.aa * np.clip(s.h - np.abs(s.rel) + 0.5, 0.0, 1.0))[wsl] > 0.5
-        if under_blade.any():
-            span = int(np.clip(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2, 10))
-            hi = eng.max_filter(floor + old_v, 1)
-            high = _along_blade(s.lat_px[wsl], under_blade, hi, span)
-            base = _along_blade(s.lat_px[wsl], under_blade, rest, span)
-            rest = np.maximum(rest, high - depth * np.maximum(high - base, 0.0))
-    return rest
-
-
-def _blade_level(run: _Run, s: _Step, gap: float, area: float):
-    """3) How high the blade's edge rides over each pixel: on what it rests
-    on (:func:`_blade_rest`), at ``gap``, less as the paint under it runs low.
-    Returns the level and how high it rides on the paint."""
-    st, wsl = s.st, s.wsl
-    rest = _blade_rest(run, s)
-    hair = s.hair[wsl]
-    # The blade rides on the paint under it: as that runs low, it sinks and the
-    # slab thins out. Nicks and grit on its edge leave fine scratches along the
-    # stroke; it wavers as it is pushed (chatter) and is never pressed quite
-    # evenly along its length (tilt).
-    film = _film(run, s, area)
-    ride = np.minimum(gap, _KNIFE_FILM * film) if run.bt.clumps == 0 else gap
-    # (skimming, the blade glides: no chatter; its nicks still streak the paint)
-    chat = 0.25 * (1.0 - float(_smoothstep(_KNIFE_SKIM, 0.05, st.p)))
-    level = rest + ride * (
-        1.0
-        + chat * run.chatter[st.i]
-        + 0.12 * (hair - 0.5)
-        + run.blade_tilt * np.clip(s.ucoord[wsl], -1.0, 1.0)
+    if not (vmax > 0.05 and any_under):
+        return rest.astype(np.float64)
+    # (summed by numpy, and summed as numpy always summed it: on the canvas
+    # over the strided view of the canvas itself, row by row, which rounds
+    # differently from a contiguous copy of the same pixels; past the edge
+    # over the gathered copy)
+    if s.sl is not None:
+        und_ib = canvas.und[..., IB][s.sl]
+    old_body = float((und_ib.sum() + top_ib.sum()) / max(float(old_v.sum()), 1e-9))
+    # How far into it the blade sinks, as a share of its thickness: a light
+    # touch skims, a firm one cuts in, pressing hard goes nearly down to the
+    # canvas, however thick the paint. Stiff paint resists a little.
+    depth = min(max(st.p**_KNIFE_SINK * (1.15 - 0.3 * min(old_body, 1.0)), 0.0), 1.0)
+    # narrow teeth concentrate the pressure: they cut right through
+    if bt.clumps > 0:
+        depth = max(depth, 0.9)
+    # The blade is rigid along the direction it moves: its height varies only
+    # along its length. It rests on the high points under it (not on the pile
+    # it pushes ahead), bending to follow them over a span set by its
+    # stiffness: what lies under it at each position along it (whole px from
+    # its end), averaged over ``span`` px either way.
+    span = int(min(max(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2), 10))
+    hi, b, cnt, tot_hi, tot_rest = eng.blade_bins(
+        relief.floor, st.cy0, st.cx0, old_v, rest, under_blade, s.F, st.wy0, st.wx0
     )
-    return level, ride
+    kernel = np.ones(2 * span + 1)
+    return eng.blade_sink(
+        rest,
+        hi,
+        b,
+        np.convolve(cnt, kernel, mode="same"),
+        np.convolve(tot_hi, kernel, mode="same"),
+        np.convolve(tot_rest, kernel, mode="same"),
+        depth,
+    )
+
+
+def _nearest(run: _Run, st):
+    """The pixels of the canvas the step's part of it (``st``: cy0, cx0, ch,
+    cw) lies at; past its edge (see :func:`_whole_window`), the nearest ones
+    (to index a plane of the canvas with)."""
+    H, W = run.canvas.height, run.canvas.width
+    return np.ix_(
+        np.clip(np.arange(st.cy0, st.cy0 + st.ch), 0, H - 1),
+        np.clip(np.arange(st.cx0, st.cx0 + st.cw), 0, W - 1),
+    )
+
+
+def _blade_level(run: _Run, s: _Step, gap: float, film):
+    """3) How high the blade's edge rides over each pixel: on what it rests
+    on (:func:`_blade_rest`), at ``gap``, less as the paint under it runs low
+    (``film``, see :func:`_film`). Returns the level and how high it rides on
+    the paint (see _engine.blade_level)."""
+    st = s.st
+    # The blade rides on the paint under it: as that runs low, it sinks and the
+    # slab thins out (not a comb's teeth). Nicks and grit on its edge leave
+    # fine scratches along the stroke; it wavers as it is pushed (chatter) and
+    # is never pressed quite evenly along its length (tilt).
+    # (skimming, the blade glides: no chatter; its nicks still streak the paint)
+    chat = 0.25 * (1.0 - eng.smoothstep(_KNIFE_SKIM, 0.05, st.p))
+    return eng.blade_level(
+        _blade_rest(run, s),
+        film,
+        _KNIFE_FILM,
+        gap,
+        run.bt.clumps > 0,
+        1.0 + chat * run.chatter[st.i],
+        run.blade_tilt,
+        s.F,
+        st.wy0,
+        st.wx0,
+    )
 
 
 def _push_aside(run: _Run, s: _Step, level):
@@ -253,30 +307,42 @@ def _push_aside(run: _Run, s: _Step, level):
     paint spilt to each side of the blade, as :func:`_engine.squeeze_out`
     adds to it: (all round, left, right)."""
     canvas, st = run.canvas, s.st
-    sl, wsl = s.sl, s.wsl
-    top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
+    wsl = s.wsl
     hair, expo_c = s.hair[wsl], s.expo[wsl]
     # all round, left, right
     ridges = (np.zeros(PACKED), np.zeros(PACKED), np.zeros(PACKED))
     flowing = run.bt.clumps == 0
-    tv = top[..., IV].astype(np.float64)
-    excess = np.clip(floor + tv + und[..., IV] - level, 0.0, None)
-    excess *= 1.0 - np.exp(-4.0 * expo_c * (0.15 + 1.7 * hair**2))
-    if flowing:
-        half = max(st.r * st.lmax, 1e-6)  # the mark's half-width, px
-        # distance in from the mark's edge, px
-        from_edge = half - np.abs(s.lat_px[wsl])
-        near = _smoothstep(_KNIFE_SPILL_PX, 0.0, from_edge)
+    wet = np.zeros((0, 0), np.float32)  # (a comb: none spills)
+    if flowing:  # what was lying there before the stroke
         blade = run.blade
-        wet_sl = (
-            slice(st.cy0 - blade.wet_y0, st.cy0 - blade.wet_y0 + st.ch),
-            slice(st.cx0 - blade.wet_x0, st.cx0 - blade.wet_x0 + st.cw),
+        wet = np.ascontiguousarray(
+            blade.wet_before[
+                st.cy0 - blade.wet_y0 : st.cy0 - blade.wet_y0 + st.ch,
+                st.cx0 - blade.wet_x0 : st.cx0 - blade.wet_x0 + st.cw,
+            ]
         )
-        excess = _KNIFE_SPILL * near * np.minimum(excess, blade.wet_before[wet_sl])
-    if excess.max() > 1e-3:
+    # (what stands above the blade, the share of it a pass moves, and near
+    # the edges of the mark what spills: see _engine.blade_excess)
+    excess, tv, emax = eng.blade_excess(
+        canvas.top,
+        canvas.und,
+        run.relief.floor,
+        st.cy0,
+        st.cx0,
+        level,
+        1.0 - np.exp(-4.0 * expo_c * (0.15 + 1.7 * hair**2)),
+        s.F,
+        st.wy0,
+        st.wx0,
+        max(st.r * st.lmax, 1e-6),  # the mark's half-width, px
+        _KNIFE_SPILL_PX,
+        _KNIFE_SPILL,
+        wet,
+    )
+    if emax > 1e-3:
         moved = eng.take(canvas.top, canvas.und, st.cy0, st.cx0, excess, tv)
         if flowing:
-            eng.add_sides(ridges, moved, s.lat_px[wsl], 1.0)
+            eng.add_sides(ridges, moved, np.ascontiguousarray(s.lat_px[wsl]), 1.0)
         else:
             fresh = (
                 s.between
@@ -307,17 +373,19 @@ def _drag_film(run: _Run, s: _Step, level) -> None:
     purple stays on top). The blade glides on its own fresh paint."""
     st, wsl = s.st, s.wsl
     hair = s.hair[wsl]
+    # (planes passed as arrays of their own: one compiled kernel, whether
+    # the step's window is all on the canvas or not)
     eng.flow_under_blade(
         run.cv,
         st.cy0,
         st.cx0,
         run.stroke_id,
-        run.relief.floor[s.sl],
+        np.ascontiguousarray(run.relief.floor[s.sl]),
         level,
-        s.aa[wsl],
-        s.along[wsl],
-        s.c[wsl],
-        s.h[wsl],
+        np.ascontiguousarray(s.aa[wsl]),
+        np.ascontiguousarray(s.along[wsl]),
+        np.ascontiguousarray(s.c[wsl]),
+        np.ascontiguousarray(s.h[wsl]),
         st.ds,
         st.tx,
         st.ty,
@@ -342,8 +410,9 @@ def _fill_under_blade(run: _Run, s: _Step, level, ride, area: float, whole) -> N
         extra = np.empty(0)
     else:
         d_w, skim = _slab(run, whole.s, whole.level, area, whole.surf_add)
-        d = d_w[wsl]
-        d_off = np.where(whole.on, 0.0, d_w)
+        d = np.ascontiguousarray(d_w[wsl])
+        d_off = d_w.copy()
+        d_off[wsl] = 0.0  # (on the canvas: d)
         extra = eng.column_demand(whole.s.taps, d_off)
         _lay_off(run, st, d_off)
     if run.bt.clumps == 0:
@@ -358,11 +427,11 @@ def _fill_under_blade(run: _Run, s: _Step, level, ride, area: float, whole) -> N
         st.cy0,
         st.cx0,
         d,
-        s.cover[wsl],
+        np.ascontiguousarray(s.cover[wsl]),
         run.stroke_id,
         True,
         False,
-        s.expo[wsl],
+        np.ascontiguousarray(s.expo[wsl]),
         False,
         extra,
     )
@@ -373,36 +442,38 @@ class _Whole(NamedTuple):
     :func:`_whole_window`)."""
 
     s: _Step  # the step, its part of the canvas all of the window
-    on: np.ndarray  # which pixels of the window are on the canvas
+    step: _Step  # the step as it is (its part on the canvas: step.wsl of the window)
     surf_add: np.ndarray  # what to add to the surface read off the canvas
     level: np.ndarray | None = None  # how high the blade rides (see _blade_level)
-    ride: np.ndarray | float | None = None
+    ride: np.ndarray | None = None
 
 
 def _whole_window(run: _Run, s: _Step) -> _Whole:
     """The step ``s`` over the whole of its window, past the edge of the
     canvas too, where the canvas is taken to go on as it is at its edge:
     as a step whose part of the canvas is all of it (its pixels read from
-    the nearest canvas pixel), and which of its pixels are on the canvas."""
+    the nearest canvas pixel, see :func:`_nearest`)."""
     st = s.st
-    H, W = run.canvas.height, run.canvas.width
     st_w = st._replace(cy0=st.y0, cx0=st.x0, ch=st.hh, cw=st.ww, wy0=0, wx0=0)
-    u = _wandering_bands(run, st, s.F[eng.F_ALONG], s.F[eng.F_U])
-    taps = eng.bristle_taps(u, st.span, st.nsub, run.brush.ring, st.rho)
-    sw = _Step(st_w, s.F, s.tables, taps)
-    ys = np.clip(np.arange(st.y0, st.y0 + st.hh), 0, H - 1)
-    xs = np.clip(np.arange(st.x0, st.x0 + st.ww), 0, W - 1)
-    sw.sl = np.ix_(ys, xs)
-    on = np.zeros((st.hh, st.ww), bool)
-    on[s.wsl] = True
+    sw = _Step(st_w, s.F, s.tables, s.taps_all)
+    sw.sl = None  # (gathered: see _nearest)
     # Past the edge, the surface is the canvas's at its edge, with the slab
     # this stroke has laid out there in place of the one it laid at the edge
     # (a blade fills up to its level: over its own slab it lays no more).
     canvas = run.canvas
-    own = np.where(
-        canvas.top_id[sw.sl] == run.stroke_id, canvas.top[sw.sl][..., IV], 0.0
+    surf_add = eng.off_surface(
+        canvas.top,
+        canvas.top_id,
+        run.stroke_id,
+        st.y0,
+        st.x0,
+        _laid_off(run, st),
+        st.wy0,
+        st.wx0,
+        st.ch,
+        st.cw,
     )
-    return _Whole(sw, on, np.where(on, 0.0, _laid_off(run, st) - own))
+    return _Whole(sw, s, surf_add)
 
 
 # Side (px) of the tiles in which the slab a knife lays past the edge of the
@@ -456,21 +527,32 @@ def _lay_off(run: _Run, st, d) -> None:
 def _press_out_past_edge(run: _Run, whole: _Whole, skim: float) -> None:
     """The paint the blade presses out at an end past the edge of the
     canvas (see :func:`_press_out_ends`) is gone."""
-    sw, on, ride = whole.s, whole.on, whole.ride
-    st = sw.st
-    lat = sw.lat_px
-    from_edge = max(st.r * st.lmax, 1e-6) - np.abs(lat)
-    near = _smoothstep(_KNIFE_END_PX, 0.0, from_edge)
-    d_end = (
-        ride
-        * sw.expo
-        * (_KNIFE_END * (0.8 + st.p) * (1.0 - skim))
-        * near
-        * _smoothstep(0.5, 2.0, ride)
-    )
-    d_end = np.where(on, 0.0, d_end)
+    sw, on = whole.s, whole.step.st
+    d_end = _end_press(whole.ride, sw, skim, (on.wy0, on.wx0, on.ch, on.cw))
     if d_end.max() > 1e-6:
         eng.take_tips(run.brush.tip, sw.taps, d_end)
+
+
+def _end_press(ride, s: _Step, skim: float, on=(0, 0, 0, 0)):
+    """How much paint the blade presses out near its ends over each pixel of
+    the step's part of the canvas (see :func:`_press_out_ends`), none in the
+    part ``on`` (wy0, wx0, ch, cw) of it (see _engine.blade_ends)."""
+    st = s.st
+    # (skimming, the blade spreads no film to press out; it takes a slab
+    # of some thickness to stand in a bead)
+    # (as much as the slab is thick, over each step's share of a pass:
+    # not what this step filled, which wavers from step to step with
+    # the blade's chatter and would come out as a bead at every step)
+    return eng.blade_ends(
+        ride,
+        s.F,
+        st.wy0,
+        st.wx0,
+        max(st.r * st.lmax, 1e-6),
+        _KNIFE_END_PX,
+        _KNIFE_END * (0.8 + st.p) * (1.0 - skim),
+        *on,
+    )
 
 
 def _knife_step_off(run: _Run, s: _Step, area: float) -> None:
@@ -488,9 +570,12 @@ def _knife_step_off(run: _Run, s: _Step, area: float) -> None:
     if not (run.brush.tip[:, IV].sum() > 0 and run.bt.deposits):
         return
     whole = _whole_window(run, s)
-    level_w, ride_w = _blade_level(run, whole.s, gap, area)
+    # (nothing changes the paint on the blade between where it rides and what
+    # it fills: the same film)
+    film = _film(run, whole.s, area)
+    level_w, ride_w = _blade_level(run, whole.s, gap, film)
     whole = whole._replace(level=level_w, ride=ride_w)
-    d_w, skim = _slab(run, whole.s, level_w, area, whole.surf_add)
+    d_w, skim = _slab(run, whole.s, level_w, area, whole.surf_add, film)
     if run.bt.clumps == 0:
         _press_out_past_edge(run, whole, skim)
     extra = eng.column_demand(whole.s.taps, d_w)
@@ -514,7 +599,7 @@ def _knife_step_off(run: _Run, s: _Step, area: float) -> None:
     )
 
 
-def _slab(run: _Run, s: _Step, level, area: float, surf_add=None):
+def _slab(run: _Run, s: _Step, level, area: float, surf_add=None, film=None):
     """How much paint the blade lays under it over each pixel this step (see
     :func:`_fill_under_blade`): with plenty of paint, a smooth slab; running
     low, it only reaches the high points (broken colour). Barely touching,
@@ -524,17 +609,12 @@ def _slab(run: _Run, s: _Step, level, area: float, surf_add=None):
     broken colour ("let it break"). Returns that, and how much the blade
     skims (0: not at all)."""
     canvas, st = run.canvas, s.st
-    p, sl, wsl = st.p, s.sl, s.wsl
-    top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
+    p, wsl = st.p, s.wsl
     hair, expo_c = s.hair[wsl], s.expo[wsl]
-    surf = floor + top[..., IV] + und[..., IV]
-    if surf_add is not None:  # (past the edge of the canvas: see _whole_window)
-        surf = surf + surf_add
-    gap_px = np.clip(level - surf, 0.0, None)
-    film = _film(run, s, area)
-    reach_f = _smoothstep(1.3, 0.7, gap_px / np.maximum(film, 1e-9))
+    if film is None:  # (the paint on the blade as it is now: see _film)
+        film = _film(run, s, area)
     # Barely touching, the blade skims: it fills less of the gap under it.
-    skim = float(_smoothstep(_KNIFE_SKIM, 0.05, p))
+    skim = eng.smoothstep(_KNIFE_SKIM, 0.05, p)
     # Each step fills the share of the gap left that it passes over: as the
     # gap shrinks step by step, how full a pixel ends up depends only on
     # how much of a full pass went over it, not on how the stroke is cut
@@ -554,14 +634,28 @@ def _slab(run: _Run, s: _Step, level, area: float, surf_add=None):
         k_fill = -n * np.log(np.maximum(per_step, 1e-12))
     else:  # (the same: per_step is e^(-4/n))
         k_fill = 4.0
-    d = gap_px * reach_f * (1.0 - np.exp(-k_fill * expo_c))
+    # The gap between the blade and the surface (past the edge of the canvas,
+    # plus surf_add: see _whole_window), as far as its film reaches, filled
+    # by the share k_fill gives over this step's share of a pass (see
+    # _engine.blade_slab).
+    d, surf = eng.blade_slab(
+        canvas.top,
+        canvas.und,
+        run.relief.floor,
+        st.cy0,
+        st.cx0,
+        level,
+        np.zeros((0, 0)) if surf_add is None else surf_add,
+        film,
+        1.0 - np.exp(-k_fill * expo_c),
+    )
     if skim > 0 and run.bt.clumps == 0:
         bead = np.minimum(film, 1.2)
         touch = np.clip((surf - (level - bead)) / np.maximum(bead, 1e-6), 0.0, 1.0)
         # the bead is uneven and the paint below still follows the threads
         # of the canvas: barely touching, it catches in streaks along the
         # blade's nicks and on the thread tops, the fewer the lighter the touch
-        grain = 0.55 * hair + 0.45 * run.relief.tooth[sl]
+        grain = 0.55 * hair + 0.45 * run.relief.tooth[_nearest(run, st)]
         thr = _KNIFE_TOUCH - 2.2 * p
         touch = touch * _smoothstep(thr - 0.1, thr + 0.1, grain)
         # the bead leaves paint wherever it passes, in proportion to how
@@ -576,23 +670,9 @@ def _press_out_ends(run: _Run, s: _Step, ride, skim: float) -> None:
     harder it is pressed: it stands in a bead on the edge of the slab and
     beyond each end of the blade (see :func:`_press_out`)."""
     st, wsl = s.st, s.wsl
-    lat = s.lat_px[wsl]
-    from_edge = max(st.r * st.lmax, 1e-6) - np.abs(lat)
-    near = _smoothstep(_KNIFE_END_PX, 0.0, from_edge)
-    # (skimming, the blade spreads no film to press out; it takes a slab
-    # of some thickness to stand in a bead)
-    # (as much as the slab is thick, over each step's share of a pass:
-    # not what this step filled, which wavers from step to step with
-    # the blade's chatter and would come out as a bead at every step)
-    d_end = (
-        ride
-        * s.expo[wsl]
-        * (_KNIFE_END * (0.8 + st.p) * (1.0 - skim))
-        * near
-        * _smoothstep(0.5, 2.0, ride)
-    )
+    d_end = _end_press(ride, s, skim)
     if d_end.max() > 1e-6:
-        _press_out(run, st, s.taps, lat, s.along[wsl], d_end)
+        _press_out(run, st, s.taps, s.lat_px[wsl], s.along[wsl], d_end)
 
 
 def _lift_blade(run: _Run, s: _Step, body: float) -> None:
@@ -619,33 +699,20 @@ def _fold_layers(run: _Run, s: _Step, level, f_mix) -> None:
     """7) A blade only shears the paint it cuts through: riding within the
     top layer it leaves the one below alone; cutting into it, it folds the
     two into each other in streaks (marbling), not evenly."""
-    st, sl, wsl = s.st, s.sl, s.wsl
+    st, wsl = s.st, s.wsl
     p = st.p
-    hair, expo_c = s.hair[wsl], s.expo[wsl]
-    und, floor = run.canvas.und[sl], run.relief.floor[sl]
+    expo_c = s.expo[wsl]
     m = 1.0 - np.exp(-run.eff["mixing"] * 3.0 * p * p * expo_c * s.streak[wsl] * f_mix)
-    into_under = np.clip(floor + und[..., IV] + 0.5 - level, 0.0, 1.0)
-    m = np.clip(m * (0.1 + 1.8 * hair) * into_under, 0.0, 1.0)
+    # (in streaks along its nicks, as far as it cuts into the layer below:
+    # see _engine.blade_folds)
+    m = eng.blade_folds(
+        run.canvas.und, run.relief.floor, st.cy0, st.cx0, level, m, s.F, st.wy0, st.wx0
+    )
     eng.stir(run.cv, st.cy0, st.cx0, m)
 
 
 # ----------------------------------------------------------------------------
 # helpers
-
-
-def _along_blade(lat, under, values, span):
-    """Average ``values`` over the pixels ``under`` the blade at each position
-    along its length (``lat``, px), smoothed over ``span`` px, and spread back
-    to every pixel by its position along the blade."""
-    b = np.round(lat - lat.min()).astype(int)
-    n = int(b.max()) + 1
-    cnt = np.bincount(b[under], minlength=n).astype(np.float64)
-    tot = np.bincount(b[under], values[under], minlength=n)
-    kernel = np.ones(2 * span + 1)
-    cnt_s = np.convolve(cnt, kernel, mode="same")
-    tot_s = np.convolve(tot, kernel, mode="same")
-    prof = np.where(cnt_s > 0, tot_s / np.maximum(cnt_s, 1e-9), 0.0)
-    return np.where(cnt_s[b] > 0, prof[b], values)
 
 
 def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
@@ -664,8 +731,8 @@ def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
     y1, x1 = min(st.cy0 + st.ch + m, H), min(st.cx0 + st.cw + m, W)
     wl, wr = eng.splat_out(
         d_end,
-        lat,
-        along_px,
+        np.ascontiguousarray(lat),
+        np.ascontiguousarray(along_px),
         st.cy0 - y0,
         st.cx0 - x0,
         y1 - y0,

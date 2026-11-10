@@ -42,7 +42,7 @@ from ._geometry import (
     _step_slices,
 )
 from ._hair import _NICK_WANDER, _NO_TEX, _NO_TEX2, _hair_field
-from ._knife import _before_the_blade, _BladeStart, _knife_step, _wandering_bands
+from ._knife import _before_the_blade, _BladeStart, _knife_step, _knife_taps
 from .brush import (
     _COL_X,
     _PHYSICS,
@@ -183,12 +183,12 @@ class Stroke:
         How readily the stroke churns into wet paint below (0 = sits on top,
         1 = stirs in strongly). Scaled by pressure.
     pickup:
-        How much wet paint the brush lifts and carries along (0..1).
+        How much wet paint the brush lifts and carries along (0..2).
         Brushes only: a knife drags wet paint instead (a thin-film flow).
     drag:
-        How much wet paint the brush pushes along with it (0..1). Brushes only.
+        How much wet paint the brush pushes along with it (0..2). Brushes only.
     streaks:
-        Strength of the brush-hair streak texture (0..1).
+        Strength of the brush-hair streak texture (0..2).
     smear:
         How long paint picked up from the canvas persists on the brush tip,
         roughly in brush widths.
@@ -197,8 +197,8 @@ class Stroke:
         stroke (see :attr:`BrushType.blending`).
     taper:
         Fraction of the stroke length over which the brush is lowered at the
-        start and lifted at the end (narrower, feathered ends). A number, or
-        a (start, end) pair. 0 gives full ends.
+        start and lifted at the end (narrower, feathered ends). A number from
+        0 to 1, or a (start, end) pair of them. 0 gives full ends.
     lift:
         0..1: how the tool leaves the paint at the end. 0 slides off cleanly;
         higher pulls the paint up into little peaks and torn ridges, as a
@@ -934,11 +934,11 @@ class _Run:
             return none  # (not reached: see _lift_from)
         brush, bt = self.brush, self.bt
         load, hold, vol = self._load(i, p)
-        loaded = float(_smoothstep(0.15, 0.6, load / hold))
+        loaded = eng.smoothstep(0.15, 0.6, load / hold)
         if loaded <= 0:
             return none
         length = arc[-1]
-        short = float(_smoothstep(1.0, 3.0, length / Wd))
+        short = eng.smoothstep(1.0, 3.0, length / Wd)
         lift = self.eff["lift"]
         # The clumps leave over the distance the bristle tips travel while the
         # brush comes up: a matter of how long the hair is (it grows far more
@@ -963,12 +963,12 @@ class _Run:
             1.2 - 0.5 * p
         ) * body * max(load - hold, 0.0)
         # fluid paint closes up behind the clumps as they leave
-        L *= float(_smoothstep(0.1, 0.5, body))
+        L *= eng.smoothstep(0.1, 0.5, body)
         amp = (
             _LIFT_CREST
             * lift
-            * float(_smoothstep(0.8, 3.0, thick))
-            * float(_smoothstep(0.3, 0.8, body))
+            * eng.smoothstep(0.8, 3.0, thick)
+            * eng.smoothstep(0.3, 0.8, body)
         )
         if L < 1.0:
             return none
@@ -986,10 +986,12 @@ class _Run:
         F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables)
         if not hit and not (off and eng._touches_off(st, F)):
             return None
-        wsl = _step_slices(st)[1]
-        u_px = F[eng.F_U][wsl]
         if self.bt.rigid:
-            u_px = _wandering_bands(self, st, F[eng.F_ALONG][wsl], u_px)
+            taps, taps_all = _knife_taps(self, st, F)
+            step = _Step(st, F, tables, taps)
+            step.taps_all = taps_all
+            return step
+        u_px = F[eng.F_U][_step_slices(st)[1]]
         taps = eng.bristle_taps(u_px, st.span, st.nsub, self.brush.ring, st.rho)
         return _Step(st, F, tables, taps)
 
@@ -1092,7 +1094,9 @@ def _dab_lift(run: _Run) -> None:
         return
     thick = float(V.sum() / max(float((V > 0.15).sum()), 1.0))
     body = float(np.where(own, top[..., IB], 0.0).sum() / V.sum())
-    amp = 1.2 * lift * float(_smoothstep(2.0, 6.0, thick) * _smoothstep(0.3, 0.8, body))
+    amp = (
+        1.2 * lift * (eng.smoothstep(2.0, 6.0, thick) * eng.smoothstep(0.3, 0.8, body))
+    )
     if amp <= 0:
         return
     rng = run.rng
