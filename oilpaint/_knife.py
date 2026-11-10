@@ -218,6 +218,7 @@ def _blade_rest(run: _Run, s: _Step):
         s.F,
         st.wy0,
         st.wx0,
+        s.sl is None,
     )
     # Wet paint from earlier strokes holds the blade up too, the heap it pushes
     # included (a knife rides on a wave of paint): it rests on its high points
@@ -225,8 +226,10 @@ def _blade_rest(run: _Run, s: _Step):
     # touch lays new paint on top of the old.
     if not (vmax > 0.05 and any_under):
         return rest.astype(np.float64)
-    # (summed by numpy as the pixels lie: on the canvas, or gathered from it
-    # past its edge)
+    # (summed by numpy, and summed as numpy always summed it: on the canvas
+    # over the strided view of the canvas itself, row by row, which rounds
+    # differently from a contiguous copy of the same pixels; past the edge
+    # over the gathered copy)
     if s.sl is not None:
         und_ib = canvas.und[..., IB][s.sl]
     old_body = float((und_ib.sum() + top_ib.sum()) / max(float(old_v.sum()), 1e-9))

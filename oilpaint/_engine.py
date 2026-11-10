@@ -3455,19 +3455,22 @@ def nearest(i, n):
 
 
 @njit(cache=True, error_model="numpy")
-def blade_rest(top, und, ids, fine, wide, oy, ox, h, w, stroke_id, stiff, F, wy0, wx0):
+def blade_rest(
+    top, und, ids, fine, wide, oy, ox, h, w, stroke_id, stiff, F, wy0, wx0, gathered
+):
     """Where a blade of stiffness ``stiff`` rests on the solid surface (from
     the thread tops, ``fine``, to the highest ridges around, ``wide``); the
     wet paint of earlier strokes (single precision, as the paint) and the
     most of it; which pixels lie under the blade (mostly covered by its
     chord); whether any do; the IB plane of the top layer where it is an
-    earlier stroke's (0 elsewhere), and of the layer below. See
-    _knife._blade_rest."""
+    earlier stroke's (0 elsewhere); and, if ``gathered`` (a window past the
+    edge of the canvas), the IB plane of the layer below (empty otherwise).
+    See _knife._blade_rest."""
     H, W = top.shape[0], top.shape[1]
     rest = np.empty((h, w), np.float32)
     old_v = np.empty((h, w), np.float32)
     top_ib = np.empty((h, w), np.float32)
-    und_ib = np.empty((h, w), np.float32)
+    und_ib = np.empty((h, w) if gathered else (0, 0), np.float32)
     under = np.empty((h, w), np.bool_)
     k = np.float32(stiff)
     zero = np.float32(0.0)
@@ -3483,7 +3486,8 @@ def blade_rest(top, und, ids, fine, wide, oy, ox, h, w, stroke_id, stiff, F, wy0
             old_v[y, x] = v
             vmax = max(vmax, v)
             top_ib[y, x] = top[Y, X, IB] if earlier else zero
-            und_ib[y, x] = und[Y, X, IB]
+            if gathered:
+                und_ib[y, x] = und[Y, X, IB]
             wy, wx = wy0 + y, wx0 + x
             ub = (
                 F[F_AA, wy, wx]
