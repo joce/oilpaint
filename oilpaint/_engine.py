@@ -801,11 +801,13 @@ def bristle_taps(u_px, span, nsub, ring, rho):
     cols = np.empty((npx, COLUMNS), np.int32)
     wts = np.empty((npx, COLUMNS))
     ntap = np.zeros(npx, np.int32)
+    # (the columns a pixel touches, lo..hi, are all that is set in acc: only
+    # those are read, in order, and cleared again)
     acc = np.zeros(COLUMNS)
     for y in range(ch):
         for x in range(cw):
             q = y * cw + x
-            acc[:] = 0.0
+            lo, hi = COLUMNS, -1
             for k in range(nsub):
                 uc = clip(u_px[y, x] + span * ((k + 0.5) / nsub - 0.5), -1.0, 1.0)
                 if ring:
@@ -822,9 +824,11 @@ def bristle_taps(u_px, span, nsub, ring, rho):
                             (theta - rho) / (2.0 * math.pi) * COLUMNS - 0.5
                         ) % COLUMNS
                         c0 = min(int(pos), COLUMNS - 1)
+                        c1 = (c0 + 1) % COLUMNS
                         fr = pos - c0
                         acc[c0] += 0.5 * (1.0 - fr) / nsub
-                        acc[(c0 + 1) % COLUMNS] += 0.5 * fr / nsub
+                        acc[c1] += 0.5 * fr / nsub
+                        lo, hi = min(lo, c0, c1), max(hi, c0, c1)
                 else:
                     # column b covers an equal slice of the brush, centred at (b + 0.5)
                     # / COLUMNS
@@ -833,12 +837,14 @@ def bristle_taps(u_px, span, nsub, ring, rho):
                     fr = clip(colf - c0, 0.0, 1.0)
                     acc[c0] += (1.0 - fr) / nsub
                     acc[c0 + 1] += fr / nsub
+                    lo, hi = min(lo, c0), max(hi, c0 + 1)
             n = 0
-            for b in range(COLUMNS):
+            for b in range(lo, hi + 1):
                 if acc[b] != 0.0:
                     cols[q, n] = b
                     wts[q, n] = acc[b]
                     n += 1
+                acc[b] = 0.0
             ntap[q] = n
     return cols, wts, ntap
 
