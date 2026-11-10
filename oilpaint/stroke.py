@@ -758,8 +758,6 @@ class _Run:
             hair_x0=hair_at[1],
             hair_ds=hair_at[2],
             hair_dx=hair_at[3],
-            hair_lo=float(self.tex2.min()),
-            hair_hi=float(self.tex2.max()),
             spacing=float(spacing),
             bundle=float(self.brush.width),
         )

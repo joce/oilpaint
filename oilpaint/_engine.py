@@ -165,9 +165,6 @@ StrokeConsts = namedtuple(
         "hair_x0",
         "hair_ds",
         "hair_dx",
-        # the least and the most of it (see may_touch)
-        "hair_lo",
-        "hair_hi",
         # the stroke's nominal step along its path (px)
         "spacing",
         # the brush's own size: how wide it paints on average (px)
@@ -675,15 +672,15 @@ def may_touch(st, K, c_tab):
     """The box (y0, y1, x0, x1) of the step's window outside which the
     footprint (see :func:`footprint`) covers no pixel it sweeps over: none
     further across the motion than its widest (its edge roughened by the
-    hair at most as much as the stroke's hair pattern, ``K.hair_lo`` to
-    ``K.hair_hi``, lets it) and its anti-aliasing, and none further along it
-    than its chords reach, at the step's start and end, plus the
-    anti-aliasing of the solid ends (a margin of 0.01 px for rounding)."""
+    hair at most as much as a hair pattern, 0 to 1, lets it) and its
+    anti-aliasing, and none further along it than its chords reach, at the
+    step's start and end, plus the anti-aliasing of the solid ends (a margin
+    of 0.01 px for rounding)."""
     half_aa, m = 0.5 * EDGE_PX, 0.01
     rs = (st.r0, st.r1, st.r)
     rmax = max(rs[0], rs[1], rs[2])
     # across: |lat| (1 + rough (hair - 0.5)) / lmax is at least lr there
-    f_lo = min(1.0 + K.rough * (K.hair_lo - 0.5), 1.0 + K.rough * (K.hair_hi - 0.5))
+    f_lo = 1.0 - 0.5 * abs(K.rough)
     lat_max = (rmax * st.lmax + half_aa + m) / f_lo if f_lo > 0 else np.inf
     # along: the chord's centre and half-length at most as far as at either end
     if K.circle:
