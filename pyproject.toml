@@ -70,7 +70,17 @@ version-file = "oilpaint/_version.py"
 packages = ["oilpaint"]
 
 [tool.hatch.build.targets.sdist]
-include = ["oilpaint", "tests", "CHANGELOG.md", "LICENSE", "README.md", "RELEASING.md", "pyproject.toml"]
+include = [
+    "oilpaint",
+    "tests",
+    "tools",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "RELEASING.md",
+    "pyproject.toml",
+    "tox.ini",
+]
 
 [tool.black]
 target-version = ["py311"]
@@ -134,6 +144,7 @@ select = [
     "UP",
     "B",
     "A",
+    "C90",
     "C4",
     "SIM",
     "PIE",
@@ -161,6 +172,17 @@ ignore = [
     "unnecessary-cast-to-int",
 ]
 preview = true
+
+[tool.ruff.lint.mccabe]
+# The most branches any function outside the compiled kernels has: a function
+# that grows past it is split.
+max-complexity = 13
+
+[tool.ruff.lint.per-file-ignores]
+# The compiled kernels keep their loops in one function (numba compiles each
+# call), and the example paintings are long scripts of marks.
+"oilpaint/_engine.py" = ["complex-structure"]
+"examples/*" = ["complex-structure"]
 
 [build-system]
 requires = ["hatchling>=1.29,<2.0", "hatch-vcs>=0.4,<1.0"]
