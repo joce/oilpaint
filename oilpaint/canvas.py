@@ -17,19 +17,18 @@ from .brush import (
     PACKED,
     Brush,
     BrushType,
-    Stroke,
     StrokePaint,
     _check_seed,
     _check_tool,
     _checked_loads,
     _number,
     _width,
-    apply_stroke,
     load_paint,
 )
 from .paint import DEFAULT_BODY, ColorLike, as_paint
 from .png import write_png
 from .spline import Profile
+from .stroke import Stroke, apply_stroke
 from .surface import DEFAULT_SURFACE, Surface
 
 
