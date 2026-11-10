@@ -3137,8 +3137,8 @@ def clear_negative(top, und, ry0, ry1, rx0, rx1):
                         row[x, c] = zero
                     continue
                 for c in range(PACKED):
-                    if row[x, c] < zero:
-                        row[x, c] = zero
+                    v = row[x, c]
+                    row[x, c] = max(v, zero)
 
 
 @njit(cache=True, error_model="numpy")
