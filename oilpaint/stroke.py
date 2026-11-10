@@ -77,13 +77,6 @@ _LIFT_CREST = 4.0
 # stroke's own thick paint round off.
 _LEVEL_PASSES = 12
 _SOFTEN_PASSES = 2
-# How much paint a brush painting past the edge of the canvas loses, as if it
-# had laid it: the exposure profile across its width, summed per unit of
-# width and of travel (measured: 0.92-1.04 for rounds, flats and filberts,
-# 0.71 for a mop, 0.48-0.60 for a fan). A fixed stand-in for what the engine
-# sums exactly where it does its own accounting off the edge; nothing to do
-# with _VOLUME_PER_AMOUNT, which is also 0.9.
-_LAID_ACROSS = 0.9
 
 
 def _check_profile(name: str, profile, size: bool = False) -> None:
@@ -370,7 +363,7 @@ def apply_stroke(canvas: _Canvas, stroke: Stroke) -> Brush:
     run = _Run.begin(canvas, stroke)
     if run.bt.rigid:
         for st, tables in run.steps():
-            s = run.footprint(st, tables)
+            s = run.footprint(st, tables, off=True)
             if s is not None:
                 _knife_step(run, s)
     else:
@@ -631,6 +624,9 @@ class _Run:
     canvas and starts the brush's hair dry (``brush.wet``)."""
 
     blade: _BladeStart  # (knives only)
+    # (knives only) the slab laid past the edge of the canvas, in tiles (see
+    # _knife._laid_off)
+    knife_off: dict[tuple[int, int], np.ndarray] | None = None
 
     @classmethod
     def begin(cls, canvas: _Canvas, stroke: Stroke) -> _Run:
@@ -768,19 +764,20 @@ class _Run:
 
     # ------------------------------------------------------------------
     def steps(self):
-        """The steps of the stroke that reach the canvas, in order, each as
-        :meth:`step` gives it. Painting past the edge of the canvas uses up
-        paint all the same. (Each step is worked out once the one before it
-        has been painted: it starts from the brush as that left it.)"""
+        """The steps of the stroke, in order, each as :meth:`step` gives it.
+        Painting past the edge of the canvas uses up paint all the same: a
+        tool's steps off the canvas are taken as on a canvas large enough to
+        hold them (see _engine.off_canvas). (Each step is worked out once the
+        one before it has been painted: it starts from the brush as that left
+        it.)"""
         for i in range(1, len(self._pts)):
             seg = self._segment(i)
             if seg is None:
                 continue
             win = self._window(seg)
-            if win.on_canvas:
-                yield self._step(seg, win)
-            else:
-                _use_paint_off_canvas(self.brush, seg.Wd, seg.ds, seg.p)
+            # (off the canvas, the tool goes on as on a canvas large enough
+            # to hold it: see _engine.off_canvas)
+            yield self._step(seg, win)
 
     def step(self, i: int):
         """Step ``i`` of the stroke, from point i-1 to point i: its scalars (an
@@ -866,8 +863,9 @@ class _Run:
             ww=win.x1 - x0,
             cy0=cy0,
             cx0=cx0,
-            ch=win.cy1 - cy0,
-            cw=win.cx1 - cx0,
+            # (none of it, for a step wholly off the canvas)
+            ch=max(win.cy1 - cy0, 0),
+            cw=max(win.cx1 - cx0, 0),
             wy0=cy0 - y0,
             wx0=cx0 - x0,
             cx=seg.cx,
@@ -977,17 +975,17 @@ class _Run:
             return none
         return float(L), float(amp)
 
-    def footprint(self, st, tables) -> _Step | None:
+    def footprint(self, st, tables, off: bool = False) -> _Step | None:
         """Where the tool touches the canvas while it moves along the step
         ``st`` (with the chord tables ``tables``, see :meth:`step`), or None
-        if it touches nothing.
+        if it touches nothing (with ``off``: nothing on or off the canvas).
 
         For every pixel we compute its *exposure* (see :func:`apply_stroke`),
         its anti-aliased coverage, and where it sits under the brush (across
         the bristles, along the motion); see :func:`_engine.footprint`. And
         which bristle columns are above each pixel."""
         F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables)
-        if not hit:
+        if not hit and not (off and eng._touches_off(st, F)):
             return None
         wsl = _step_slices(st)[1]
         u_px = F[eng.F_U][wsl]
@@ -1072,17 +1070,6 @@ def _brush_step(run: _Run, st, tables) -> None:
     )
 
 
-def _use_paint_off_canvas(brush, Wd, ds, p):
-    """Painting past the edge of the canvas still uses up paint."""
-    total = brush.volume
-    if total <= 0:
-        return
-    used = eng.deposit_thickness(total / (Wd * Wd)) * (0.5 + p) * ds * Wd * _LAID_ACROSS
-    g = max(1.0 - used / total, 0.0)
-    brush.tip *= g
-    brush.reservoir *= g
-
-
 def _dab_lift(run: _Run) -> None:
     """A loaded brush lifted straight off the mound of paint it pressed out
     pulls it up into a peak or two, a little off centre the way it leaves
@@ -1125,5 +1112,6 @@ def _dab_lift(run: _Run) -> None:
     m = (V * peak).sum() / V.sum()
     fac = np.clip(1.0 + 2.0 * amp * (peak - m), 0.05, None)
     fac *= V.sum() / max(float((V * fac).sum()), 1e-12)
+    # (scaling each pixel's paint: see _knife._lift_off)
     fac = np.where(own, fac, 1.0)
     top *= fac.astype(np.float32)[..., None]

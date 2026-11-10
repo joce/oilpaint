@@ -125,6 +125,73 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first).
 - A numba cache left from another number of spectral bands is refused with
   a clear `RuntimeError` instead of corrupting memory.
+- A stroke that runs partly or wholly off the edge of the canvas paints
+  what is on the canvas as the same stroke would on a canvas large enough
+  to hold it: one running along an edge, one starting, ending or wandering
+  off it, a dab cut by an edge, a stroke across a canvas a few pixels wide;
+  brushes and knives. The paint the bristles past the edge would have laid
+  was taken from all of them alike, so those on the canvas ran dry early (a
+  hog flat with 30% of its width past the edge stopped 30 px short over a
+  200 px stroke, a round half off 30 to 60 px short); steps wholly off the
+  canvas used a rough estimate (a flat started off the canvas arrived with
+  up to 1.4 times its paint, a round from far off with a fifth of it, and a
+  hog crossing a tiny canvas kept three times what it should); and a knife
+  kept the paint under its part past the edge and laid it on the visible
+  part (up to 1.8 times the paint, 136 px too long). Now the tool goes on
+  past the edge as over a canvas going on as it is at the edge: the
+  bristles past it lay their paint there (with the glob that feeds them),
+  a blade fills under its part past it (over the slab it has laid there),
+  and the share of a squeezed-out ridge that lies past the edge goes there.
+  What is on the canvas ends within a few percent of the larger canvas's
+  (the dry-out at the very end of a stroke, which hangs on the paint the
+  stroke itself laid past the edge, can differ by a few pixels). Strokes
+  inside the canvas paint exactly as before. Strokes that run off the
+  canvas now cost about what the same stroke costs on a canvas large enough
+  to hold it, since the part off the canvas is simulated rather than
+  estimated: the bench's `edges` scene takes 2.4 times as long (mostly knife
+  steps wholly off the canvas), `knife-lift` a quarter longer, `painting`
+  about 6% longer.
+- A dab of a brush carrying more than one paint (loaded in bands, marbled
+  with `load_mix`, or with paint picked up from the canvas) keeps every
+  pigment when its paint is shared out between the bristles. That scaled
+  each bristle's paint, which made and destroyed pigment (0.3% to 40% of a
+  pigment over a dab or a stipple); paint now moves from bristle to
+  bristle with what is in it, round a round's bundle the short way. Where
+  every bristle holds the same paint (to a millionth) it is scaled as
+  before: a single dab of one paint on a clean canvas is unchanged bit for
+  bit, as are most stipples of one paint (where paint picked back up from
+  the canvas differs in its last bits, a few differ at that level). The
+  peak a loaded dab or knife pulls up as it lifts off is still made by
+  scaling its paint pixel by pixel, which keeps volume but not each
+  pigment where the mound holds several colours (up to a few percent on a
+  three-colour dab); a knife now pulls up only its own paint.
+- How much of a pixel paint covers no longer hangs on specks of rounding
+  dust (1e-8 of paint either side of zero). A pixel's layer holding no more
+  than 1e-6 of paint is empty: it covers nothing, hands no coverage on to
+  the layer below when paint lands on it, is not stirred, and a ridge of no
+  more paint than that covers nothing where it lands; a speck's neighbour
+  thinner than a trace no longer tells `fix_coverage` that a pixel is fully
+  covered. Dragging, the knife's flow and lifting paint off no longer leave
+  or take less than nothing. Edges painted over such dust could come out a
+  dotted line of fully and two-thirds covered pixels whose paint was the
+  same. (This is about coverage: other decisions in the engine, such as
+  which of three layers merge, still turn on thresholds a speck can tip, so
+  a speck can still change a stroke at a pixel or two.)
+- The slanted edge of thick paint is a smooth anti-aliased ramp, not a
+  dotted line. Paint that slumped or was pushed into the pixels just past
+  the edge the brush laid had no coverage of its own, so the renderer drew
+  any of it thicker than a film as solid: along a slant, where it gathers
+  in the pixel past each step of the staircase, a tooth at every step (566
+  such dots along the impasto sheet's swoosh, about 415 now; a 30 degree
+  edge of a loaded hog flat goes from 191 to 109, where a perfectly
+  anti-aliased edge scores about 110 to 150). Within two pixels of the
+  edge of a comparable film of the same paint, such paint now carries on
+  that edge's ramp (it is covered no more than the covered paint beside
+  it; a band of it along a level edge as fully as that); further out, or
+  as a stray speck, it covers its pixel in proportion to its thickness
+  beside the films of the same paint around it. The result doesn't depend
+  on which way the canvas is scanned. Level edges and thin strokes keep
+  their profile; no paint moves.
 
 ### Changed
 
