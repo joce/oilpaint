@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 import math
 from collections.abc import Iterable, Sequence
-from typing import Union
 
 import numpy as np
 
@@ -23,8 +22,6 @@ def _scatter_factor(luminance: float) -> float:
     # in tints compared with real paint.
     return 0.1 + 0.9 * luminance
 
-
-ColorLike = Union[str, Sequence[float], np.ndarray, "Paint"]
 
 #: Body (stiffness) of paint straight from the tube.
 DEFAULT_BODY = 0.7
@@ -252,6 +249,12 @@ class Paint:
     def __repr__(self) -> str:
         label = f"{self.name!r}, " if self.name else ""
         return f"Paint({label}{self.hex}, S={self.S:.2f})"
+
+
+# (Defined after Paint so that it holds the class itself, not the name
+# "Paint": a name would be looked up in whichever module's hints use the
+# alias, and fail there unless that module imported Paint too.)
+ColorLike = str | Sequence[float] | np.ndarray | Paint
 
 
 def _split_part(part) -> tuple[ColorLike, float]:
