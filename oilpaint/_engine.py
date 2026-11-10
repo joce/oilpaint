@@ -244,7 +244,9 @@ def harmless(top, und):
         tot += abs(
             math.log1p(max(top[c], zero) / va) - math.log1p(max(und[c], zero) / vb)
         )
-    return tot / IV < SAME_LAYER
+        if not tot / IV < SAME_LAYER:  # (the differences only add up)
+            return False
+    return True
 
 
 @njit(cache=True, error_model="numpy")
@@ -648,6 +650,97 @@ def surface_factors(cv, aux, st, K):
     return f_pick, f_dep, f_mix, 1.0 + (sl - 0.5) * sum_bare / (ch * cw)
 
 
+@njit(cache=True, error_model="numpy")
+def surface_factors_on(cv, aux, st, part, K):
+    """:func:`surface_factors` over the part ``part`` of the step's window
+    (see :func:`touched`); drag still from the bare surface over all of it."""
+    top, und = cv[0], cv[1]
+    dry_h = aux[3]
+    ch, cw = part.ch, part.cw
+    f_pick = np.ones((ch, cw))
+    f_dep = np.ones((ch, cw))
+    f_mix = np.ones((ch, cw))
+    if not K.surface_acts:
+        return f_pick, f_dep, f_mix, 1.0
+    sl, ab, to = K.slickness, K.absorbency, K.surface_tooth
+    sum_bare = 0.0
+    for y in range(st.ch):
+        for x in range(st.cw):
+            Y, X = st.cy0 + y, st.cx0 + x
+            wet = top[Y, X, IV] + und[Y, X, IV]
+            dh = dry_h[Y, X]
+            bare = math.exp(-(wet + dh) / 0.4)
+            sum_bare += bare
+            py, px = Y - part.cy0, X - part.cx0
+            if not (0 <= py < ch and 0 <= px < cw):
+                continue
+            on_ground = math.exp(-wet / 1.5) * math.exp(-dh / 0.4)
+            f_pick[py, px] = max(1.0 + on_ground * (2.0 * (sl - 0.5) - 0.8 * ab), 0.1)
+            f_dep[py, px] = max(
+                1.0 + bare * (0.6 * ab + 0.4 * (to - 0.5) - 0.4 * (sl - 0.5)), 0.4
+            )
+            f_mix[py, px] = 1.0 - 0.6 * ab * bare
+    return f_pick, f_dep, f_mix, 1.0 + (sl - 0.5) * sum_bare / (st.ch * st.cw)
+
+
+@njit(cache=True, error_model="numpy")
+def touched(st, F):
+    """The part of the step's window on the canvas that the tool passes over
+    in this step (where its footprint ``F`` covers a pixel and sweeps over
+    it), as a Step whose canvas part (cy0, cx0, ch, cw at wy0, wx0) is that
+    part. Everywhere else in the window its exposure and coverage are 0: the
+    step adds nothing there, moves nothing and lifts nothing."""
+    y_lo, y_hi, x_lo, x_hi = st.ch, -1, st.cw, -1
+    for y in range(st.ch):
+        for x in range(st.cw):
+            wy, wx = st.wy0 + y, st.wx0 + x
+            if F[F_AA, wy, wx] != 0 and F[F_OVERLAP, wy, wx] != 0:
+                y_lo, y_hi = min(y_lo, y), max(y_hi, y)
+                x_lo, x_hi = min(x_lo, x), max(x_hi, x)
+    if y_hi < 0:  # (not reached: there is no step without exposure)
+        y_lo, y_hi, x_lo, x_hi = 0, -1, 0, -1
+    return Step(
+        st.i,
+        st.first,
+        st.last,
+        st.touchdown,
+        st.x0,
+        st.y0,
+        st.hh,
+        st.ww,
+        st.cy0 + y_lo,
+        st.cx0 + x_lo,
+        y_hi - y_lo + 1,
+        x_hi - x_lo + 1,
+        st.wy0 + y_lo,
+        st.wx0 + x_lo,
+        st.cx,
+        st.cy,
+        st.tx,
+        st.ty,
+        st.ds,
+        st.p,
+        st.p_now,
+        st.p_before,
+        st.r0,
+        st.r1,
+        st.r,
+        st.Wd,
+        st.Wn,
+        st.side,
+        st.uscale,
+        st.lmax,
+        st.h_tab_max,
+        st.arc_i,
+        st.lip,
+        st.wet,
+        st.dry,
+        st.span,
+        st.nsub,
+        st.rho,
+    )
+
+
 # ----------------------------------------------------------------------------
 # moving paint on the canvas
 
@@ -699,14 +792,18 @@ def deposit(
                     laid, touched, old = True, False, False
             # an earlier top layer worth keeping out of the layer below: hold the new
             # paint back until we know how well the stroke covers it
+            hold = False
+            known_harmless = False  # (as worked out here: it is the same below)
             if (
                 holding
                 and old
                 and pinfo[1] <= Y < pinfo[1] + pinfo[3]
                 and pinfo[2] <= X < pinfo[2] + pinfo[4]
                 and top[Y, X, IV] > 1e-4
-                and not harmless(top[Y, X], und[Y, X])
             ):
+                known_harmless = harmless(top[Y, X], und[Y, X])
+                hold = not known_harmless
+            if hold:
                 py, px = Y - pinfo[1], X - pinfo[2]
                 for c in range(PACKED):
                     paint[py, px, c] += np.float32(dep[y, x, c])
@@ -714,6 +811,10 @@ def deposit(
                 if has_reach:
                     prch[py, px] += reach[y, x]
                 pon[py, px] = True
+                # (where paint is held: rows pinfo[5]..pinfo[6], columns
+                # pinfo[7]..pinfo[8])
+                pinfo[5], pinfo[6] = min(pinfo[5], py), max(pinfo[6], py + 1)
+                pinfo[7], pinfo[8] = min(pinfo[7], px), max(pinfo[8], px + 1)
                 # the body of the brush has been over it, or it laid a covering film:
                 # bury the old top now
                 if buried(paint[py, px, IV], prch[py, px]) >= BURIED:
@@ -741,7 +842,7 @@ def deposit(
                     k = buries(dd)
                     if has_reach:
                         k = max(k, smoothstep(BODY0, BODY1, reach[y, x]))
-                    if k < 1.0 and harmless(top[Y, X], und[Y, X]):
+                    if k < 1.0 and (known_harmless or harmless(top[Y, X], und[Y, X])):
                         k = 1.0
                     k32 = np.float32(k)
                     for c in range(PACKED):
@@ -772,8 +873,8 @@ def settle_pending(cv, pend, stroke_id):
     paint, pcov, prch, pon, pinfo = pend
     if pinfo[0] == 0:
         return
-    for py in range(pinfo[3]):
-        for px in range(pinfo[4]):
+    for py in range(pinfo[5], pinfo[6]):
+        for px in range(pinfo[7], pinfo[8]):
             if not pon[py, px]:
                 continue
             Y, X = pinfo[1] + py, pinfo[2] + px
@@ -901,16 +1002,39 @@ def spread(cv, pend, br, sy0, sx0, w, pk, cover, stroke_id, by_film):
             for c in range(PACKED):
                 tip[b, c] += pk[c] / COLUMNS
         return
+    # (only where it lands: elsewhere there is nothing to lay, and it covers
+    # nothing)
     hh, ww = w.shape
-    dep = np.empty((hh, ww, PACKED))
-    d = np.empty((hh, ww))
+    y0, y1, x0, x1 = hh, 0, ww, 0
     for y in range(hh):
         for x in range(ww):
+            if w[y, x] != 0 or cover[y, x] != 0:
+                y0, y1 = min(y0, y), max(y1, y + 1)
+                x0, x1 = min(x0, x), max(x1, x + 1)
+    if y0 >= y1:
+        return
+    dep = np.empty((y1 - y0, x1 - x0, PACKED))
+    d = np.empty((y1 - y0, x1 - x0))
+    for y in range(y0, y1):
+        for x in range(x0, x1):
             share = w[y, x] / tot
-            d[y, x] = share * pk[IV]
+            d[y - y0, x - x0] = share * pk[IV]
             for c in range(PACKED):
-                dep[y, x, c] = share * pk[c]
-    deposit(cv, pend, sy0, sx0, dep, d, cover, stroke_id, True, by_film, d, False)
+                dep[y - y0, x - x0, c] = share * pk[c]
+    deposit(
+        cv,
+        pend,
+        sy0 + y0,
+        sx0 + x0,
+        dep,
+        d,
+        cover[y0:y1, x0:x1],
+        stroke_id,
+        True,
+        by_film,
+        d,
+        False,
+    )
 
 
 @njit(cache=True, error_model="numpy")
@@ -927,10 +1051,15 @@ def shift(a, sx, sy):
             wgt = np.float32(wx * wy)
             if wx * wy < 1e-6 or abs(dx) >= w or abs(dy) >= h:
                 continue
+            # (a row at a time: its pixels' channels lie in one run)
+            C = a.shape[2]
+            x_lo, x_hi = max(dx, 0), min(w + dx, w)
+            n = (x_hi - x_lo) * C
             for y in range(max(dy, 0), min(h + dy, h)):
-                for x in range(max(dx, 0), min(w + dx, w)):
-                    for c in range(a.shape[2]):
-                        out[y, x, c] += wgt * a[y - dy, x - dx, c]
+                src = a[y - dy].reshape(-1)[(x_lo - dx) * C :]
+                dst = out[y].reshape(-1)[x_lo * C :]
+                for i in range(n):
+                    dst[i] += wgt * src[i]
     return out
 
 
@@ -986,10 +1115,13 @@ def place(cv, pend, pk, x0, y0, sx, sy, stroke_id):
 
 
 @njit(cache=True, error_model="numpy")
-def drag(top, und, f, x0, y0, sx, sy, p):
+def drag(top, und, f, x0, y0, sx, sy, p, wx0, wy0, wh, ww):
     """Move a fraction ``f`` of the wet paint by (sx, sy) pixels. ``f`` is
-    defined on the footprint window whose top-left pixel is (x0, y0). Paint is
-    conserved except what is pushed off the canvas. The older layer moves less."""
+    defined on the footprint window whose top-left pixel is (x0, y0) (all of
+    it, or the part of it where ``f`` isn't 0 of the whole window at (wx0,
+    wy0), wh by ww px: a layer moves only if there is wet paint in that). Paint
+    is conserved except what is pushed off the canvas. The older layer moves
+    less."""
     H, W = top.shape[0], top.shape[1]
     m = int(math.ceil(max(abs(sx), abs(sy)))) + 1
     fh, fw = f.shape
@@ -999,6 +1131,9 @@ def drag(top, und, f, x0, y0, sx, sy, p):
     fx1, fy1 = min(x0 + fw, W), min(y0 + fh, H)
     if fx0 >= fx1 or fy0 >= fy1:
         return
+    # where to look for wet paint: around the whole window
+    hx0, hy0 = max(wx0 - m, 0), max(wy0 - m, 0)
+    hx1, hy1 = min(wx0 + ww + m, W), min(wy0 + wh + m, H)
     rh, rw = ry1 - ry0, rx1 - rx0
     frac = np.zeros((rh, rw), np.float32)
     for Y in range(fy0, fy1):
@@ -1010,8 +1145,8 @@ def drag(top, und, f, x0, y0, sx, sy, p):
         if scale <= 0:
             continue
         has = False
-        for Y in range(ry0, ry1):
-            for X in range(rx0, rx1):
+        for Y in range(hy0, hy1):
+            for X in range(hx0, hx1):
                 if layer[Y, X, IV] != 0:
                     has = True
                     break
@@ -1027,10 +1162,13 @@ def drag(top, und, f, x0, y0, sx, sy, p):
                     for c in range(PACKED):
                         moved[y, x, c] = fr * layer[ry0 + y, rx0 + x, c]
         shifted = shift(moved, sx, sy)
+        n = rw * PACKED
         for y in range(rh):
-            for x in range(rw):
-                for c in range(PACKED):
-                    layer[ry0 + y, rx0 + x, c] += shifted[y, x, c] - moved[y, x, c]
+            # (a row at a time: its pixels' channels lie in one run)
+            row = layer[ry0 + y, rx0 : rx0 + rw].reshape(-1)
+            s_row, m_row = shifted[y].reshape(-1), moved[y].reshape(-1)
+            for i in range(n):
+                row[i] += s_row[i] - m_row[i]
 
 
 @njit(cache=True, error_model="numpy")
@@ -1311,43 +1449,61 @@ def brush_step(st, K, tex, tex2, tables, cv, aux, pend, br, col_u):
     F, hit = footprint(st, K, tex, tex2, tables[0], tables[1], tables[2])
     if not hit:
         return st.wet, st.dry
+    # most of the work is only where the tool passes over in this step
+    part = touched(st, F)
     taps = bristle_taps(
-        F[F_U, st.wy0 : st.wy0 + st.ch, st.wx0 : st.wx0 + st.cw],
+        F[F_U, part.wy0 : part.wy0 + part.ch, part.wx0 : part.wx0 + part.cw],
         st.span,
         st.nsub,
         K.ring,
         st.rho,
     )
-    return brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u)
+    return brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u)
 
 
 @njit(cache=True, error_model="numpy")
-def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
-    """One step of a brush, over its footprint ``F`` (see brush_step)."""
+def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u):
+    """One step of a brush, over its footprint ``F`` (see brush_step), on the
+    ``part`` of its window it passes over (see :func:`touched`; ``taps`` are
+    for that part)."""
     top, und, ids = cv[0], cv[1], cv[4]
     floor, tooth_map, hollows = aux[0], aux[1], aux[2]
     tip, belly = br[0], br[1]
     grid, c_tab, h_tab = tables
-    p, ch, cw, cy0, cx0, wy0, wx0 = st.p, st.ch, st.cw, st.cy0, st.cx0, st.wy0, st.wx0
-    f_pick, f_dep, f_mix, f_drag = surface_factors(cv, aux, st, K)
+    p = st.p
+    f_pick, f_dep, f_mix, f_drag = surface_factors_on(cv, aux, st, part, K)
 
     # 0) drag: wet paint under the brush is pushed along with it
     if K.drag > 0:
-        f = np.empty((st.hh, st.ww))
+        f = np.empty((part.ch, part.cw))
         coef = K.drag * f_drag * (0.5 + p)
-        for y in range(st.hh):
-            for x in range(st.ww):
+        for y in range(part.ch):
+            for x in range(part.cw):
+                wy, wx = part.wy0 + y, part.wx0 + x
                 f[y, x] = (
                     coef
-                    * F[F_PROFILE, y, x]
-                    * clip(F[F_OVERLAP, y, x] / st.ds, 0.0, 1.0)
+                    * F[F_PROFILE, wy, wx]
+                    * clip(F[F_OVERLAP, wy, wx] / st.ds, 0.0, 1.0)
                 )
-        drag(top, und, f, st.x0, st.y0, st.tx * st.ds, st.ty * st.ds, p)
+        drag(
+            top,
+            und,
+            f,
+            part.cx0,
+            part.cy0,
+            st.tx * st.ds,
+            st.ty * st.ds,
+            p,
+            st.x0,
+            st.y0,
+            st.hh,
+            st.ww,
+        )
 
     # 1) refill the tips, work the paints on the brush, pick up wet paint
     capacity = max(K.smear, 0.05) * 0.8 * st.Wd * st.Wd
     work_load(br, K, st, capacity)
-    pick_up(cv, br, taps, F, st, K, f_pick)
+    pick_up(cv, br, taps, F, part, K, f_pick)
 
     # 2) how much paint the brush carries, per column. Paint beyond what the hair
     #    holds is a glob on the outside: it goes on thick, the more so the stiffer the
@@ -1373,6 +1529,8 @@ def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
     #    pushed ahead (left as a ridge where the brush lifts)
     # ring, left, right
     ridges = (np.zeros(PACKED), np.zeros(PACKED), np.zeros(PACKED))
+    # (over all of the window on the canvas)
+    ch, cw, cy0, cx0, wy0, wx0 = st.ch, st.cw, st.cy0, st.cx0, st.wy0, st.wx0
     hb = max(1.25 * thick, 3.5 * (1.15 - p) * (1.3 - 0.8 * K.stiffness))
     digging = K.dig > 0
     vmax = 0.0
@@ -1411,7 +1569,9 @@ def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
         if emax > 1e-3:
             moved = take(top, und, cy0, cx0, excess, tv)
             share_pick = 0.5 * min(K.pickup, 1.0)
-            cols, wts, ntap = taps
+            cols, wts, ntap = bristle_taps(
+                F[F_U, wy0 : wy0 + ch, wx0 : wx0 + cw], st.span, st.nsub, K.ring, st.rho
+            )
             for y in range(ch):
                 for x in range(cw):
                     q = y * cw + x
@@ -1452,6 +1612,9 @@ def brush_step_on(st, K, F, taps, cv, aux, pend, br, tables, col_u):
     # 4) deposit from the tips. Each column's load sets how thick its paint goes on
     #    and when it starts to run dry. Bristles that were just in wet paint are
     #    coated and keep laying a continuous smear for a short distance.
+    #    (Only where it passes over: elsewhere its contact is 0.)
+    ch, cw = part.ch, part.cw
+    cy0, cx0, wy0, wx0 = part.cy0, part.cx0, part.wy0, part.wx0
     contact = np.empty((ch, cw))
     wet_contact = np.empty((ch, cw))
     sum_contact, sum_wet = 0.0, 0.0
@@ -1641,20 +1804,25 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
     y0, y1 = max(by0 - pad, 0), min(by1 + pad + 1, H)
     x0, x1 = max(bx0 - pad, 0), min(bx1 + pad + 1, W)
     h, w = y1 - y0, x1 - x0
+    # the paint's volume and the dry surface under it, over the box (the
+    # volume kept up to date as paint moves)
     Vs = np.empty((h, w), np.float32)
+    Dh = np.empty((h, w), np.float32)
+    for y in range(h):
+        for x in range(w):
+            Vs[y, x] = V[y0 + y, x0 + x]
+            Dh[y, x] = dry_h[ry0 + y0 + y, rx0 + x0 + x]
     fa = np.zeros((h, w), np.float32)
     fb = np.zeros((h, w), np.float32)
     ta = np.empty(PACKED, np.float32)
     ua = np.empty(PACKED, np.float32)
-    tb = np.empty(PACKED, np.float32)
-    ub = np.empty(PACKED, np.float32)
+    # (the same, for every column)
+    tcol = np.empty((w, PACKED), np.float32)
+    ucol = np.empty((w, PACKED), np.float32)
+    saved_col = np.empty(w, np.bool_)
     for _ in range(iters):
         flowed = False
         for axis in range(2):
-            for y in range(h):
-                for x in range(w):
-                    Y, X = ry0 + y0 + y, rx0 + x0 + x
-                    Vs[y, x] = top[Y, X, IV] + und[Y, X, IV]
             # downhill flow beyond what the paint can hold; onto bare canvas only from a
             # sheer edge. Pair (a, b): b is the next pixel down (axis 0) or to the right
             # (axis 1).
@@ -1662,8 +1830,8 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
             for y in range(h - (1 if axis == 0 else 0)):
                 for x in range(w - (1 if axis == 1 else 0)):
                     yb, xb = (y + 1, x) if axis == 0 else (y, x + 1)
-                    Sa = dry_h[ry0 + y0 + y, rx0 + x0 + x] + Vs[y, x]
-                    Sb = dry_h[ry0 + y0 + yb, rx0 + x0 + xb] + Vs[yb, xb]
+                    Sa = Dh[y, x] + Vs[y, x]
+                    Sb = Dh[yb, xb] + Vs[yb, xb]
                     dS = Sa - Sb
                     zero, quarter = np.float32(0.0), np.float32(0.25)
                     qa = (
@@ -1694,33 +1862,64 @@ def level(top, und, dry_h, ry0, ry1, rx0, rx1, iters):
             # move it, all pairs at once (from the paint as it was before this pass):
             # walk each line; a pixel changed by the pair behind it keeps a copy of how
             # it was
-            n_lines = w if axis == 0 else h
-            n_along = h if axis == 0 else w
-            for line in range(n_lines):
+            if axis == 0:
+                # (the columns side by side, a row at a time: each column is walked
+                # down as on its own, and the rows are read in the order they lie)
+                for x in range(w):
+                    saved_col[x] = False
+                for k in range(1, h):
+                    yp, y = k - 1, k
+                    Ya, Yb = ry0 + y0 + yp, ry0 + y0 + y
+                    for x in range(w):
+                        f_a, f_b = fa[yp, x], fb[yp, x]
+                        if not (f_a > 0 or f_b > 0):
+                            saved_col[x] = False
+                            continue
+                        X = rx0 + x0 + x
+                        sv = saved_col[x]
+                        for c in range(PACKED):
+                            t_a = tcol[x, c] if sv else top[Ya, X, c]
+                            u_a = ucol[x, c] if sv else und[Ya, X, c]
+                            t_b, u_b = top[Yb, X, c], und[Yb, X, c]
+                            tcol[x, c], ucol[x, c] = t_b, u_b
+                            mt = t_a * f_a - t_b * f_b
+                            mu = u_a * f_a - u_b * f_b
+                            top[Ya, X, c] -= mt
+                            und[Ya, X, c] -= mu
+                            top[Yb, X, c] += mt
+                            und[Yb, X, c] += mu
+                        saved_col[x] = True
+                        # (both pixels changed)
+                        Vs[yp, x] = top[Ya, X, IV] + und[Ya, X, IV]
+                        Vs[y, x] = top[Yb, X, IV] + und[Yb, X, IV]
+                continue
+            for line in range(h):
                 saved = False  # (ta, ua) hold the previous pixel as it was
-                for k in range(1, n_along):
-                    yp, xp = (k - 1, line) if axis == 0 else (line, k - 1)
+                for k in range(1, w):
+                    yp, xp = line, k - 1
                     f_a, f_b = fa[yp, xp], fb[yp, xp]
                     if not (f_a > 0 or f_b > 0):
                         saved = False
                         continue
-                    y, x = (k, line) if axis == 0 else (line, k)
+                    y, x = line, k
                     Ya, Xa = ry0 + y0 + yp, rx0 + x0 + xp
                     Yb, Xb = ry0 + y0 + y, rx0 + x0 + x
                     for c in range(PACKED):
                         t_a = ta[c] if saved else top[Ya, Xa, c]
                         u_a = ua[c] if saved else und[Ya, Xa, c]
                         t_b, u_b = top[Yb, Xb, c], und[Yb, Xb, c]
-                        tb[c], ub[c] = t_b, u_b
+                        # (b as it was: a, for the next pair)
+                        ta[c], ua[c] = t_b, u_b
                         mt = t_a * f_a - t_b * f_b
                         mu = u_a * f_a - u_b * f_b
                         top[Ya, Xa, c] -= mt
                         und[Ya, Xa, c] -= mu
                         top[Yb, Xb, c] += mt
                         und[Yb, Xb, c] += mu
-                    for c in range(PACKED):
-                        ta[c], ua[c] = tb[c], ub[c]
                     saved = True
+                    # (both pixels changed)
+                    Vs[yp, xp] = top[Ya, Xa, IV] + und[Ya, Xa, IV]
+                    Vs[y, x] = top[Yb, Xb, IV] + und[Yb, Xb, IV]
         if not flowed:  # it has settled: nothing more will move
             break
 
@@ -1780,6 +1979,31 @@ def fix_coverage(top, und, top_a, und_a, ry0, ry1, rx0, rx1):
 
 
 @njit(cache=True, error_model="numpy")
+def max_filter(a, r):
+    """Maximum over the (2r+1)-square around each pixel, edges clamped, in
+    single precision: what ``_filters._max_filter`` gives."""
+    h, w = a.shape
+    tmp = np.empty((h, w), np.float32)
+    for y in range(h):
+        for x in range(w):
+            m = np.float32(a[max(y - r, 0), x])
+            for yy in range(max(y - r, 0) + 1, min(y + r + 1, h)):
+                v = np.float32(a[yy, x])
+                if v > m:
+                    m = v
+            tmp[y, x] = m
+    out = np.empty((h, w), np.float32)
+    for y in range(h):
+        for x in range(w):
+            m = tmp[y, max(x - r, 0)]
+            for xx in range(max(x - r, 0) + 1, min(x + r + 1, w)):
+                if tmp[y, xx] > m:
+                    m = tmp[y, xx]
+            out[y, x] = m
+    return out
+
+
+@njit(cache=True, error_model="numpy")
 def box_blur(a, r):
     """Separable box blur with edge clamping (radius r)."""
     h, w = a.shape
@@ -1799,6 +2023,44 @@ def box_blur(a, r):
                 acc += tmp[y, min(max(x + k, 0), w - 1)]
             out[y, x] = acc / n
     return out
+
+
+@njit(cache=True, error_model="numpy")
+def box_blur_rows(a, r, lo, hi, out):
+    """:func:`box_blur` of ``a`` only in each row y's columns lo[y]..hi[y] (the
+    same numbers there), into ``out``. It reads ``a`` within r px of them."""
+    h, w = a.shape
+    n = 2 * r + 1
+    tmp = np.empty(w)
+    for y in range(h):
+        if lo[y] >= hi[y]:
+            continue
+        for x in range(max(lo[y] - r, 0), min(hi[y] + r, w)):
+            acc = 0.0
+            for k in range(-r, r + 1):
+                acc += a[min(max(y + k, 0), h - 1), x]
+            tmp[x] = acc / n
+        for x in range(lo[y], hi[y]):
+            acc = 0.0
+            for k in range(-r, r + 1):
+                acc += tmp[min(max(x + k, 0), w - 1)]
+            out[y, x] = acc / n
+
+
+@njit(cache=True, error_model="numpy")
+def grown(lo, hi, r, w):
+    """Row spans (lo[y]..hi[y] in each row y) grown by r px all round, within
+    0..w."""
+    h = lo.shape[0]
+    lo2 = np.full(h, w, np.int64)
+    hi2 = np.zeros(h, np.int64)
+    for y in range(h):
+        if lo[y] >= hi[y]:
+            continue
+        for yy in range(max(y - r, 0), min(y + r + 1, h)):
+            lo2[yy] = min(lo2[yy], max(lo[y] - r, 0))
+            hi2[yy] = max(hi2[yy], min(hi[y] + r, w))
+    return lo2, hi2
 
 
 @njit(cache=True, error_model="numpy")
@@ -1870,33 +2132,45 @@ def flow_under_blade(
     inside = np.empty((hh, ww))
     u_src = np.empty((hh, ww))
     t_src = np.empty((hh, ww))
-    c_u = np.empty((hh, ww))
-    c_t = np.empty((hh, ww))
-    fx = np.empty((hh, ww), np.float32)
-    fy = np.empty((hh, ww), np.float32)
+    u = np.empty((hh, ww))
+    t = np.empty((hh, ww))
+    # Nothing moves where the blade isn't (there the speeds are 0): the work is
+    # done only where it is, and where the paint it moves goes, as the columns
+    # lo[y]..hi[y] of each row y.
+    in_lo = np.empty(hh, np.int64)
+    in_hi = np.empty(hh, np.int64)
+    c_lo = np.empty(hh, np.int64)
+    c_hi = np.empty(hh, np.int64)
     for k in range(1, n_sub + 1):
         # the blade's position along the motion
         pos = -ds + k * step
         any_in = False
         for y in range(hh):
+            in_lo[y], in_hi[y] = ww, 0
             for x in range(ww):
                 v = lateral[y, x] * clip(
                     half[y, x] - abs(along[y, x] - pos - c[y, x]) + 0.5, 0.0, 1.0
                 )
                 inside[y, x] = v
-                any_in = any_in or v != 0
+                if v != 0:
+                    any_in = True
+                    in_lo[y], in_hi[y] = min(in_lo[y], x), x + 1
         if not any_in:
             continue
         # the flow is smooth over a pixel or two: speeds from lightly smoothed heights
+        lo1, hi1 = grown(in_lo, in_hi, 1, ww)
         for y in range(hh):
-            for x in range(ww):
+            for x in range(lo1[y], hi1[y]):
                 u_src[y, x] = und[sy0 + y, sx0 + x, IV]
                 t_src[y, x] = 0.0 if own[y, x] else top[sy0 + y, sx0 + x, IV]
-        u = box_blur(u_src, 1)
-        t = box_blur(t_src, 1)
+        box_blur_rows(u_src, 1, in_lo, in_hi, u)
+        box_blur_rows(t_src, 1, in_lo, in_hi, t)
+        c_u = np.zeros((hh, ww))
+        c_t = np.zeros((hh, ww))
         any_c = False
         for y in range(hh):
-            for x in range(ww):
+            c_lo[y], c_hi[y] = ww, 0
+            for x in range(in_lo[y], in_hi[y]):
                 # (heights in single precision, like the paint: a film too thin to
                 # change the height of the paint below has no thickness, and no speed of
                 # its own)
@@ -1912,18 +2186,27 @@ def flow_under_blade(
                     np.float32(0.0), uu, gap[y, x], slip[y, x]
                 )
                 c_t[y, x] = contact * layer_speed(uu, uu + tt, gap[y, x], slip[y, x])
-                any_c = any_c or contact != 0
+                if contact != 0:
+                    any_c = True
+                    c_lo[y], c_hi[y] = min(c_lo[y], x), x + 1
         if not any_c:
             continue
         # viscosity: neighbouring paint drags each other along, so the speed varies
         # smoothly (without it, the paint tears into foam)
-        frac_u = box_blur(c_u, viscous)
-        frac_t = box_blur(c_t, viscous)
+        f_lo, f_hi = grown(c_lo, c_hi, viscous, ww)
+        frac_u = np.zeros((hh, ww))
+        frac_t = np.zeros((hh, ww))
+        box_blur_rows(c_u, viscous, f_lo, f_hi, frac_u)
+        box_blur_rows(c_t, viscous, f_lo, f_hi, frac_t)
+        # (and the pixels next to those, which they pass paint on to)
+        g_lo, g_hi = grown(f_lo, f_hi, 1, ww)
+        fx = np.zeros((hh, ww), np.float32)
+        fy = np.zeros((hh, ww), np.float32)
         for li in range(2):
             layer = und if li == 0 else top
             frac = frac_u if li == 0 else frac_t
             for y in range(hh):
-                for x in range(ww):
+                for x in range(f_lo[y], f_hi[y]):
                     f = clip(frac[y, x], 0.0, 1.0) * step
                     if li == 1 and own[y, x]:
                         f = 0.0
@@ -1933,8 +2216,9 @@ def flow_under_blade(
             # and in y (walking upstream, so the neighbours are still as they were)
             for j in range(hh):
                 y = hh - 1 - j if ydir > 0 else j
-                for i in range(ww):
-                    x = ww - 1 - i if xdir > 0 else i
+                lo_y, hi_y = g_lo[y], g_hi[y]
+                for i in range(hi_y - lo_y):
+                    x = hi_y - 1 - i if xdir > 0 else lo_y + i
                     Y, X = sy0 + y, sx0 + x
                     xs, ys = x - xdir, y - ydir
                     for ch in range(PACKED):
