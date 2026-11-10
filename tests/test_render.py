@@ -1,13 +1,9 @@
 """Rendering: the colour of the paint, and the light on its relief."""
 
-import os
-import sys
 from typing import Any
 
 import numpy as np
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from oilpaint import Canvas, Paint, brushes, surfaces
 from oilpaint import palette as P
@@ -232,6 +228,16 @@ def test_unlit_and_reverse_renders_ignore_light_relief_and_gloss():
     g = Canvas(60, 40, surface=surfaces.GLASS, reverse=True, seed=1)
     g.stroke([(5, 20), (55, 20)], P.CADMIUM_YELLOW, amount=20, width=16, seed=1)
     assert np.array_equal(g.render(light=None, gloss=-1.0), g.render(lighting=False))
+
+
+def test_light_none_is_the_default_lamp():
+    from oilpaint.canvas import DEFAULT_LIGHT
+
+    c = _ridge()
+    want = c.render()
+    assert np.array_equal(c.render(light=None), want)
+    assert np.array_equal(c.render(light=DEFAULT_LIGHT), want)
+    assert not np.array_equal(c.render(light=RAKING), want)
 
 
 def test_an_extreme_but_valid_light_is_normalised_safely():

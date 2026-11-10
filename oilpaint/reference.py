@@ -53,9 +53,11 @@ def _sample(img, x, y):
 class Reference:
     """A reference image fitted to a ``width`` x ``height`` canvas.
 
-    ``image`` is a path, a PIL image or an (H, W, 3) array (0..1 floats or
-    0..255 ints). ``box`` optionally crops it first: (left, top, right,
-    bottom) in the image's own pixels.
+    ``image`` is a path, a PIL image or an (H, W, 3) array: whole numbers
+    (of any integer type) are on the 0..255 scale; floats are on the 0..1
+    scale, or on the 0..255 scale if any value is above 1. ``box``
+    optionally crops it first: (left, top, right, bottom) in the image's own
+    pixels.
 
     Each softened map (one per kind of query and scale) is the size of the
     canvas, so only the ``max_maps`` used most recently are kept; one asked
@@ -70,8 +72,11 @@ class Reference:
 
         if isinstance(image, np.ndarray):
             arr = image.astype(np.float64)
+            # whole numbers are 0..255 whatever their values (as ground images
+            # are); floats are 0..1 unless some value is above 1
+            on_255 = np.issubdtype(image.dtype, np.integer) or arr.max() > 1.0
             image = Image.fromarray(
-                np.clip(arr * (255 if arr.max() <= 1.0 else 1), 0, 255).astype(np.uint8)
+                np.clip(arr * (1 if on_255 else 255), 0, 255).astype(np.uint8)
             )
         elif not hasattr(image, "convert"):
             image = Image.open(image)

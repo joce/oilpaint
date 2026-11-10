@@ -396,7 +396,7 @@ def test_a_knife_rests_and_rides_as_it_did(monkeypatch):
     assert checked["on"] > 100 and checked["whole"] > 50 and checked["wide"] > 3
 
 
-def test_a_strided_sum_is_not_its_copys():
+def test_a_strided_sum_is_not_that_of_its_copy():
     """Why _knife._blade_rest sums the paint below over the canvas itself:
     numpy sums a strided float32 view row by row and a contiguous copy of it
     as one run, and the two round differently."""

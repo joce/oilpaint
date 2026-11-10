@@ -19,3 +19,21 @@ def test_reference_samples_colour_direction_and_detail():
     assert ref.detail(80, 60, 4) > ref.detail(20, 60, 4) + 0.1
     path = ref.trace(40, 60, length=60, scale=3)
     assert np.all(path[:, 0] < 80)  # a trace doesn't cross into the red
+
+
+def test_an_integer_image_is_on_the_0_255_scale_whatever_its_values():
+    from oilpaint.reference import Reference
+
+    # a nearly black image of whole numbers stays nearly black: not read as
+    # 0..1 because no value is above 1
+    for dtype in (np.uint8, np.int16, np.int64):
+        dark = np.ones((20, 30, 3), dtype)
+        assert Reference(dark, 30, 20).color(15, 10).max() < 0.01, dtype
+    # floats keep their rule: 0..1, unless a value is above 1
+    half = Reference(np.full((20, 30, 3), 0.5), 30, 20).color(15, 10)
+    assert np.allclose(half, 0.5, atol=0.01)
+    wide = Reference(np.full((20, 30, 3), 128.0), 30, 20).color(15, 10)
+    assert np.allclose(wide, 128 / 255, atol=0.01)
+    # and 0..255 integers as before
+    full = Reference(np.full((20, 30, 3), 255, np.int64), 30, 20).color(15, 10)
+    assert np.allclose(full, 1.0, atol=0.01)

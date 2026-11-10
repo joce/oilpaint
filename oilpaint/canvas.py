@@ -31,6 +31,10 @@ from .spline import Profile
 from .stroke import Stroke, _Relief, apply_stroke
 from .surface import DEFAULT_SURFACE, Surface
 
+#: The direction of the lamp a lit render uses unless told otherwise (x, y,
+#: z; y points down the image): above left, in front of the picture.
+DEFAULT_LIGHT = (-0.6, -0.8, 1.1)
+
 
 class Canvas:
     """A primed support you can paint on.
@@ -40,9 +44,10 @@ class Canvas:
     width, height:
         Size in pixels.
     ground:
-        Color of the priming, or an sRGB image array (height, width, 3) in
-        0..1 to paint over (a toned ground, or a photo as underpainting).
-        Overrides the surface's own ground.
+        Color of the priming, or an sRGB image array (height, width, 3) to
+        paint over (a toned ground, or a photo as underpainting): floats in
+        0..1, or whole numbers (of any integer type) in 0..255. Overrides
+        the surface's own ground.
     texture:
         Shortcut for the surface's ``relief`` (0 = flat).
     weave:
@@ -62,8 +67,9 @@ class Canvas:
         seen from the front, so nothing has to be painted mirrored. ``ground``
         is what shows through where there is no paint.
 
-    Memory: about 0.3 KB per pixel (24 spectral bands for the dry ground and
-    for each of the two wet sublayers); 0.5 KB painted in reverse.
+    Memory: about 0.35 KB per pixel (24 spectral bands for the dry ground and
+    for each of the two wet sublayers, and maps of the surface); 0.65 KB
+    painted in reverse.
 
     Raises ValueError or TypeError unless ``width`` and ``height`` are whole
     numbers above 0, ``texture`` (if given) a finite number >= 0, ``weave``
@@ -552,14 +558,17 @@ class Canvas:
     def render(
         self,
         lighting: bool = True,
-        light: Sequence[float] | None = (-0.6, -0.8, 1.1),
+        light: Sequence[float] | None = DEFAULT_LIGHT,
         relief: float = 1.0,
         gloss: float = 1.0,
     ) -> np.ndarray:
         """Render to an sRGB float image (H, W, 3) in 0..1.
 
-        ``lighting`` shades the surface relief (canvas weave and impasto) with
-        a raking light from ``light`` (x, y, z; y points down the image).
+        ``lighting`` shades the surface relief (canvas weave and impasto) as
+        under a studio lamp in the direction ``light`` (x, y, z; y points
+        down the image; a smaller z rakes across the surface), with cast
+        shadows, darker hollows and the gloss of oil (see :meth:`_light`).
+        ``light=None`` is the default lamp, ``DEFAULT_LIGHT``.
         ``relief`` scales the apparent height of paint, ``gloss`` the oily
         highlights. A reverse painting is seen through flat glass: no relief.
 
@@ -570,7 +579,7 @@ class Canvas:
         """
         lamp = None
         if lighting and not self.reverse:  # (else none of these is used)
-            lamp = _check_light(light)
+            lamp = _check_light(DEFAULT_LIGHT if light is None else light)
             for name, value in (("relief", relief), ("gloss", gloss)):
                 if not (np.isfinite(value) and value >= 0):
                     raise ValueError(f"{name} must be finite and >= 0, got {value!r}")
@@ -620,7 +629,7 @@ class Canvas:
     def surface_height(self, relief: float = 1.0) -> np.ndarray:
         """Height of the painted surface in pixels, as used for lighting: the
         same surface the paint is pushed around on (the canvas weave, dried
-        paint and wet paint)."""
+        paint and wet paint). ``relief`` scales it, as in :meth:`render`."""
         wet = self.top_v + self.und_v
         paint = wet + self.dry_height
         surface = self._floor + wet

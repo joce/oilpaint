@@ -181,7 +181,6 @@ def _check_tool(tool) -> None:
 #: Blade outlines of palette and painting knives (see :class:`BrushType`).
 KNIFE_SHAPES = ("trowel", "pear", "straight", "angled", "spoon")
 SHAPES = ("round", "flat", "filbert", "fan") + KNIFE_SHAPES
-#: What a tool's face looks like where it is pressed straight down (a dab).
 
 
 @dataclass(frozen=True)
@@ -271,8 +270,14 @@ class BrushType:
         works it out from the size and the hair (fine hair has more, smaller
         tips). Each brush keeps its own layout, turned a little on every tap.
     streaks, pickup, drag, mixing, rough:
-        Explicit physics overrides. ``None`` derives them from stiffness and
-        bristles (``rough`` is the raggedness of the stroke edges).
+        Explicit physics overrides, clipped to 0..2 when used. ``None``
+        derives them from stiffness and bristles (``rough`` is the
+        raggedness of the stroke edges).
+
+    Raises ValueError or TypeError unless ``shape`` is one of the shapes
+    above, every number is finite, ``width`` and ``aspect`` are above 0,
+    ``tips`` and ``clumps`` are not negative, and ``taper`` is from 0 to 1
+    (or a pair of such).
     """
 
     shape: str = "round"

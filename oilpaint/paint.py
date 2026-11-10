@@ -58,7 +58,10 @@ class Paint:
     ----------
     color:
         How the paint looks brushed out at normal thickness on white canvas.
-        ``"#rrggbb"``, a float triple in 0..1, or an int triple in 0..255.
+        ``"#rrggbb"``, a float triple in 0..1, or an int triple in 0..255 (a
+        triple with a component of 2 or more is on the 0..255 scale; one
+        whose largest is between 1 and 2 is refused: see
+        :func:`oilpaint.spectral.parse_color`).
     opacity:
         0..1. How strongly it hides what is underneath. 1 = opaque body
         color (cadmiums, titanium white), ~0.3 = glazing color (alizarin,
