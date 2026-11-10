@@ -73,3 +73,7 @@
 
 sync:
     remote: "git+https://github.com/joce/oilpaint"
+export:
+    auto: true
+    git-add: true
+    interval: 1s

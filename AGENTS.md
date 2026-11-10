@@ -126,3 +126,46 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Issue sync in this repository
+
+- Issues live in a local Dolt database under `.beads/embeddeddolt/`, which git ignores.
+- `.beads/issues.jsonl` is how issues travel between clones here. Beads rewrites it after every change and stages it (`export.auto` and `export.git-add` in `.beads/config.yaml`). Commit it with the work it belongs to.
+- Claude Code cloud sessions may push only their own branch, so GitHub refuses `bd dolt push` to `refs/dolt/data` there (HTTP 403). Do not retry it and do not work around it; the export file is the supported route.
+- On a fresh clone, `bd bootstrap` builds the database from `.beads/issues.jsonl`. In a clone that already has a database, run `bd import .beads/issues.jsonl` after pulling. Import adds and updates but never deletes, so close issues instead of deleting them.
+- `bd remember` memories are not in the export and are lost with a cloud session. Put anything that must last in an issue or in this file.
+- In a cloud session `bd prime` reports "No git remote configured". Beads does not trust a repository under `/home` that belongs to another user's home directory (the session runs as root in `/home/user`). Issue commands and the export work as usual; what may be committed and pushed is decided by the user's instructions, not by that message.
+
+## Build & Test
+
+```bash
+uv sync --group dev --frozen    # install the package and the development tools
+uv run pytest                   # tests; the first run compiles the numba kernels (about 35 s)
+make tox                        # black, ruff, pyright and pytest on every supported Python
+make coverage                   # coverage run (at least 80% is required)
+make spell                      # cspell over the whole repository
+python tools/bench.py           # time the 16 benchmark scenes
+python tools/bench.py --save DIR      # keep each scene's painted state
+python tools/bench.py --compare DIR   # compare byte for byte with a kept state
+```
+
+`make pre-push` runs what CI runs: tox, coverage and the spelling check.
+
+## Architecture Overview
+
+`oilpaint` simulates oil painting: brushes and knives lay, drag, mix and lift paint on a canvas, and a renderer lights the result.
+
+- `paint.py`, `spectral.py`, `palette.py`: pigments and Kubelka-Munk mixing over 24 spectral bands; `palette.match` finds a mix for a target colour.
+- `canvas.py`: the `Canvas`, with two wet layers, coverage, dried height, the weave, drying and rendering.
+- `brush.py`, `brushes.py`, `stroke.py`, `_knife.py`, `_geometry.py`, `_hair.py`, `_dab.py`: tools, how a stroke is sampled and run, footprints and the hair field.
+- `_engine.py`: the numba kernels that move paint for each step of a stroke. `_render.py`: the numba kernels that light and composite the picture.
+- `surface.py`, `surfaces.py`, `noise.py`, `reference.py`, `spline.py`, `png.py`: grounds, textures, reference images, paths and output.
+- `examples/` holds the example paintings and their rendered images; `tools/bench.py` holds the benchmark scenes.
+
+## Conventions & Patterns
+
+- Kernels are `@njit(cache=True, error_model="numpy")`, without `fastmath` and without `parallel` in the stroke path, so that results repeat exactly.
+- A change that should not alter the picture must leave `tools/bench.py --compare` identical on all scenes. A change that is meant to alter it is judged by measurements and amplified difference images, not by looking at two renders side by side.
+- Paint must be conserved: what leaves the brush lands on the canvas or is accounted for off its edge. Tests check this.
+- ruff caps function complexity at 13 everywhere except `_engine.py` and `_render.py`.
+- Constants that the kernels use live in `_engine.py`.
