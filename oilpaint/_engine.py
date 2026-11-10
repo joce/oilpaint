@@ -844,6 +844,51 @@ def bristle_taps(u_px, span, nsub, ring, rho):
 
 
 @njit(cache=True, error_model="numpy")
+def crop_taps(taps, ww, wy0, wx0, ch, cw):
+    """The taps (see :func:`bristle_taps`) of the (ch, cw) part at (wy0, wx0)
+    of a window ``ww`` px wide, from the taps of all of it."""
+    cols, wts, ntap = taps
+    n = ch * cw
+    out_cols = np.empty((n, COLUMNS), np.int32)
+    out_wts = np.empty((n, COLUMNS))
+    out_n = np.zeros(n, np.int32)
+    for y in range(ch):
+        for x in range(cw):
+            q, r = (wy0 + y) * ww + wx0 + x, y * cw + x
+            out_n[r] = ntap[q]
+            for t in range(ntap[q]):
+                out_cols[r, t] = cols[q, t]
+                out_wts[r, t] = wts[q, t]
+    return out_cols, out_wts, out_n
+
+
+@njit(cache=True, error_model="numpy")
+def wandering_bands(F, wy0, wx0, ch, cw, s0, period, bands, wander):
+    """Where across a knife's blade (-1..1) the paint it lays on each pixel of
+    the (ch, cw) part at (wy0, wx0) of the footprint ``F`` comes from: the
+    pixel's place across the blade, moved by the colour bands on the blade,
+    which wander by up to ``wander`` half-lengths along the stroke (``bands``:
+    8 rows to ``period`` px along it, from ``s0`` px at the step's end; 64
+    columns across). Bilinear in ``bands``, as _filters._bilinear."""
+    out = np.empty((ch, cw))
+    n0, n1 = bands.shape
+    for y in range(ch):
+        for x in range(cw):
+            u = F[F_U, wy0 + y, wx0 + x]
+            a = min(
+                max((s0 + F[F_ALONG, wy0 + y, wx0 + x]) / period * 8.0, 0.0), n0 - 1.001
+            )
+            b = min(max((u + 1.0) * 0.5 * 63.0, 0.0), 62.999)
+            ia, ib = min(int(a), n0 - 2), min(int(b), n1 - 2)
+            fa, fb = a - ia, b - ib
+            v = (bands[ia, ib] * (1 - fb) + bands[ia, ib + 1] * fb) * (1 - fa) + (
+                bands[ia + 1, ib] * (1 - fb) + bands[ia + 1, ib + 1] * fb
+            ) * fa
+            out[y, x] = u + wander * (2.0 * v - 1.0)
+    return out
+
+
+@njit(cache=True, error_model="numpy")
 def at_pixels(taps, per_column, ch, cw):
     """A per-column quantity, as seen at each pixel under the brush."""
     cols, wts, ntap = taps

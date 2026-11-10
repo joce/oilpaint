@@ -42,7 +42,7 @@ from ._geometry import (
     _step_slices,
 )
 from ._hair import _NICK_WANDER, _NO_TEX, _NO_TEX2, _hair_field
-from ._knife import _before_the_blade, _BladeStart, _knife_step, _wandering_bands
+from ._knife import _before_the_blade, _BladeStart, _knife_step, _knife_taps
 from .brush import (
     _COL_X,
     _PHYSICS,
@@ -987,10 +987,12 @@ class _Run:
         F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables)
         if not hit and not (off and eng._touches_off(st, F)):
             return None
-        wsl = _step_slices(st)[1]
-        u_px = F[eng.F_U][wsl]
         if self.bt.rigid:
-            u_px = _wandering_bands(self, st, F[eng.F_ALONG][wsl], u_px)
+            taps, taps_all = _knife_taps(self, st, F)
+            step = _Step(st, F, tables, taps)
+            step.taps_all = taps_all
+            return step
+        u_px = F[eng.F_U][_step_slices(st)[1]]
         taps = eng.bristle_taps(u_px, st.span, st.nsub, self.brush.ring, st.rho)
         return _Step(st, F, tables, taps)
 

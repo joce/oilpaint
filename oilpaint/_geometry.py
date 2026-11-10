@@ -138,7 +138,10 @@ class _Step:
     of the canvas (its planes are attributes, ``along`` to ``edge``; see
     :func:`_engine.footprint`). ``wsl`` crops them to the canvas part ``sl``.
     ``taps`` maps bristle columns to the pixels of that part, ``tables`` are
-    the footprint's chord tables."""
+    the footprint's chord tables. (A knife's step not wholly on the canvas
+    also has ``taps_all``, over all of its window: see _knife._knife_taps.)"""
+
+    taps_all = None
 
     along = _plane(eng.F_ALONG, "position along the motion (px)")
     lat_px = _plane(eng.F_LAT, "position across the motion (px)")
