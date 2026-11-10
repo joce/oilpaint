@@ -986,7 +986,7 @@ class _Run:
         its anti-aliased coverage, and where it sits under the brush (across
         the bristles, along the motion); see :func:`_engine.footprint`. And
         which bristle columns are above each pixel."""
-        F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables, False)
+        F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables)
         if not hit and not (off and eng._touches_off(st, F)):
             return None
         if self.bt.rigid:

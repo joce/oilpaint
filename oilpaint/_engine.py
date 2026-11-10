@@ -711,7 +711,7 @@ def may_touch(st, K, c_tab):
 
 
 @njit(cache=True, error_model="numpy")
-def footprint(st, K, tex, tex2, grid, c_tab, h_tab, bounded):
+def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
     """The footprint of one step on its window: planes F_* of per-pixel
     geometry, exposure and coverage, and whether it exposes any pixel of the
     canvas.
@@ -724,12 +724,12 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab, bounded):
     Its *cover* is how much of the pixel the footprint passes over (the
     anti-aliased edge), which is geometry, not paint thickness.
 
-    ``bounded`` (a brush's step): only over the box of the window where the
+    A brush's step works it out only over the box of the window where the
     footprint may cover a pixel and sweep over it (see :func:`may_touch`);
     elsewhere all planes are 0, as is a pixel's cover, coverage or sweep
     there (everything the step reads of a pixel it doesn't touch: see
-    :func:`touched`). A knife reads all of the window."""
-    if bounded:
+    :func:`touched`). A knife's reads all of its window."""
+    if not K.rigid:
         F = np.zeros((_NF, st.hh, st.ww))
         by0, by1, bx0, bx1 = may_touch(st, K, c_tab)
     else:
@@ -2473,13 +2473,17 @@ def brush_step(st, K, tex, tex2, tables, cv, aux, pend, br, col_u):
     """One step of a brush along its stroke: where it touches the canvas, and
     what it does there. Returns (how coated the bristles are with wet paint,
     whether the brush has run dry)."""
-    F, hit = footprint(st, K, tex, tex2, tables[0], tables[1], tables[2], True)
+    F, hit = footprint(st, K, tex, tex2, tables[0], tables[1], tables[2])
     if not hit and not _touches_off(st, F):
         return st.wet, st.dry
     # most of the work is only where the tool passes over in this step
     part = touched(st, F)
+    # (the planes it reads, as arrays of their own: one compiled bristle_taps
+    # for these and a knife's)
     taps = bristle_taps(
-        F[F_U, part.wy0 : part.wy0 + part.ch, part.wx0 : part.wx0 + part.cw],
+        np.ascontiguousarray(
+            F[F_U, part.wy0 : part.wy0 + part.ch, part.wx0 : part.wx0 + part.cw]
+        ),
         st.span,
         st.nsub,
         K.ring,
@@ -2498,6 +2502,10 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
     tip, belly = br[0], br[1]
     grid, c_tab, h_tab = tables
     p = st.p
+    # (True and False as run-time values: a knife's steps call some of the same
+    # kernels with them from Python, and a constant would compile those
+    # kernels over again for it)
+    brush, knife = not K.rigid, K.rigid
     f_pick, f_dep, f_mix, f_drag = surface_factors_on(cv, aux, st, part, K)
 
     # 0) drag: wet paint under the brush is pushed along with it
@@ -2615,9 +2623,8 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
         if emax > 1e-3:
             moved = take(top, und, cy0, cx0, excess, tv)
             share_pick = 0.5 * min(K.pickup, 1.0)
-            cols, wts, ntap = bristle_taps(
-                F[F_U, wy0 : wy0 + ch, wx0 : wx0 + cw], st.span, st.nsub, K.ring, st.rho
-            )
+            u = np.ascontiguousarray(F[F_U, wy0 : wy0 + ch, wx0 : wx0 + cw])
+            cols, wts, ntap = bristle_taps(u, st.span, st.nsub, K.ring, st.rho)
             for y in range(ch):
                 for x in range(cw):
                     q = y * cw + x
@@ -2637,9 +2644,8 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
             else:
                 # a point pushes it all aside
                 to_side = 1.0 if digging else 0.35 / (1.0 - share_pick)
-                add_sides(
-                    ridges, moved, F[F_LAT, wy0 : wy0 + ch, wx0 : wx0 + cw], to_side
-                )
+                lat = np.ascontiguousarray(F[F_LAT, wy0 : wy0 + ch, wx0 : wx0 + cw])
+                add_sides(ridges, moved, lat, to_side)
                 if to_side < 1.0:
                     moved *= 1.0 - to_side
                     place(
@@ -2653,7 +2659,7 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
                         K.stroke_id,
                     )
     squeeze_out(br, K, st, col_vol, col_over, hold, ridges, col_u)
-    lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, True)
+    lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, brush)
 
     # 4) deposit from the tips. Each column's load sets how thick its paint goes on
     #    and when it starts to run dry. Bristles that were just in wet paint are
@@ -2808,12 +2814,12 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
             cy0,
             cx0,
             d,
-            F[F_COVER, wy0 : wy0 + ch, wx0 : wx0 + cw],
+            np.ascontiguousarray(F[F_COVER, wy0 : wy0 + ch, wx0 : wx0 + cw]),
             K.stroke_id,
-            False,
-            True,
-            F[F_EXPO, wy0 : wy0 + ch, wx0 : wx0 + cw],
-            True,
+            knife,
+            brush,
+            np.ascontiguousarray(F[F_EXPO, wy0 : wy0 + ch, wx0 : wx0 + cw]),
+            brush,
             extra,
         )
     overflow(tip, belly, capacity)

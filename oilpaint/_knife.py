@@ -335,7 +335,7 @@ def _push_aside(run: _Run, s: _Step, level):
     if emax > 1e-3:
         moved = eng.take(canvas.top, canvas.und, st.cy0, st.cx0, excess, tv)
         if flowing:
-            eng.add_sides(ridges, moved, s.lat_px[wsl], 1.0)
+            eng.add_sides(ridges, moved, np.ascontiguousarray(s.lat_px[wsl]), 1.0)
         else:
             fresh = (
                 s.between
@@ -366,17 +366,19 @@ def _drag_film(run: _Run, s: _Step, level) -> None:
     purple stays on top). The blade glides on its own fresh paint."""
     st, wsl = s.st, s.wsl
     hair = s.hair[wsl]
+    # (planes passed as arrays of their own: one compiled kernel, whether
+    # the step's window is all on the canvas or not)
     eng.flow_under_blade(
         run.cv,
         st.cy0,
         st.cx0,
         run.stroke_id,
-        run.relief.floor[s.sl],
+        np.ascontiguousarray(run.relief.floor[s.sl]),
         level,
-        s.aa[wsl],
-        s.along[wsl],
-        s.c[wsl],
-        s.h[wsl],
+        np.ascontiguousarray(s.aa[wsl]),
+        np.ascontiguousarray(s.along[wsl]),
+        np.ascontiguousarray(s.c[wsl]),
+        np.ascontiguousarray(s.h[wsl]),
         st.ds,
         st.tx,
         st.ty,
@@ -418,11 +420,11 @@ def _fill_under_blade(run: _Run, s: _Step, level, ride, area: float, whole) -> N
         st.cy0,
         st.cx0,
         d,
-        s.cover[wsl],
+        np.ascontiguousarray(s.cover[wsl]),
         run.stroke_id,
         True,
         False,
-        s.expo[wsl],
+        np.ascontiguousarray(s.expo[wsl]),
         False,
         extra,
     )
@@ -722,8 +724,8 @@ def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
     y1, x1 = min(st.cy0 + st.ch + m, H), min(st.cx0 + st.cw + m, W)
     wl, wr = eng.splat_out(
         d_end,
-        lat,
-        along_px,
+        np.ascontiguousarray(lat),
+        np.ascontiguousarray(along_px),
         st.cy0 - y0,
         st.cx0 - x0,
         y1 - y0,
