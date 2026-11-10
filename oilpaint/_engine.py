@@ -1708,27 +1708,51 @@ def spread_part(cv, pend, br, sy0, sx0, w, pk, cover, stroke_id, by_film, w_off)
 @njit(cache=True, error_model="numpy")
 def shift(a, sx, sy):
     """Bilinear translation: out[y, x] = a[y - sy, x - sx], zero outside."""
-    ix, iy = int(math.floor(sx)), int(math.floor(sy))
-    fx, fy = sx - ix, sy - iy
     h, w = a.shape[0], a.shape[1]
     out = np.zeros_like(a)
+    dxs, dys, wgts = shift_taps(sx, sy, h, w)
+    for y in range(h):
+        shift_row(a, y, dxs, dys, wgts, out[y].reshape(-1))
+    return out
+
+
+@njit(cache=True, error_model="numpy")
+def shift_taps(sx, sy, h, w):
+    """The taps of :func:`shift` by (sx, sy) of an (h, w) array: the
+    offsets (dx, dy) and weights of the up to four whole-pixel shifts it
+    adds up, in the order it adds them."""
+    ix, iy = int(math.floor(sx)), int(math.floor(sy))
+    fx, fy = sx - ix, sy - iy
+    dxs = np.empty(4, np.int64)
+    dys = np.empty(4, np.int64)
+    wgts = np.empty(4, np.float32)
+    n = 0
     for kx in range(2):
         dx, wx = (ix, 1.0 - fx) if kx == 0 else (ix + 1, fx)
         for ky in range(2):
             dy, wy = (iy, 1.0 - fy) if ky == 0 else (iy + 1, fy)
-            wgt = np.float32(wx * wy)
             if wx * wy < 1e-6 or abs(dx) >= w or abs(dy) >= h:
                 continue
-            # (a row at a time: its pixels' channels lie in one run)
-            C = a.shape[2]
-            x_lo, x_hi = max(dx, 0), min(w + dx, w)
-            n = (x_hi - x_lo) * C
-            for y in range(max(dy, 0), min(h + dy, h)):
-                src = a[y - dy].reshape(-1)[(x_lo - dx) * C :]
-                dst = out[y].reshape(-1)[x_lo * C :]
-                for i in range(n):
-                    dst[i] += wgt * src[i]
-    return out
+            dxs[n], dys[n], wgts[n] = dx, dy, np.float32(wx * wy)
+            n += 1
+    return dxs[:n], dys[:n], wgts[:n]
+
+
+@njit(cache=True, error_model="numpy")
+def shift_row(a, y, dxs, dys, wgts, out_row):
+    """Add row ``y`` of the shift of ``a`` with the taps (dxs, dys, wgts) of
+    :func:`shift_taps` to ``out_row`` (its pixels' channels in one run)."""
+    h, w, C = a.shape
+    for t in range(dxs.shape[0]):
+        dx, dy = dxs[t], dys[t]
+        if not max(dy, 0) <= y < min(h + dy, h):
+            continue
+        x_lo, x_hi = max(dx, 0), min(w + dx, w)
+        src = a[y - dy].reshape(-1)[(x_lo - dx) * C :]
+        dst = out_row[x_lo * C :]
+        wgt = wgts[t]
+        for i in range((x_hi - x_lo) * C):
+            dst[i] += wgt * src[i]
 
 
 @njit(cache=True, error_model="numpy")
@@ -1833,14 +1857,18 @@ def drag(top, und, f, x0, y0, sx, sy, p, wx0, wy0, wh, ww):
                 if fr != 0:
                     for c in range(PACKED):
                         moved[y, x, c] = fr * layer[ry0 + y, rx0 + x, c]
-        shifted = shift(moved, sx, sy)
         n = rw * PACKED
         zero = np.float32(0.0)
+        # (what lands in each row, shifted a row at a time: see shift)
+        dxs, dys, wgts = shift_taps(sx, sy, rh, rw)
+        s_row = np.empty(n, np.float32)
         for y in range(rh):
+            s_row[:] = 0.0
+            shift_row(moved, y, dxs, dys, wgts, s_row)
             # (a row at a time: its pixels' channels lie in one run; rounding
             # doesn't leave less than nothing where all of it moved on)
             row = layer[ry0 + y, rx0 : rx0 + rw].reshape(-1)
-            s_row, m_row = shifted[y].reshape(-1), moved[y].reshape(-1)
+            m_row = moved[y].reshape(-1)
             for i in range(n):
                 v = row[i] + (s_row[i] - m_row[i])
                 row[i] = max(v, zero)
