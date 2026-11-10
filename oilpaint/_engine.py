@@ -3154,15 +3154,28 @@ def fix_coverage(top, und, top_a, und_a, ry0, ry1, rx0, rx1):
     if H <= 0 or W <= 0:
         return
     # every neighbour (3 x 3, within the region) carries a film of paint
+    # (the least of them, along each row and then down each column)
+    vol = np.empty((H, W), np.float32)
+    for y in range(H):
+        for x in range(W):
+            vol[y, x] = top[ry0 + y, rx0 + x, IV] + und[ry0 + y, rx0 + x, IV]
+    row_lo = np.empty((H, W), np.float32)
+    for y in range(H):
+        for x in range(W):
+            lo = vol[y, x]
+            if x > 0:
+                lo = min(lo, vol[y, x - 1])
+            if x < W - 1:
+                lo = min(lo, vol[y, x + 1])
+            row_lo[y, x] = lo
     inside = np.empty((H, W), np.bool_)
     for y in range(H):
         for x in range(W):
-            lo = np.inf
-            for yy in range(max(y - 1, 0), min(y + 2, H)):
-                for xx in range(max(x - 1, 0), min(x + 2, W)):
-                    lo = min(
-                        lo, top[ry0 + yy, rx0 + xx, IV] + und[ry0 + yy, rx0 + xx, IV]
-                    )
+            lo = row_lo[y, x]
+            if y > 0:
+                lo = min(lo, row_lo[y - 1, x])
+            if y < H - 1:
+                lo = min(lo, row_lo[y + 1, x])
             inside[y, x] = lo > MIN_FILM
     reliable = np.empty((H, W), np.float32)
     uncovered = np.zeros((H, W), np.bool_)
