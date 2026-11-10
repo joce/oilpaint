@@ -183,12 +183,12 @@ class Stroke:
         How readily the stroke churns into wet paint below (0 = sits on top,
         1 = stirs in strongly). Scaled by pressure.
     pickup:
-        How much wet paint the brush lifts and carries along (0..1).
+        How much wet paint the brush lifts and carries along (0..2).
         Brushes only: a knife drags wet paint instead (a thin-film flow).
     drag:
-        How much wet paint the brush pushes along with it (0..1). Brushes only.
+        How much wet paint the brush pushes along with it (0..2). Brushes only.
     streaks:
-        Strength of the brush-hair streak texture (0..1).
+        Strength of the brush-hair streak texture (0..2).
     smear:
         How long paint picked up from the canvas persists on the brush tip,
         roughly in brush widths.
@@ -197,8 +197,8 @@ class Stroke:
         stroke (see :attr:`BrushType.blending`).
     taper:
         Fraction of the stroke length over which the brush is lowered at the
-        start and lifted at the end (narrower, feathered ends). A number, or
-        a (start, end) pair. 0 gives full ends.
+        start and lifted at the end (narrower, feathered ends). A number from
+        0 to 1, or a (start, end) pair of them. 0 gives full ends.
     lift:
         0..1: how the tool leaves the paint at the end. 0 slides off cleanly;
         higher pulls the paint up into little peaks and torn ridges, as a
