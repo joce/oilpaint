@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from . import _engine as eng
+from ._geometry import _frozen
 from .brush import _clip
 
 if TYPE_CHECKING:
@@ -83,10 +84,10 @@ def _hair_field(
     n_lane = int((span_x + 4.0 * wander + 2.0) / lane_cells[1]) + 3
     lanes = rng.random((4, n_lane))
     field = eng.hair_field(n_s, n_x, ds, dx, cells, grids, lanes, lane_cells, wander)
-    return field, (float(s0), -x_half, float(ds), float(dx))
+    return _frozen(field), (float(s0), -x_half, float(ds), float(dx))
 
 
 # (the stippling pattern of a dab or the hair of a brush: not needed)
-_NO_TEX2 = np.zeros((1, 1))
+_NO_TEX2 = _frozen(np.zeros((1, 1)))
 # (the nicks of a blade: not needed)
-_NO_TEX = np.zeros(2)
+_NO_TEX = _frozen(np.zeros(2))

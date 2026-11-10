@@ -11,6 +11,14 @@ import numpy as np
 
 from . import _engine as eng
 
+
+def _frozen(a: np.ndarray) -> np.ndarray:
+    """``a``, made read-only: shared between strokes, or handed to the engine
+    alongside arrays that are."""
+    a.setflags(write=False)
+    return a
+
+
 _SUPERELLIPSE = {"flat": 10.0, "filbert": 3.0, "fan": 6.0, "round": 2.0, "spoon": 2.0}
 
 # Knife blades as polygons: (u along the blade from heel -1 to tip +1, v
@@ -98,7 +106,7 @@ def _chord_table_at(shape: str, aspect: float, phi: float):
     lo, hi = np.where(hit, lo, 0.0), np.where(hit, hi, 0.0)
     c = (lo + hi) / 2
     h = (hi - lo) / 2
-    return grid, c, h, lmax, float(h.max())
+    return _frozen(grid), _frozen(c), _frozen(h), lmax, float(h.max())
 
 
 def _signed_floor(x, floor):
@@ -106,7 +114,7 @@ def _signed_floor(x, floor):
 
 
 # (chord tables of a round footprint: not needed)
-_NO_TABLES = (np.zeros(2), np.zeros(2), np.zeros(2))
+_NO_TABLES = (_frozen(np.zeros(2)), _frozen(np.zeros(2)), _frozen(np.zeros(2)))
 
 
 def _plane(k: int, what: str) -> property:

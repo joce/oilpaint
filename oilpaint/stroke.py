@@ -35,6 +35,7 @@ from ._geometry import (
     _NO_TABLES,
     _chord_table,
     _footprint_area,
+    _frozen,
     _signed_floor,
     _Step,
     _step_slices,
@@ -356,7 +357,9 @@ def _pending(y0, y1, x0, x1):
     )
 
 
-# (no paint held: knives lay theirs at once)
+# (no paint held: knives lay theirs at once. Nothing is written to it, but it
+# stays writable: the kernels that take it write to the paint held, and numba
+# does not compile a write to a read-only array.)
 _NO_PENDING = (
     np.zeros((1, 1, PACKED), np.float32),
     np.zeros((1, 1), np.float32),
@@ -483,7 +486,7 @@ def _stroke_textures(rng, bt: BrushType, smp: _Samples, arc) -> _Textures:
     lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
     blade_tilt = float(_clip(rng.normal(0.0, 0.08), -0.2, 0.2))
     # the bristle tips a dab prints (see _dab)
-    dab = dab_pattern(bt, 0.5 * w_typ, rng) if smp.is_dab else _NO_TEX2
+    dab = _frozen(dab_pattern(bt, 0.5 * w_typ, rng)) if smp.is_dab else _NO_TEX2
     return _Textures(wobble, chatter, lip, blade_tilt, dab)
 
 
