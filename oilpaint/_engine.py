@@ -315,12 +315,12 @@ def likeness_bound(a, b, va, vb, clamp, upper):
     each component at least 0) works it out, rounding and all; NaN where
     there is none (a component below 0).
 
-    With x = a[c] / va and y = b[c] / vb (worked out as there), each term
-    lies between |x - y| / (1 + max(x, y)) and |x - y| (log1p rises no
-    faster than 1, and no slower than at the larger of the two), and the
-    computed term within 1e-6 (x + y) of that (a few units in the last
-    place of single-precision log1p(x) <= x). So a likeness well away from
-    a threshold is decided without 52 logarithms, as they would decide it."""
+    With x = a[c] / va and y = b[c] / vb (worked out as there), each term is
+    |log((1 + x) / (1 + y))| = 2 atanh(z), z = |x - y| / (2 + x + y) < 1,
+    which lies between 2 z and 2 z / (1 - z^2) (the series of atanh); and
+    the computed term within 1e-6 (x + y) of that (a few units in the last
+    place of single-precision log1p(x) <= x). So a likeness away from a
+    threshold is decided without 52 logarithms, as they would decide it."""
     zero = np.float32(0.0)
     tot, lowest = 0.0, 0.0
     for c in range(IV):
@@ -330,11 +330,11 @@ def likeness_bound(a, b, va, vb, clamp, upper):
             x, y = a[c] / va, b[c] / vb
         xf, yf = np.float64(x), np.float64(y)
         lowest = min(lowest, xf, yf)
-        d = abs(xf - yf)
+        z = abs(xf - yf) / (2.0 + xf + yf)
         if upper:
-            tot += d + 1e-6 * (xf + yf)
+            tot += 2.0 * z / (1.0 - z * z) + 1e-6 * (xf + yf)
         else:
-            tot += d / (1.0 + max(xf, yf)) - 1e-6 * (xf + yf)
+            tot += 2.0 * z - 1e-6 * (xf + yf)
     if lowest < 0:
         return np.nan
     return tot + 1e-12 if upper else tot - 1e-12
