@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
@@ -61,6 +61,9 @@ from .brush import (
 )
 from .noise import value_noise_1d
 from .spline import Path, Profile, as_path, evaluate_profile
+
+if TYPE_CHECKING:
+    from .canvas import Canvas
 
 # --- lifting a brush off (see _Run._lift) ------------------------------------------
 # Over how much of the end (px, for a brush 36 px wide, at most) a stiff
@@ -313,7 +316,7 @@ def _resolve(stroke: Stroke):
     return brush, bt, eff
 
 
-def apply_stroke(canvas, stroke: Stroke) -> Brush:
+def apply_stroke(canvas: Canvas, stroke: Stroke) -> Brush:
     """Run the stroke simulation on ``canvas``. Returns the brush used.
 
     The tool moves along the path in short straight segments. For every pixel
@@ -584,14 +587,12 @@ class _Run:
     one out, or drawing one earlier, would change every stroke."""
 
     @classmethod
-    def begin(cls, canvas, stroke: Stroke) -> _Run:
+    def begin(cls, canvas: Canvas, stroke: Stroke) -> _Run:
         """Set ``stroke`` going on ``canvas``: its random numbers, the tool,
         the path sampled, and the brush sized for the stroke and loaded with
         its paint (a load it refuses raises before the stroke has an id)."""
         path: Path = as_path(stroke.path)
-        rng = np.random.default_rng(
-            stroke.seed if stroke.seed is not None else canvas._rng.integers(1 << 31)
-        )
+        rng = canvas._stroke_rng(stroke.seed)
         brush, bt, eff = _resolve(stroke)
         smp = _sample_stroke(path, stroke, bt, eff)
         # a load is measured in widths of the stroke (see Stroke.amount)
@@ -599,7 +600,9 @@ class _Run:
         load_paint(brush, stroke.paint, stroke.amount)
         return cls(canvas, rng, brush, bt, eff, smp)
 
-    def __init__(self, canvas, rng, brush: Brush, bt: BrushType, eff: dict, smp):
+    def __init__(
+        self, canvas: Canvas, rng, brush: Brush, bt: BrushType, eff: dict, smp
+    ):
         self.canvas, self.rng = canvas, rng
         self.brush, self.bt, self.eff = brush, bt, eff
         pts, is_dab, w_typ = smp.pts, smp.is_dab, smp.w_typ
@@ -652,7 +655,8 @@ class _Run:
 
         # what the compiled engine works on
         self.cv = (canvas.top, canvas.und, canvas.top_a, canvas.und_a, canvas.top_id)
-        self.aux = (canvas._floor, canvas._tooth, canvas._hollows, canvas.dry_height)
+        relief = self.relief = canvas._relief()
+        self.aux = (relief.floor, relief.tooth, relief.hollows, canvas.dry_height)
         self.br = (brush.tip, brush.reservoir, brush.heel)
         self.pend = _NO_PENDING
         # the brush's hair: where its bristle clumps run along the stroke (see

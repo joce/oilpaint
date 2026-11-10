@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import numbers
 from collections.abc import Sequence
+from typing import NamedTuple
 
 import numpy as np
 
@@ -30,6 +31,20 @@ from .png import write_png
 from .spline import Profile
 from .stroke import Stroke, apply_stroke
 from .surface import DEFAULT_SURFACE, Surface
+
+
+class _Relief(NamedTuple):
+    """The surface under the wet paint, as a stroke meets it: the solid
+    surface (the weave and dried paint, in units of paint thickness), what a
+    nearly dry brush catches on (0..1), how far each point lies below the
+    surface around it, and where a blade comes to rest on it (flexible,
+    stiff)."""
+
+    floor: np.ndarray
+    tooth: np.ndarray
+    hollows: np.ndarray
+    peaks_fine: np.ndarray
+    peaks_wide: np.ndarray
 
 
 class Canvas:
@@ -320,9 +335,7 @@ class Canvas:
         if paint is None:  # nothing to flick
             return 0
         as_paint(paint)
-        rng = np.random.default_rng(
-            seed if seed is not None else self._rng.integers(1 << 31)
-        )
+        rng = self._stroke_rng(seed)
         n = round(_DROPS_PER_AMOUNT * amount)
         if n <= 0:  # nothing flicked
             return 0
@@ -423,9 +436,27 @@ class Canvas:
         self.top_id.fill(0)
         self._update_tooth()
 
+    # ------------------------------------------------------------------
+    # what a stroke works with (see oilpaint.stroke)
+    # ------------------------------------------------------------------
+    def _stroke_rng(self, seed) -> np.random.Generator:
+        """The random numbers of a stroke (or a flick of spatter): from its
+        own ``seed``, or else seeded from the canvas's."""
+        return np.random.default_rng(
+            seed if seed is not None else self._rng.integers(1 << 31)
+        )
+
     def _new_stroke_id(self) -> int:
+        """The next stroke's id: what marks its fresh paint (``top_id``)."""
         self._stroke_counter += 1
         return self._stroke_counter
+
+    def _relief(self) -> _Relief:
+        """The surface under the wet paint, as a stroke meets it (see
+        :meth:`_update_tooth`)."""
+        return _Relief(
+            self._floor, self._tooth, self._hollows, self._peaks_fine, self._peaks_wide
+        )
 
     def _update_tooth(self):
         # What a nearly-dry brush catches on: the weave, plus ridges of dry paint.

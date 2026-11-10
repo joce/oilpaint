@@ -156,10 +156,9 @@ def _blade_rest(run: _Run, s: _Step):
     one)."""
     canvas, bt, st = run.canvas, run.bt, s.st
     p, sl, wsl = st.p, s.sl, s.wsl
-    top, und, floor = canvas.top[sl], canvas.und[sl], canvas._floor[sl]
-    rest = canvas._peaks_fine[sl] + run.stiff_blade * (
-        canvas._peaks_wide[sl] - canvas._peaks_fine[sl]
-    )
+    top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
+    fine, wide = run.relief.peaks_fine[sl], run.relief.peaks_wide[sl]
+    rest = fine + run.stiff_blade * (wide - fine)
     # Wet paint from earlier strokes holds the blade up too, the heap it pushes
     # included (a knife rides on a wave of paint): it rests on its high points
     # and sinks in the harder it is pressed (less into stiff paint). A light
@@ -227,7 +226,7 @@ def _push_aside(run: _Run, s: _Step, level):
     adds to it: (all round, left, right)."""
     canvas, st = run.canvas, s.st
     sl, wsl = s.sl, s.wsl
-    top, und, floor = canvas.top[sl], canvas.und[sl], canvas._floor[sl]
+    top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
     hair, expo_c = s.hair[wsl], s.expo[wsl]
     # all round, left, right
     ridges = (np.zeros(PACKED), np.zeros(PACKED), np.zeros(PACKED))
@@ -284,7 +283,7 @@ def _drag_film(run: _Run, s: _Step, level) -> None:
         st.cy0,
         st.cx0,
         run.stroke_id,
-        run.canvas._floor[s.sl],
+        run.relief.floor[s.sl],
         level,
         s.aa[wsl],
         s.along[wsl],
@@ -338,7 +337,7 @@ def _slab(run: _Run, s: _Step, level, area: float):
     skims (0: not at all)."""
     canvas, st = run.canvas, s.st
     p, sl, wsl = st.p, s.sl, s.wsl
-    top, und, floor = canvas.top[sl], canvas.und[sl], canvas._floor[sl]
+    top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
     hair, expo_c = s.hair[wsl], s.expo[wsl]
     surf = floor + top[..., IV] + und[..., IV]
     gap_px = np.clip(level - surf, 0.0, None)
@@ -372,7 +371,7 @@ def _slab(run: _Run, s: _Step, level, area: float):
         # the bead is uneven and the paint below still follows the threads
         # of the canvas: barely touching, it catches in streaks along the
         # blade's nicks and on the thread tops, the fewer the lighter the touch
-        grain = 0.55 * hair + 0.45 * canvas._tooth[sl]
+        grain = 0.55 * hair + 0.45 * run.relief.tooth[sl]
         thr = _KNIFE_TOUCH - 2.2 * p
         touch = touch * _smoothstep(thr - 0.1, thr + 0.1, grain)
         # the bead leaves paint wherever it passes, in proportion to how
@@ -432,7 +431,7 @@ def _fold_layers(run: _Run, s: _Step, level, f_mix) -> None:
     st, sl, wsl = s.st, s.sl, s.wsl
     p = st.p
     hair, expo_c = s.hair[wsl], s.expo[wsl]
-    und, floor = run.canvas.und[sl], run.canvas._floor[sl]
+    und, floor = run.canvas.und[sl], run.relief.floor[sl]
     m = 1.0 - np.exp(-run.eff["mixing"] * 3.0 * p * p * expo_c * s.streak[wsl] * f_mix)
     into_under = np.clip(floor + und[..., IV] + 0.5 - level, 0.0, 1.0)
     m = np.clip(m * (0.1 + 1.8 * hair) * into_under, 0.0, 1.0)
