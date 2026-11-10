@@ -285,6 +285,62 @@ def alike(a, b):
 
 
 @njit(cache=True, error_model="numpy")
+def alike_below(a, b, thr):
+    """``alike(a, b) < thr``, without its logarithms where bounds on it
+    already tell (see likeness_bound)."""
+    floor = np.float32(1e-9)
+    va, vb = max(a[IV], floor), max(b[IV], floor)
+    if likeness_bound(a, b, va, vb, False, True) / IV < thr:
+        return True
+    if likeness_bound(a, b, va, vb, False, False) / IV >= thr:
+        return False
+    return alike(a, b) < thr
+
+
+@njit(cache=True, error_model="numpy")
+def alike_upto(a, b, thr):
+    """``alike(a, b)``, or inf where a bound on it shows it is ``thr`` or more
+    (see likeness_bound)."""
+    floor = np.float32(1e-9)
+    va, vb = max(a[IV], floor), max(b[IV], floor)
+    if likeness_bound(a, b, va, vb, False, False) / IV >= thr:
+        return np.inf
+    return alike(a, b)
+
+
+@njit(cache=True, error_model="numpy")
+def likeness_bound(a, b, va, vb, clamp, upper):
+    """An upper (or lower) bound on the sum of |log1p(a[c] / va) - log1p(b[c]
+    / vb)| over the bands as :func:`alike` (with ``clamp``, :func:`harmless`:
+    each component at least 0) works it out, rounding and all; NaN where
+    there is none (a component below 0).
+
+    With x = a[c] / va and y = b[c] / vb (worked out as there), each term
+    lies between |x - y| / (1 + max(x, y)) and |x - y| (log1p rises no
+    faster than 1, and no slower than at the larger of the two), and the
+    computed term within 1e-6 (x + y) of that (a few units in the last
+    place of single-precision log1p(x) <= x). So a likeness well away from
+    a threshold is decided without 52 logarithms, as they would decide it."""
+    zero = np.float32(0.0)
+    tot, lowest = 0.0, 0.0
+    for c in range(IV):
+        if clamp:
+            x, y = max(a[c], zero) / va, max(b[c], zero) / vb
+        else:
+            x, y = a[c] / va, b[c] / vb
+        xf, yf = np.float64(x), np.float64(y)
+        lowest = min(lowest, xf, yf)
+        d = abs(xf - yf)
+        if upper:
+            tot += d + 1e-6 * (xf + yf)
+        else:
+            tot += d / (1.0 + max(xf, yf)) - 1e-6 * (xf + yf)
+    if lowest < 0:
+        return np.nan
+    return tot + 1e-12 if upper else tot - 1e-12
+
+
+@njit(cache=True, error_model="numpy")
 def harmless(top, und):
     """Burying the top layer changes nothing you could see: the layer below
     is much the same paint (or there is none)."""
@@ -292,6 +348,11 @@ def harmless(top, und):
         return True
     zero, floor = np.float32(0.0), np.float32(1e-9)
     va, vb = max(max(top[IV], zero), floor), max(max(und[IV], zero), floor)
+    # (decided by bounds where they tell, see likeness_bound)
+    if likeness_bound(top, und, va, vb, True, True) / IV < SAME_LAYER:
+        return True
+    if likeness_bound(top, und, va, vb, True, False) / IV >= SAME_LAYER:
+        return False
     tot = 0.0
     for c in range(IV):
         tot += abs(
@@ -1149,7 +1210,7 @@ def deposit(
                 # three layers in two places: merge the two most alike. The new paint
                 # joins the top layer only if it really is much the same paint (white
                 # pushed onto white); a different colour stays on top of the others.
-                near = alike(top[Y, X], dep[y, x])
+                near = alike_upto(top[Y, X], dep[y, x], SAME_PAINT)
                 if near < SAME_PAINT and near < alike(und[Y, X], top[Y, X]):
                     for c in range(PACKED):
                         top[Y, X, c] += np.float32(dep[y, x, c])
@@ -1912,7 +1973,7 @@ def merge_same(cv, sy0, sx0, own, thr):
             Y, X = sy0 + y, sx0 + x
             if own[y, x] or not (top[Y, X, IV] > EMPTY and und[Y, X, IV] > EMPTY):
                 continue
-            if alike(top[Y, X], und[Y, X]) < thr:
+            if alike_below(top[Y, X], und[Y, X], thr):
                 for c in range(PACKED):
                     und[Y, X, c] += top[Y, X, c]
                     top[Y, X, c] = 0.0
@@ -3155,7 +3216,7 @@ def _cover_pushed(layer, A, reliable, inside, uncovered, ry0, rx0):
                     # (a faint film beside it is not the edge of this paint)
                     if other[IV] / c < EDGE_RAMP * v:
                         continue
-                    if alike(me, other) < SAME_PAINT:
+                    if alike_below(me, other, SAME_PAINT):
                         c_min = min(c_min, c)
                 if c_min <= 1.0:
                     cap[y, x] = c_min
@@ -3191,7 +3252,7 @@ def _edge_film(layer, reliable, ry0, rx0, y, x, H, W):
             if yy == y and xx == x:
                 continue
             other = layer[ry0 + yy, rx0 + xx]
-            if not other[IV] > EMPTY or alike(me, other) >= SAME_PAINT:
+            if not other[IV] > EMPTY or not alike_below(me, other, SAME_PAINT):
                 continue
             if reliable[yy, xx] > 0:
                 tot += reliable[yy, xx]
