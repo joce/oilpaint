@@ -935,11 +935,11 @@ class _Run:
             return none  # (not reached: see _lift_from)
         brush, bt = self.brush, self.bt
         load, hold, vol = self._load(i, p)
-        loaded = float(_smoothstep(0.15, 0.6, load / hold))
+        loaded = eng.smoothstep(0.15, 0.6, load / hold)
         if loaded <= 0:
             return none
         length = arc[-1]
-        short = float(_smoothstep(1.0, 3.0, length / Wd))
+        short = eng.smoothstep(1.0, 3.0, length / Wd)
         lift = self.eff["lift"]
         # The clumps leave over the distance the bristle tips travel while the
         # brush comes up: a matter of how long the hair is (it grows far more
@@ -964,12 +964,12 @@ class _Run:
             1.2 - 0.5 * p
         ) * body * max(load - hold, 0.0)
         # fluid paint closes up behind the clumps as they leave
-        L *= float(_smoothstep(0.1, 0.5, body))
+        L *= eng.smoothstep(0.1, 0.5, body)
         amp = (
             _LIFT_CREST
             * lift
-            * float(_smoothstep(0.8, 3.0, thick))
-            * float(_smoothstep(0.3, 0.8, body))
+            * eng.smoothstep(0.8, 3.0, thick)
+            * eng.smoothstep(0.3, 0.8, body)
         )
         if L < 1.0:
             return none
@@ -1095,7 +1095,7 @@ def _dab_lift(run: _Run) -> None:
         return
     thick = float(V.sum() / max(float((V > 0.15).sum()), 1.0))
     body = float(np.where(own, top[..., IB], 0.0).sum() / V.sum())
-    amp = 1.2 * lift * float(_smoothstep(2.0, 6.0, thick) * _smoothstep(0.3, 0.8, body))
+    amp = 1.2 * lift * eng.smoothstep(2.0, 6.0, thick) * eng.smoothstep(0.3, 0.8, body)
     if amp <= 0:
         return
     rng = run.rng
