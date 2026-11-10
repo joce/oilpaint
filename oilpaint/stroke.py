@@ -31,7 +31,14 @@ import numpy as np
 from . import _engine as eng
 from ._dab import dab_pattern
 from ._engine import COLUMNS, IB, IV, PACKED
-from ._geometry import _NO_TABLES, _chord_table, _footprint_area, _signed_floor, _Step
+from ._geometry import (
+    _NO_TABLES,
+    _chord_table,
+    _footprint_area,
+    _signed_floor,
+    _Step,
+    _step_slices,
+)
 from ._hair import _NICK_WANDER, _NO_TEX, _NO_TEX2, _hair_field
 from ._knife import _before_the_blade, _knife_step, _wandering_bands
 from .brush import (
@@ -923,12 +930,12 @@ class _Run:
         F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables)
         if not hit:
             return None
-        s = _Step(st, F, tables)
-        u_px = s.ucoord[s.wsl]
+        wsl = _step_slices(st)[1]
+        u_px = F[eng.F_U][wsl]
         if self.bt.rigid:
-            u_px = _wandering_bands(self, s, u_px)
-        s.taps = eng.bristle_taps(u_px, st.span, st.nsub, self.brush.ring, st.rho)
-        return s
+            u_px = _wandering_bands(self, st, F[eng.F_ALONG][wsl], u_px)
+        taps = eng.bristle_taps(u_px, st.span, st.nsub, self.brush.ring, st.rho)
+        return _Step(st, F, tables, taps)
 
     def bounds(self):
         """(y0, y1, x0, x1): the part of the canvas the stroke can reach."""

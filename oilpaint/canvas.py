@@ -164,13 +164,16 @@ class Canvas:
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        for name in ("top_k", "top_s", "top_v", "und_k", "und_s", "und_v", "_pending"):
+        for name in ("top_k", "top_s", "top_v", "und_k", "und_s", "und_v"):
             state.pop(name, None)
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         self.__dict__.setdefault("reverse", False)  # canvases saved before glass
+        # (canvases saved by versions that kept the paint a stroke holds back
+        # on the canvas: none is held between strokes)
+        self.__dict__.pop("_pending", None)
         # canvases saved before coverage existed
         for name in ("top_a", "und_a"):
             if name not in self.__dict__:

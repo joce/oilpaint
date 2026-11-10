@@ -481,6 +481,10 @@ class Brush:
                 f"medium round), got {type!r:.80}"
             )
         self.type = type or DEFAULT_BRUSH
+        self._empty()
+
+    def _empty(self) -> None:
+        """No paint on the brush, its hair dry, at its type's width."""
         self.reservoir = np.zeros((COLUMNS, PACKED))  # the belly of each column
         # paint at the tips of each column
         self.tip = np.zeros((COLUMNS, PACKED))
@@ -645,7 +649,9 @@ class Brush:
         return self
 
     def clean(self) -> Brush:
-        self.__init__(self.type)
+        """Wash the brush out: no paint left on it (in the heel either), and
+        back to its type's width."""
+        self._empty()
         return self
 
     def _spread_load(self, across) -> np.ndarray:

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import functools
 import math
-from typing import ClassVar
 
 import numpy as np
 
@@ -110,44 +109,45 @@ def _signed_floor(x, floor):
 _NO_TABLES = (np.zeros(2), np.zeros(2), np.zeros(2))
 
 
+def _plane(k: int, what: str) -> property:
+    """Plane ``k`` of a step's footprint ``F``, as an attribute."""
+    return property(lambda self: self.F[k], doc=what)
+
+
+def _step_slices(st):
+    """The step's part of the canvas, and where that lies in its window."""
+    return (
+        (slice(st.cy0, st.cy0 + st.ch), slice(st.cx0, st.cx0 + st.cw)),
+        (slice(st.wy0, st.wy0 + st.ch), slice(st.wx0, st.wx0 + st.cw)),
+    )
+
+
 class _Step:
     """The footprint of one segment of a stroke.
 
     ``st`` holds its scalars (an :class:`_engine.Step`), ``F`` the per-pixel
     footprint over the window around the swept segment, which may stick out
-    of the canvas: ``along``, ``lat_px``, ``ucoord``, ``hair``, ``aa``,
-    ``profile``, ``c``, ``h``, ``rel``, ``overlap``, ``expo``, ``cover``,
-    ``streak`` and ``between`` are its planes. ``wsl`` crops them to the
-    canvas part ``sl``. ``taps`` maps bristle columns to the pixels of that
-    part, ``tables`` are the footprint's chord tables."""
+    of the canvas (its planes are attributes, ``along`` to ``edge``; see
+    :func:`_engine.footprint`). ``wsl`` crops them to the canvas part ``sl``.
+    ``taps`` maps bristle columns to the pixels of that part, ``tables`` are
+    the footprint's chord tables."""
 
-    _PLANES: ClassVar[dict[str, int]] = {
-        "along": eng.F_ALONG,
-        "lat_px": eng.F_LAT,
-        "ucoord": eng.F_U,
-        "hair": eng.F_HAIR,
-        "aa": eng.F_AA,
-        "profile": eng.F_PROFILE,
-        "c": eng.F_C,
-        "h": eng.F_H,
-        "rel": eng.F_REL,
-        "overlap": eng.F_OVERLAP,
-        "expo": eng.F_EXPO,
-        "cover": eng.F_COVER,
-        "streak": eng.F_STREAK,
-        "between": eng.F_BETWEEN,
-        "edge": eng.F_EDGE,
-    }
+    along = _plane(eng.F_ALONG, "position along the motion (px)")
+    lat_px = _plane(eng.F_LAT, "position across the motion (px)")
+    ucoord = _plane(eng.F_U, "position across the brush, -1..1")
+    hair = _plane(eng.F_HAIR, "the hair over the pixel, 0 (a furrow) to 1")
+    aa = _plane(eng.F_AA, "how much of the pixel the footprint covers")
+    profile = _plane(eng.F_PROFILE, "the tool's lateral profile")
+    c = _plane(eng.F_C, "the chord's centre, along the motion (px)")
+    h = _plane(eng.F_H, "the chord's half-length (px)")
+    rel = _plane(eng.F_REL, "position along the chord, from its centre (px)")
+    overlap = _plane(eng.F_OVERLAP, "how much of the chord the step sweeps (px)")
+    expo = _plane(eng.F_EXPO, "exposure: the share of a full pass in this step")
+    cover = _plane(eng.F_COVER, "coverage the step adds")
+    streak = _plane(eng.F_STREAK, "how much the hair streaks lay or stir there")
+    between = _plane(eng.F_BETWEEN, "the gaps between clumps or teeth")
+    edge = _plane(eng.F_EDGE, "how far in from the edge of the mark (px)")
 
-    taps: tuple
-
-    def __init__(self, st, F, tables):
-        self.st, self.F, self.tables = st, F, tables
-        self.sl = (slice(st.cy0, st.cy0 + st.ch), slice(st.cx0, st.cx0 + st.cw))
-        self.wsl = (slice(st.wy0, st.wy0 + st.ch), slice(st.wx0, st.wx0 + st.cw))
-
-    def __getattr__(self, name):
-        k = _Step._PLANES.get(name)
-        if k is None:
-            raise AttributeError(name)
-        return self.F[k]
+    def __init__(self, st, F, tables, taps):
+        self.st, self.F, self.tables, self.taps = st, F, tables, taps
+        self.sl, self.wsl = _step_slices(st)

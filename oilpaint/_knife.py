@@ -78,13 +78,13 @@ def _before_the_blade(canvas, rng, pts, pad, w_typ, arc):
     return wet_y0, wet_x0, wet_before, bands, period
 
 
-def _wandering_bands(run: _Run, s: _Step, u_px):
-    """Where across the blade (``u_px``, -1..1 per pixel of the step's part
-    of the canvas) the paint a knife lays comes from: paint on a blade isn't
-    held in lanes, so its colour bands wander a little from side to side
-    along the stroke."""
+def _wandering_bands(run: _Run, st, along, u_px):
+    """Where across the blade (``u_px``, -1..1 per pixel of the part of the
+    canvas step ``st`` covers, ``along`` the motion there) the paint a knife
+    lays comes from: paint on a blade isn't held in lanes, so its colour
+    bands wander a little from side to side along the stroke."""
     along_stroke = _clip(
-        (run.arc[s.st.i] + s.along[s.wsl]) / run.band_period * 8.0,
+        (run.arc[st.i] + along) / run.band_period * 8.0,
         0.0,
         run.bands.shape[0] - 1.001,
     )
