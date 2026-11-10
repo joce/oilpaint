@@ -442,7 +442,7 @@ class _Whole(NamedTuple):
     :func:`_whole_window`)."""
 
     s: _Step  # the step, its part of the canvas all of the window
-    on: _Step  # the step as it is: its part on the canvas is on.wsl of the window
+    step: _Step  # the step as it is (its part on the canvas: step.wsl of the window)
     surf_add: np.ndarray  # what to add to the surface read off the canvas
     level: np.ndarray | None = None  # how high the blade rides (see _blade_level)
     ride: np.ndarray | None = None
@@ -527,7 +527,7 @@ def _lay_off(run: _Run, st, d) -> None:
 def _press_out_past_edge(run: _Run, whole: _Whole, skim: float) -> None:
     """The paint the blade presses out at an end past the edge of the
     canvas (see :func:`_press_out_ends`) is gone."""
-    sw, on = whole.s, whole.on.st
+    sw, on = whole.s, whole.step.st
     d_end = _end_press(whole.ride, sw, skim, (on.wy0, on.wx0, on.ch, on.cw))
     if d_end.max() > 1e-6:
         eng.take_tips(run.brush.tip, sw.taps, d_end)

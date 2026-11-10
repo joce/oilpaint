@@ -287,12 +287,12 @@ def alike(a, b):
 @njit(cache=True, error_model="numpy")
 def alike_below(a, b, thr):
     """``alike(a, b) < thr``, without its logarithms where bounds on it
-    already tell (see likeness_bound)."""
+    already tell (see likeness_bounds)."""
     floor = np.float32(1e-9)
-    va, vb = max(a[IV], floor), max(b[IV], floor)
-    if likeness_bound(a, b, va, vb, False, True) / IV < thr:
+    lo, hi = likeness_bounds(a, b, max(a[IV], floor), max(b[IV], floor), False)
+    if hi / IV < thr:
         return True
-    if likeness_bound(a, b, va, vb, False, False) / IV >= thr:
+    if lo / IV >= thr:
         return False
     return alike(a, b) < thr
 
@@ -300,29 +300,34 @@ def alike_below(a, b, thr):
 @njit(cache=True, error_model="numpy")
 def alike_upto(a, b, thr):
     """``alike(a, b)``, or inf where a bound on it shows it is ``thr`` or more
-    (see likeness_bound)."""
+    (see likeness_bounds)."""
     floor = np.float32(1e-9)
-    va, vb = max(a[IV], floor), max(b[IV], floor)
-    if likeness_bound(a, b, va, vb, False, False) / IV >= thr:
+    lo, _ = likeness_bounds(a, b, max(a[IV], floor), max(b[IV], floor), False)
+    if lo / IV >= thr:
         return np.inf
     return alike(a, b)
 
 
 @njit(cache=True, error_model="numpy")
-def likeness_bound(a, b, va, vb, clamp, upper):
-    """An upper (or lower) bound on the sum of |log1p(a[c] / va) - log1p(b[c]
-    / vb)| over the bands as :func:`alike` (with ``clamp``, :func:`harmless`:
+def likeness_bounds(a, b, va, vb, clamp):
+    """Bounds (lower, upper) on the sum of |log1p(a[c] / va) - log1p(b[c] /
+    vb)| over the bands as :func:`alike` (with ``clamp``, :func:`harmless`:
     each component at least 0) works it out, rounding and all; NaN where
-    there is none (a component below 0).
+    there are none (a component below 0). The comparisons that decide with
+    them decide as the logarithms would, without working out 52 of them.
 
     With x = a[c] / va and y = b[c] / vb (worked out as there), each term is
     |log((1 + x) / (1 + y))| = 2 atanh(z), z = |x - y| / (2 + x + y) < 1,
-    which lies between 2 z and 2 z / (1 - z^2) (the series of atanh); and
-    the computed term within 1e-6 (x + y) of that (a few units in the last
-    place of single-precision log1p(x) <= x). So a likeness away from a
-    threshold is decided without 52 logarithms, as they would decide it."""
+    which lies between 2 z and 2 z / (1 - z^2) (the series of atanh). The
+    computed term lies within 1e-6 (x + y) of the exact one: in single
+    precision, log1p is the C library's log1pf, measured within 1.29 units
+    in the last place (ulp) of the exact value over all float32 on this
+    build (glibc); the margin allows about 7 ulp on each of the two
+    logarithms, the rounding of their difference included (log1p(x) <= x,
+    and an ulp of a float32 is at most 1.2e-7 of it). A C library or a vectorised
+    log (SVML) with a larger error needs a larger margin."""
     zero = np.float32(0.0)
-    tot, lowest = 0.0, 0.0
+    lo, hi, lowest = 0.0, 0.0, 0.0
     for c in range(IV):
         if clamp:
             x, y = max(a[c], zero) / va, max(b[c], zero) / vb
@@ -331,13 +336,12 @@ def likeness_bound(a, b, va, vb, clamp, upper):
         xf, yf = np.float64(x), np.float64(y)
         lowest = min(lowest, xf, yf)
         z = abs(xf - yf) / (2.0 + xf + yf)
-        if upper:
-            tot += 2.0 * z / (1.0 - z * z) + 1e-6 * (xf + yf)
-        else:
-            tot += 2.0 * z - 1e-6 * (xf + yf)
+        m = 1e-6 * (xf + yf)
+        lo += 2.0 * z - m
+        hi += 2.0 * z / (1.0 - z * z) + m
     if lowest < 0:
-        return np.nan
-    return tot + 1e-12 if upper else tot - 1e-12
+        return np.nan, np.nan
+    return lo - 1e-12, hi + 1e-12
 
 
 @njit(cache=True, error_model="numpy")
@@ -348,10 +352,11 @@ def harmless(top, und):
         return True
     zero, floor = np.float32(0.0), np.float32(1e-9)
     va, vb = max(max(top[IV], zero), floor), max(max(und[IV], zero), floor)
-    # (decided by bounds where they tell, see likeness_bound)
-    if likeness_bound(top, und, va, vb, True, True) / IV < SAME_LAYER:
+    # (decided by bounds where they tell, see likeness_bounds)
+    lo, hi = likeness_bounds(top, und, va, vb, True)
+    if hi / IV < SAME_LAYER:
         return True
-    if likeness_bound(top, und, va, vb, True, False) / IV >= SAME_LAYER:
+    if lo / IV >= SAME_LAYER:
         return False
     tot = 0.0
     for c in range(IV):
@@ -2502,9 +2507,8 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
     tip, belly = br[0], br[1]
     grid, c_tab, h_tab = tables
     p = st.p
-    # (True and False as run-time values: a knife's steps call some of the same
-    # kernels with them from Python, and a constant would compile those
-    # kernels over again for it)
+    # (true and false as run-time values, not constants: one compiled kernel
+    # for these calls and a knife's)
     brush, knife = not K.rigid, K.rigid
     f_pick, f_dep, f_mix, f_drag = surface_factors_on(cv, aux, st, part, K)
 

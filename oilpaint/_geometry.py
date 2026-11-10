@@ -148,7 +148,6 @@ class _Step:
 
     along = _plane(eng.F_ALONG, "position along the motion (px)")
     lat_px = _plane(eng.F_LAT, "position across the motion (px)")
-    ucoord = _plane(eng.F_U, "position across the brush, -1..1")
     hair = _plane(eng.F_HAIR, "the hair over the pixel, 0 (a furrow) to 1")
     aa = _plane(eng.F_AA, "how much of the pixel the footprint covers")
     profile = _plane(eng.F_PROFILE, "the tool's lateral profile")
