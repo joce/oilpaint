@@ -6,6 +6,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Impasto has the structure of real oil paint. Bristle furrows come from a
+  hair pattern over the whole stroke, with clumps a physical size: they
+  drift, merge, split and fade along the stroke (a furrow lasts a width or
+  two) and are the same size on any width of brush; stroke edges are ragged
+  rather than ruled.
+- An overloaded brush lays as thick as its load (its glob feeds the deposit
+  directly; `IMPASTO` 0.2 -> 0.12), the same on a curve as on a straight
+  stroke. Where it is set down it leaves one lumpy bead behind and beside
+  where it landed, instead of a thin wall around its first footprint.
+- A stiff brush lifts off clump by clump at the end of a stroke, pulling
+  thick paint up into crests; soft brushes slide off clean. `lift` now
+  applies to brushes too, by default from the stiffness (it was 0).
+- Brushes no longer lift or push their own fresh paint step by step: no
+  more ripple across the stroke at every step and echoes of the first
+  footprint ("nested rectangles"). Thin strokes reach as far as before.
+- A loaded dab is a mound of paint pulled up into a peak where the brush
+  leaves it, not a thin coin with a rim.
+- Knife slabs have ridges along the edges where the blade's ends press
+  paint out; blade nicks come and go along the stroke; lifting off pulls
+  paint up most along the trailing edge.
+- Thick tube paint rounds off a little as it settles, so it looks softer
+  than paint stiffened with impasto medium; mid-stiff paint slumps a little
+  sooner at steep edges.
+- A knife skimming with its blade's point or rounded end no longer leaves a
+  sawtooth along that side of the slab; a skimming knife lays about what it
+  did before on the same ridges (on ridges painted by this version, which
+  stand a little higher, some 10-17% more).
+- Ordinary strokes (below what the hair holds) lay the same paint as
+  before and reach about as far, but spread it a little differently: by
+  brush type, a few percent more or less area at correspondingly thinner or
+  thicker paint (up to about 5% either way, depending on the strokes
+  measured); the total paint laid is unchanged. Their ends are shaped by
+  the lift-off, and their streaks wander.
+- Overloaded thin lines (a liner or rigger loaded far beyond what it holds)
+  carry further than before, about 7%: the glob feeds the line directly.
+- A clean brush blending wet paint only moves it: only paint a stroke lays
+  rounds off as it settles.
+
 ### Added
 
 - Stippling: a dab tapped lightly now prints the separate tips of a brush's

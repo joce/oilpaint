@@ -222,7 +222,7 @@ Useful members:
 | `blending` | How readily the paints loaded on the brush merge into each other during the stroke. |
 | `streaks`  | Brush-hair streak texture, 0..1. |
 | `taper`    | Feathered ends: fraction of the length where the brush is lowered/lifted. |
-| `lift`     | 0..1, how the tool leaves the paint at the end: 0 slides off cleanly, higher pulls the paint up into streaks and torn ridges along the pull, as a knife lifted off thick paint does (1 gives a stucco-like texture). Default 0.3 for knives, 0 for brushes. |
+| `lift`     | 0..1, how the tool leaves the paint at the end: 0 slides off cleanly; higher pulls the paint up as it goes. A knife pulls thick paint into streaks and torn ridges along the pull (1 gives a stucco-like texture). A brush's bristle clumps leave the paint one after another over the last stretch of the stroke, a ragged end, each pulling thick, stiff paint up into a crest as it goes. Default 0.3 for knives; for brushes, from the stiffness: about 1 for hog, 0 for sable and other soft hair (it closes up and slides off clean); given explicitly, it acts on any brush, strokes and dabs alike. |
 | `seed`     | Seed for the stroke's texture. |
 
 `mixing`, `pickup`, `drag`, `smear`, `streaks`, `taper`, `lift`, `angle`
@@ -619,16 +619,36 @@ Thin paint gives colour; thick paint also gives shape. Paint has a height on
 the canvas, and the tools push it around:
 
 * **Load.** A normal load lays a normal film. Beyond what the hair holds, the
-  extra sits on the brush as a glob that goes on thick, and the bristles comb
-  it into grooves and ridges.
+  extra sits on the brush as a glob that goes on thick (twice the load, about
+  twice as thick), and the bristles comb it into grooves and ridges.
+* **Bristle furrows.** The clumps of bristles that comb the paint are a
+  physical size (coarser for hog than for sable), so a big brush combs more
+  furrows, not bigger ones. Along the stroke the clumps drift sideways,
+  crowd together and part, and the brush regroups now and then: a furrow
+  lasts a brush width or two, merges with its neighbour, splits or fades,
+  and the edges of the stroke are ragged rather than ruled.
+* **Setting down and lifting off.** An overloaded brush set down squeezes a
+  lumpy bead of paint out behind and beside where it landed. At the end a
+  stiff brush leaves the paint one clump after another (a ragged end, over a
+  stretch set by how far its bristle tips travel as it comes up: barely
+  longer on a wide brush, and different on every stroke), and each clump
+  thins out and pulls thick, stiff paint up into a crest just behind its tip
+  (`lift`); a soft brush slides off clean.
+* **Dabs.** An overloaded brush pressed down leaves part of its glob as a
+  lumpy mound (flatter the harder it is pressed), and lifted straight off it
+  pulls the paint up into a peak or two. Tapped lightly, a full brush's glob
+  touches all over rather than printing only its bristle tips.
 * **Pressure.** Pressing an overloaded brush or knife squeezes paint out at its
-  edges into ridges. Light pressure leaves a thick deposit; heavy pressure
+  edges into ridges: as wide as the paint in them makes them, steep against
+  the stroke, swelling and breaking where the clumps at the brush's edge
+  pushed them out. Light pressure leaves a thick deposit; heavy pressure
   spreads it thin and pushes the excess aside.
 * **Ploughing.** Dragging a tool through thick wet paint pushes the paint above
   it aside into ridges and ahead of it, and leaves a pile where it lifts.
 * **Body.** How long the marks last depends on the paint's `body`. Paint thinned
-  with `MEDIUM` flows and levels out; tube paint keeps its bristle marks;
-  paint stiffened with `IMPASTO_MEDIUM` holds sharp ridges. Even stiff paint
+  with `MEDIUM` flows and levels out; tube paint keeps its bristle marks,
+  their sharpest crests rounding off a little where it lies thick; paint
+  stiffened with `IMPASTO_MEDIUM` holds sharp ridges. Even stiff paint
   slumps a little where it stands as a sheer cliff.
 
 ```python
@@ -693,8 +713,14 @@ the blade is filled up to the blade and everything above it is pushed away, so:
   0.6 and 0.9.*
 * **Over dry ridges.** The blade skims the high points and leaves the hollows:
   broken colour.
+* **Blade ends.** Near the two ends of the blade, paint is pressed out
+  sideways into a ridge along each edge of the slab, more the harder it is
+  pressed.
+* **Nicks.** Nicks and grit on the blade's edge score nearly straight lines
+  along the stroke, which come and go as grit catches and paint closes over
+  them.
 * **Lifting off.** A knife lifted off thick paint pulls it up into torn ridges
-  and peaks (`lift`).
+  and peaks along its trailing edge (`lift`).
 * **Comb knives.** The teeth score grooves into wet paint and push it into
   ridges between them (sgraffito).
 * **Edge lines.** For lines with the edge of the blade, use a blade with a tiny
@@ -799,6 +825,11 @@ opaque paints that hide it.*
 
 **The brush moves paint around.** The brush is a footprint (round,
 rectangular, oval-tipped or a fan of clumps; no individual bristles). Its
+hair is a pattern of clumps over the stroke, fixed in stroke coordinates
+(distance along it, position across the bundle), which every step of the
+stroke reads the same at a pixel: where the clumps run it lays less and
+combs thick paint into furrows, between them it lays more; its edges and
+the points where a running-dry brush still catches follow the same lanes. Its
 paint sits in 24 columns across it (around the bundle on a round, mapped to
 the footprint through the current roll), each with a tip, a belly
 (reservoir) and a heel that only gives paint up when squeezed. At each step
@@ -808,7 +839,10 @@ along the spline it does four things:
 2. It lifts some of the wet paint (pickup). A thin film only wets the tip;
    deeper wet paint comes further up between the hairs, more so when pressing
    bends them, so part of it goes into the reservoir and stays in the brush
-   for longer.
+   for longer. It glides on the paint it has just laid itself: it doesn't lift
+   that (it lays a little less instead, what its own bristles would have
+   carried on), and while it is loaded it doesn't push it either; a brush
+   running dry smears its own last paint on ahead.
 3. It lays down a mix of what the tip holds (deposit), refilling the tip from
    the reservoir. Neighbouring columns and layers slowly share their paint as
    the brush flexes (the `blending` setting).
@@ -862,7 +896,10 @@ knife lifts.
 
 Paint volume is conserved throughout. Each step integrates the
 brush's exact sweep over each pixel, so the result doesn't depend on the step
-size. The footprint is swept at its current angle and size (both can change
+size: a stroke cut into finer steps (a gentle curve) lays about the same
+paint as a straight one, also from an overloaded brush, whose glob feeds what
+it lays directly. (A tight wiggle of a wide brush still lays somewhat more:
+the inside of each turn is passed over twice.) The footprint is swept at its current angle and size (both can change
 along the stroke), which is what makes a flat's square ends, its thin edge
 and its twisted ribbons.
 
