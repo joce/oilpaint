@@ -93,9 +93,13 @@ def _wandering_bands(run: _Run, F, st, part):
     ``F``) comes from: paint on a blade isn't held in lanes, so its colour
     bands wander a little from side to side along the stroke."""
     blade = run.blade
+    wy0, wx0, ch, cw = part
     return eng.wandering_bands(
         F,
-        *part,
+        wy0,
+        wx0,
+        ch,
+        cw,
         float(run.arc[st.i]),
         blade.band_period,
         blade.bands,

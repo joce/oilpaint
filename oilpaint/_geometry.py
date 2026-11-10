@@ -139,9 +139,12 @@ class _Step:
     :func:`_engine.footprint`). ``wsl`` crops them to the canvas part ``sl``.
     ``taps`` maps bristle columns to the pixels of that part, ``tables`` are
     the footprint's chord tables. (A knife's step not wholly on the canvas
-    also has ``taps_all``, over all of its window: see _knife._knife_taps.)"""
+    also has ``taps_all``, over all of its window: see _knife._knife_taps;
+    and a knife's step over all of its window has no ``sl``: see
+    _knife._whole_window.)"""
 
-    taps_all = None
+    sl: tuple[slice, slice] | None
+    taps_all: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
 
     along = _plane(eng.F_ALONG, "position along the motion (px)")
     lat_px = _plane(eng.F_LAT, "position across the motion (px)")
