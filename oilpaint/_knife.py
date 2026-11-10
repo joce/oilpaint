@@ -5,7 +5,7 @@ off at the end."""
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
 
@@ -56,13 +56,22 @@ _VISCOUS = 3
 _KNIFE_SINK = 1.8
 
 
-def _before_the_blade(canvas, rng, pts, pad, w_typ, arc):
+class _BladeStart(NamedTuple):
+    """What a knife stroke starts from (see :func:`_before_the_blade`)."""
+
+    wet_y0: int  # where wet_before lies on the canvas
+    wet_x0: int
+    wet_before: np.ndarray  # the wet paint there before the stroke
+    bands: np.ndarray  # the bands the colours on the blade wander in
+    band_period: float  # (px along the stroke)
+
+
+def _before_the_blade(canvas, rng, pts, pad, w_typ, arc) -> _BladeStart:
     """What a knife stroke starts from: the wet paint lying on the canvas
     before it, which the blade's ends push aside into lips (a pile it is
     carrying mostly rides along), over the part of the canvas within ``pad``
     px of its path, from (wet_y0, wet_x0); and the bands its colours wander
-    in (see :func:`_wandering_bands`) and their period along the stroke (px).
-    Returns (wet_y0, wet_x0, wet_before, bands, band_period)."""
+    in (see :func:`_wandering_bands`) and their period along the stroke (px)."""
     H, W = canvas.height, canvas.width
     wet_y0 = min(max(math.floor(float(pts[:, 1].min()) - pad - 1), 0), H)
     wet_x0 = min(max(math.floor(float(pts[:, 0].min()) - pad - 1), 0), W)
@@ -75,7 +84,7 @@ def _before_the_blade(canvas, rng, pts, pad, w_typ, arc):
     period = max(0.5 * w_typ, 4.0)
     n_s = int(arc[-1] / period) + 3
     bands = value_noise_2d(8 * n_s, 64, 8.0, rng)
-    return wet_y0, wet_x0, wet_before, bands, period
+    return _BladeStart(wet_y0, wet_x0, wet_before, bands, period)
 
 
 def _wandering_bands(run: _Run, st, along, u_px):
@@ -84,13 +93,13 @@ def _wandering_bands(run: _Run, st, along, u_px):
     lays comes from: paint on a blade isn't held in lanes, so its colour
     bands wander a little from side to side along the stroke."""
     along_stroke = np.clip(
-        (run.arc[st.i] + along) / run.band_period * 8.0,
+        (run.arc[st.i] + along) / run.blade.band_period * 8.0,
         0.0,
-        run.bands.shape[0] - 1.001,
+        run.blade.bands.shape[0] - 1.001,
     )
     u_band = np.clip((u_px + 1.0) * 0.5 * 63.0, 0.0, 62.999)
     return u_px + _KNIFE_BAND_WANDER * (
-        2.0 * _bilinear(run.bands, along_stroke, u_band) - 1.0
+        2.0 * _bilinear(run.blade.bands, along_stroke, u_band) - 1.0
     )
 
 
@@ -141,7 +150,10 @@ def _blade_gap(run: _Run, p: float) -> tuple[float, float]:
 
 
 def _film(run: _Run, s: _Step, area: float):
-    """How thick the film of paint on the blade is over each pixel."""
+    """How thick the film of paint on the blade is over each pixel, from the
+    paint on it as it stands now: where the blade rides (3) and what it
+    fills (6) each read it, before and after it has spread and squeezed
+    some out."""
     brush, st = run.brush, s.st
     return (
         eng.at_pixels(s.taps, brush.tip[:, IV] + brush.reservoir[:, IV], st.ch, st.cw)
@@ -239,11 +251,12 @@ def _push_aside(run: _Run, s: _Step, level):
         # distance in from the mark's edge, px
         from_edge = half - np.abs(s.lat_px[wsl])
         near = _smoothstep(_KNIFE_SPILL_PX, 0.0, from_edge)
+        blade = run.blade
         wet_sl = (
-            slice(st.cy0 - run.wet_y0, st.cy0 - run.wet_y0 + st.ch),
-            slice(st.cx0 - run.wet_x0, st.cx0 - run.wet_x0 + st.cw),
+            slice(st.cy0 - blade.wet_y0, st.cy0 - blade.wet_y0 + st.ch),
+            slice(st.cx0 - blade.wet_x0, st.cx0 - blade.wet_x0 + st.cw),
         )
-        excess = _KNIFE_SPILL * near * np.minimum(excess, run.wet_before[wet_sl])
+        excess = _KNIFE_SPILL * near * np.minimum(excess, blade.wet_before[wet_sl])
     if excess.max() > 1e-3:
         moved = eng.take(canvas.top, canvas.und, st.cy0, st.cx0, excess, tv)
         if flowing:

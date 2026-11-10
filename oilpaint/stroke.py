@@ -42,7 +42,7 @@ from ._geometry import (
     _step_slices,
 )
 from ._hair import _NICK_WANDER, _NO_TEX, _NO_TEX2, _hair_field
-from ._knife import _before_the_blade, _knife_step, _wandering_bands
+from ._knife import _before_the_blade, _BladeStart, _knife_step, _wandering_bands
 from .brush import (
     _COL_X,
     _PHYSICS,
@@ -77,9 +77,12 @@ _LIFT_CREST = 4.0
 # stroke's own thick paint round off.
 _LEVEL_PASSES = 12
 _SOFTEN_PASSES = 2
-# Roughly how much of a full layer a pass of a brush lays across its width
-# (its lateral profile): what a brush painting past the edge of the canvas
-# loses as if it had laid it.
+# How much paint a brush painting past the edge of the canvas loses, as if it
+# had laid it: the exposure profile across its width, summed per unit of
+# width and of travel (measured: 0.92-1.04 for rounds, flats and filberts,
+# 0.71 for a mop, 0.48-0.60 for a fan). A fixed stand-in for what the engine
+# sums exactly where it does its own accounting off the edge; nothing to do
+# with _VOLUME_PER_AMOUNT, which is also 0.9.
 _LAID_ACROSS = 0.9
 
 
@@ -621,7 +624,13 @@ class _Run:
     and the tilt of a blade (drawn for brushes too, which do not use them),
     a dab's bristle tips, a knife's colour bands, the hair, how ragged the
     end is, and at the end the peaks pulled up as the tool lifts off. Leaving
-    one out, or drawing one earlier, would change every stroke."""
+    one out, or drawing one earlier, would change every stroke.
+
+    A run is made by :meth:`begin`, which sizes and loads the brush first;
+    the constructor then works out the rest, takes the stroke's id from the
+    canvas and starts the brush's hair dry (``brush.wet``)."""
+
+    blade: _BladeStart  # (knives only)
 
     @classmethod
     def begin(cls, canvas: _Canvas, stroke: Stroke) -> _Run:
@@ -668,13 +677,7 @@ class _Run:
 
         if bt.rigid:
             pad = float(radii.max()) * self.reach + 3.0
-            (
-                self.wet_y0,
-                self.wet_x0,
-                self.wet_before,
-                self.bands,
-                self.band_period,
-            ) = _before_the_blade(canvas, rng, pts, pad, w_typ, arc)
+            self.blade = _before_the_blade(canvas, rng, pts, pad, w_typ, arc)
 
         self.stroke_id = canvas._new_stroke_id()
         self.dry = False
@@ -782,7 +785,9 @@ class _Run:
     def step(self, i: int):
         """Step ``i`` of the stroke, from point i-1 to point i: its scalars (an
         :class:`_engine.Step`) and the footprint's chord tables, or None if
-        the tool doesn't move or doesn't reach the canvas there."""
+        the tool doesn't move or doesn't reach the canvas there. It changes
+        nothing: the paint a brush uses up past the edge of the canvas is
+        taken in :meth:`steps` only."""
         seg = self._segment(i)
         if seg is None:
             return None
