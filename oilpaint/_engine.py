@@ -312,9 +312,12 @@ def seep(heel, belly, rate):
 
 @njit(cache=True, error_model="numpy")
 def swap_layers(tip, belly, rate):
-    """Exchange paint between the tip and the belly of each column (in place)."""
+    """Exchange paint between the tip and the belly of each column (in place).
+    ``rate`` is the share of the smaller of the two that changes places; at
+    most all of it (a long step of a narrow brush asks for more)."""
     if rate <= 0:
         return
+    rate = min(rate, 1.0)
     for b in range(tip.shape[0]):
         tv, bv = tip[b, IV], belly[b, IV]
         e = rate * min(tv, bv)
@@ -1480,10 +1483,14 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u):
         for y in range(part.ch):
             for x in range(part.cw):
                 wy, wx = part.wy0 + y, part.wx0 + x
-                f[y, x] = (
+                # (the share of a pixel's paint that is moved: a strong drag
+                # pressed hard on a slick surface would move more than is
+                # there, leaving negative paint that grows step by step)
+                f[y, x] = min(
                     coef
                     * F[F_PROFILE, wy, wx]
-                    * clip(F[F_OVERLAP, wy, wx] / st.ds, 0.0, 1.0)
+                    * clip(F[F_OVERLAP, wy, wx] / st.ds, 0.0, 1.0),
+                    1.0,
                 )
         drag(
             top,
@@ -2229,3 +2236,27 @@ def flow_under_blade(
                         if 0 <= ys < hh:
                             nv += layer[sy0 + ys, X, ch] * fy[ys, x]
                         layer[Y, X, ch] = nv
+
+
+# --- a stale cache -------------------------------------------------------------
+# The kernels are cached on disk (cache=True), with the band count of
+# spectral.py (N, PACKED) compiled into them as constants. numba throws a
+# cached kernel away only when this file changes, so after a change to
+# spectral.WAVELENGTHS alone the cached kernels would read and write past the
+# ends of every paint vector. This tiny kernel is cached the same way: if it
+# remembers another size, so do the others. (It is the only kernel compiled or
+# loaded at import; the others still wait for their first call.)
+@njit(cache=True)
+def _compiled_packed():
+    return PACKED
+
+
+if _compiled_packed() != PACKED:
+    raise RuntimeError(
+        f"numba cache is stale: the cached kernels of {__name__} were compiled "
+        f"for {_compiled_packed() - (PACKED - N)} spectral bands, spectral.py "
+        f"now has {N}. "
+        "Delete the cache and import again: the *.nbi and *.nbc files in "
+        f"{_compiled_packed.stats.cache_path} (numba keeps them in the "
+        "__pycache__ next to this file, or under NUMBA_CACHE_DIR if it is set)."
+    )

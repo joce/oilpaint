@@ -1,23 +1,13 @@
-"""Brush model and the stroke simulation.
+"""Brushes, knives and the stroke simulation.
 
-The brush is not simulated bristle by bristle. It is a round footprint that
-carries paint in two compartments:
+A :class:`BrushType` is a tool: the shape of its footprint (a round, flat,
+filbert or fan brush, or the steel blade of a knife), its size and the
+character of its hair, from which its behaviour in a stroke follows
+(:meth:`BrushType.physics`). A :class:`Brush` is one such tool with paint on
+it, which it keeps (with any dirt) between strokes. A :class:`Stroke` is one
+pass of a tool along a path; :func:`apply_stroke` paints it.
 
-* a **reservoir** (the paint loaded deep in the brush), and
-* a small **tip** buffer that touches the canvas.
-
-At every step along the stroke the brush pushes some of the wet paint under it
-forward, the tip lifts some of it, deposits a mix of what it holds, and is
-refilled from the reservoir. Paint picked up from the canvas is therefore
-smeared forward and fades out over a short distance, while a little of it
-leaks into the reservoir (a dirty brush).
-
-On the canvas, each pixel has a dry ground plus two wet sublayers: ``under``
-(older wet paint, well mixed) and ``top`` (the paint of the most recent
-stroke). Brush pressure stirs the two together; that is the difference between
-laying color *over* wet paint and churning it *into* wet paint.
-
-Paint on the brush is held in narrow bristle *columns* (:data:`COLUMNS`),
+Paint on a brush is held in narrow bristle *columns* (:data:`COLUMNS`),
 each with three depths: the tip that touches the canvas, the belly, and the
 heel near the ferrule. On flat, filbert and fan brushes the columns run
 across the width; on a round they go around the bundle, so rolling the
@@ -26,9 +16,23 @@ brush carry several paints side by side (double loading), on its tip or deep
 in its heel, or only partly mixed; the paints blend into each other as the
 brush is worked, at a rate set by :attr:`BrushType.blending`.
 
+At every step along the stroke a brush pushes some of the wet paint under it
+forward (drag), its tips lift some of it (pickup) and lay a mix of what they
+hold, and they are refilled from the belly. Paint picked up from the canvas
+is therefore smeared forward and fades out over a short distance, while some
+of it works its way into the belly (a dirty brush). A knife holds its paint on
+the blade: it lays it as a slab, at a height set by pressure, and drags the
+wet paint under it along as a thin film rather than picking it up.
+
+On the canvas, each pixel has the dry paint (or the ground) plus two wet
+sublayers: ``und`` (older wet paint) and ``top`` (the paint of the most recent
+strokes). Brush pressure stirs the two together; that is the difference
+between laying color *over* wet paint and churning it *into* wet paint.
+
 Paint quantities are stored *packed*: a vector of the absorption spectrum K
-(N_BANDS values), then scattering S, then volume V, all extensive (summed over
-the paint present). Mixing paint is then just adding vectors.
+(N_BANDS values), then scattering S, volume V and body (the paint's
+stiffness times V), all extensive (summed over the paint present). Mixing
+paint is then just adding vectors.
 
 This module holds the tools and prepares each step of a stroke; the work on
 the pixels under the tool is compiled (numba), in :mod:`oilpaint._engine`.
@@ -37,9 +41,12 @@ the pixels under the tool is compiled (numba), in :mod:`oilpaint._engine`.
 from __future__ import annotations
 
 import functools
+import hashlib
 import math
+import numbers
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from itertools import starmap
 from typing import Any, ClassVar, cast
 
 import numpy as np
@@ -102,6 +109,137 @@ def _pack(paint: Paint, volume: float) -> np.ndarray:
     v[IV] = volume
     v[IB] = paint.body * volume
     return v
+
+
+# --- checking what callers pass ------------------------------------------------
+# A NaN or an infinity handed to the engine spreads through the wet paint (and
+# through blurs and shadows in a render) and stays on the brush for good, so
+# numbers are checked where they come in, before anything is painted.
+
+
+def _is_number(value) -> bool:
+    """A real number: a Python or numpy int or float, or a 0-d numeric array."""
+    if isinstance(value, np.ndarray):
+        return value.ndim == 0 and value.dtype.kind in "biuf"
+    return isinstance(value, numbers.Real)
+
+
+def _number(name: str, value) -> float:
+    """``value`` as a float: a TypeError unless it is a real number, a
+    ValueError unless it is finite (both naming ``name``)."""
+    if not _is_number(value):
+        raise TypeError(f"{name} must be a number, got {value!r:.80}")
+    v = float(value)
+    if not math.isfinite(v):
+        raise ValueError(f"{name} must be a finite number, got {v}")
+    return v
+
+
+def _check_profile(name: str, profile, size: bool = False) -> None:
+    """A width, pressure, angle or roll: a number, a sequence of numbers or a
+    function of u. Numbers must be finite (and not negative for a ``size``);
+    a function's values are checked when the stroke samples them
+    (:func:`_check_sampled`)."""
+    if callable(profile):
+        return
+    accepted = "a number, a sequence of numbers or a function of u"
+    if _is_number(profile):  # (a Fraction, say, too)
+        profile = float(profile)
+    arr = np.asarray(profile) if not isinstance(profile, str) else None
+    if arr is None or arr.dtype.kind not in "biuf":
+        raise TypeError(f"{name} must be {accepted}, got {profile!r:.80}")
+    if arr.ndim > 1 or arr.size == 0:
+        raise ValueError(
+            f"{name} must be {accepted}; got an array of shape {arr.shape}"
+        )
+    arr = arr.reshape(-1).astype(np.float64)
+    bad = ~np.isfinite(arr) | ((arr < 0) if size else False)
+    if bad.any():
+        i = int(np.argmax(bad))
+        need = "finite and not negative" if size else "finite"
+        where = f" (item {i})" if arr.size > 1 else ""
+        raise ValueError(f"{name} must be {need}, got {arr[i]}{where}")
+
+
+def _check_sampled(u, **samples) -> None:
+    """The values a stroke's width, pressure, angle and roll take along it
+    (where they are functions of u, nothing else checks them)."""
+    for name, values in samples.items():
+        bad = ~np.isfinite(values)
+        if bad.any():
+            i = int(np.argmax(bad))
+            raise ValueError(
+                f"{name} must be finite along the stroke; it is {values[i]} at "
+                f"u = {float(u[i]):.4g}"
+            )
+
+
+def _width(name: str, value) -> float:
+    """A width in pixels: a finite number above 0."""
+    v = _number(name, value)
+    if v <= 0:
+        raise ValueError(f"{name} must be above 0 (pixels), got {v}")
+    return v
+
+
+def _spread(brush: Brush, across) -> np.ndarray:
+    """The share of a load each column of ``brush`` gets (see
+    :func:`_across_weights`), which must be finite numbers."""
+    w = brush._spread_load(across)
+    if not np.isfinite(w).all():
+        raise ValueError(f"across must give finite weights, got {across!r:.80}")
+    return w
+
+
+def _check_taper(taper, name: str = "taper") -> None:
+    """A taper: a share of the stroke from 0 to 1, or a (start, end) pair."""
+    if _is_number(taper):
+        ends = (taper,)
+    elif isinstance(taper, (tuple, list, np.ndarray)) and len(taper) == 2:
+        ends = tuple(taper)
+    else:
+        ends = ()
+    if not ends or not all(map(_is_number, ends)):
+        raise TypeError(
+            f"{name} must be a number from 0 to 1 or a (start, end) pair of "
+            f"them, got {taper!r:.80}"
+        )
+    for t in ends:
+        if not 0.0 <= float(t) <= 1.0:  # (False for NaN)
+            raise ValueError(
+                f"{name} must be from 0 to 1 (a share of the stroke's length), "
+                f"got {taper!r:.80}"
+            )
+
+
+_SEEDS = (
+    "None, a whole number >= 0, a sequence of them, or a numpy SeedSequence, "
+    "BitGenerator or Generator"
+)
+
+
+def _check_seed(name: str, seed) -> None:
+    """A random seed: anything ``np.random.default_rng`` takes."""
+    rng = np.random
+    if seed is None or isinstance(
+        seed, (rng.SeedSequence, rng.BitGenerator, rng.Generator)
+    ):
+        return
+    try:
+        rng.SeedSequence(seed)
+    except ValueError:
+        raise ValueError(f"{name} must be {_SEEDS}, got {seed!r:.80}") from None
+    except TypeError:
+        raise TypeError(f"{name} must be {_SEEDS}, got {seed!r:.80}") from None
+
+
+def _check_tool(tool) -> None:
+    """What a stroke may be painted with."""
+    if tool is not None and not isinstance(tool, (BrushType, Brush)):
+        raise TypeError(
+            "brush must be a BrushType (such as brushes.FLAT_HOG), a Brush or "
+            f"None (a medium round), got {tool!r:.80}"
+        )
 
 
 #: Blade outlines of palette and painting knives (see :class:`BrushType`).
@@ -225,13 +363,56 @@ class BrushType:
     rough: float | None = None
     name: str = "brush"
 
+    # (the fields that must be finite numbers; the optional ones may be None)
+    _NUMBERS: ClassVar[tuple[str, ...]] = (
+        "width",
+        "aspect",
+        "angle",
+        "stiffness",
+        "bristles",
+        "capacity",
+        "spread",
+        "clumps",
+        "slant",
+        "softness",
+        "dig",
+        "blending",
+        "tips",
+        "streaks",
+        "pickup",
+        "drag",
+        "mixing",
+        "rough",
+    )
+    _OPTIONAL: ClassVar[tuple[str, ...]] = (
+        "blending",
+        "streaks",
+        "pickup",
+        "drag",
+        "mixing",
+        "rough",
+    )
+
     def __post_init__(self):
         if self.shape not in SHAPES:
             raise ValueError(f"unknown brush shape {self.shape!r}; use one of {SHAPES}")
+        for name in self._NUMBERS:
+            value = getattr(self, name)
+            if value is not None or name not in self._OPTIONAL:
+                _number(f"BrushType {name}", value)
         if self.width <= 0 or self.aspect <= 0:
-            raise ValueError("width and aspect must be positive")
+            raise ValueError(
+                f"width and aspect must be positive, got width {self.width} and "
+                f"aspect {self.aspect}"
+            )
         if self.tips < 0:
             raise ValueError("tips must be 0 (automatic) or more")
+        if self.clumps < 0:
+            raise ValueError(
+                "clumps (the teeth of a comb or serrated knife) must be 0 "
+                f"(continuous) or more, got {self.clumps}"
+            )
+        _check_taper(self.taper, "BrushType taper")
 
     def with_(self, **changes) -> BrushType:
         """A copy with some properties changed."""
@@ -247,42 +428,9 @@ class BrushType:
         return self.shape in KNIFE_SHAPES
 
     def physics(self) -> dict:
-        """Stroke behaviour derived from the brush's character."""
-        st, br = self.stiffness - 0.5, self.bristles - 0.5
-        if self.rigid:  # smooth steel: no streaks, lays paint on top, little mixing
-            # (a knife drags wet paint rather than picking it up: pickup and drag
-            # unused)
-            derived = {
-                "streaks": 0.03,
-                "pickup": 0.0,
-                "drag": 0.0,
-                "mixing": 0.12,
-                "rough": 0.04,
-            }
-        else:
-            derived = {
-                "streaks": 0.35 + 0.5 * st - 0.3 * br,
-                "pickup": 0.35 - 0.2 * st,
-                "drag": 0.2 + 0.3 * st,
-                "mixing": 0.35 + 0.2 * st,
-                "rough": 0.1 + 0.2 * st - 0.1 * br,
-            }
-        for key in derived:
-            override = getattr(self, key)
-            derived[key] = float(
-                _clip(override if override is not None else derived[key], 0.0, 2.0)
-            )
-        derived["smear"] = max(self.capacity, 0.05)
-        blend = (
-            self.blending
-            if self.blending is not None
-            else (0.12 if self.rigid else 0.4 + 0.5 * st)
-        )
-        derived["blending"] = float(_clip(blend, 0.0, 1.0))
-        # a slight build-up of paint at the edges of a brushed stroke
-        derived["ridge"] = 0.0 if self.rigid else 0.3 + 0.4 * st
-        derived["lift"] = 0.3 if self.rigid else 0.0
-        return derived
+        """Stroke behaviour derived from the brush's character (and its own
+        overrides), each clipped to the range the engine works in."""
+        return _physics(self)
 
 
 DEFAULT_BRUSH = BrushType(name="round")
@@ -396,6 +544,11 @@ class Brush:
         self,
         type: BrushType | None = None,  # ruff: ignore[builtin-argument-shadowing]
     ):
+        if type is not None and not isinstance(type, BrushType):
+            raise TypeError(
+                "Brush takes a BrushType (such as brushes.FLAT_HOG) or None (a "
+                f"medium round), got {type!r:.80}"
+            )
         self.type = type or DEFAULT_BRUSH
         self.reservoir = np.zeros((COLUMNS, PACKED))  # the belly of each column
         # paint at the tips of each column
@@ -410,9 +563,10 @@ class Brush:
         self,
         paint: ColorLike,
         amount: float,
-        width: float | None = None,
         across=None,
         depth: str | float = "belly",
+        *,
+        width: float | None = None,
     ) -> Brush:
         """Add ``amount`` of paint (same units as :attr:`Stroke.amount`).
 
@@ -428,16 +582,33 @@ class Brush:
         squeezed out by pressing, see :class:`Brush`), or a dip depth from 0
         to 1 (fraction of the bristle length), spread over the layers it
         reaches: 0.1 is the tip, 0.5 tip and belly, 1.0 all three.
+
+        ``width`` (keyword only) is the stroke width, in pixels, the amount
+        is measured for (see :attr:`Stroke.amount`; it is kept in
+        :attr:`width` and replaced by the next stroke's mean width). Default:
+        the brush's :attr:`width`.
+
+        Raises ValueError or TypeError, and loads nothing, unless ``amount``
+        is a finite number (at most 0 loads nothing) and ``width`` a finite
+        number above 0.
         """
-        if width is not None:
-            self.width = float(width)
-        volume = max(float(amount), 0.0) * _VOLUME_PER_AMOUNT * self.width**2
+        if _is_number(across):  # (it used to be the third argument)
+            raise TypeError(
+                "Brush.load takes width by keyword only, as in load(paint, "
+                f"amount, width={float(cast(float, across)):g}); its third "
+                "argument is across (where on the brush the paint goes)"
+            )
+        amount = _number("amount", amount)
+        size = self.width if width is None else _width("width", width)
+        volume = max(amount, 0.0) * _VOLUME_PER_AMOUNT * size**2
+        paint = as_paint(paint)
+        spread = _spread(self, across)
+        weights = _depth_weights(depth)
+        self.width = size
         if volume <= 0:
             return self
-        cols = (
-            self._spread_load(across)[:, None] * _pack(as_paint(paint), volume)[None, :]
-        )
-        for layer, w in zip(self._layers(), _depth_weights(depth), strict=True):
+        cols = spread[:, None] * _pack(paint, volume)[None, :]
+        for layer, w in zip(self._layers(), weights, strict=True):
             if w > 0:
                 layer += w * cols
         return self
@@ -457,16 +628,44 @@ class Brush:
         ``parts`` is a list of ``(paint, proportion)``. ``mixing`` = 1 gives a
         uniform mixture (like :meth:`Paint.mix`); lower values leave each
         paint in irregular streaks across the bristles, so the stroke comes
-        out marbled; 0 = barely touched together.
+        out marbled; 0 = barely touched together. ``amount``, ``across``,
+        ``depth`` and ``width`` are as in :meth:`load`.
+
+        ``seed`` lays out the streaks (anything ``np.random.default_rng``
+        takes). Without one they follow from the arguments and from what is
+        on the brush already, so a painting made again on the same machine
+        and numpy build comes out the same; pass seeds to vary otherwise
+        identical loads.
         """
-        if width is not None:
-            self.width = float(width)
+        amount = _number("amount", amount)
+        mixing = float(_clip(_number("mixing", mixing), 0.0, 1.0))
+        _check_seed("seed", seed)
+        size = self.width if width is None else _width("width", width)
+        if isinstance(parts, (str, Paint)) or not isinstance(parts, Sequence):
+            raise TypeError(
+                f"load_mix takes a list of (paint, proportion) pairs, got {parts!r:.80}"
+            )
+        for i, part in enumerate(parts):
+            if not isinstance(part, (tuple, list)) or len(part) != 2:
+                raise TypeError(
+                    "load_mix takes a list of (paint, proportion) pairs; part "
+                    f"{i} is {part!r:.80}"
+                )
         paints = [as_paint(p) for p, _ in parts]
-        props = np.array([max(float(w), 0.0) for _, w in parts])
+        props = np.array(
+            [
+                max(_number(f"proportion of part {i}", w), 0.0)
+                for i, (_, w) in enumerate(parts)
+            ]
+        )
         if props.sum() <= 0:
             raise ValueError("load_mix needs positive proportions")
+        spread = _spread(self, across)
+        weights = _depth_weights(depth)
+        self.width = size
         props = props / props.sum()
-        mixing = float(_clip(mixing, 0.0, 1.0))
+        if seed is None:
+            seed = self._mix_seed(paints, props, amount, mixing, spread, weights)
         rng = np.random.default_rng(seed)
         # less mixed: more, narrower streaks
         cell = COLUMNS / (2.0 + 5.0 * (1.0 - mixing))
@@ -479,21 +678,33 @@ class Brush:
             w *= (props * COLUMNS / np.maximum(w.sum(axis=1), 1e-12))[:, None]
             w /= w.sum(axis=0, keepdims=True)
         w = mixing * props[:, None] + (1.0 - mixing) * w
-        volume = max(float(amount), 0.0) * _VOLUME_PER_AMOUNT * self.width**2
-        col_vol = volume * self._spread_load(across)
-        for layer, dw in zip(self._layers(), _depth_weights(depth), strict=True):
+        volume = max(amount, 0.0) * _VOLUME_PER_AMOUNT * self.width**2
+        col_vol = volume * spread
+        for layer, dw in zip(self._layers(), weights, strict=True):
             if dw <= 0:
                 continue
             for i, paint in enumerate(paints):
                 layer += (dw * w[i] * col_vol)[:, None] * _pack(paint, 1.0)[None, :]
         return self
 
+    def _mix_seed(self, paints, props, amount, mixing, spread, weights) -> int:
+        """A seed for the streaks of :meth:`load_mix` made from what it loads
+        and what the brush holds: the same calls give the same brush."""
+        h = hashlib.sha256()
+        for paint in paints:
+            h.update(_pack(paint, 1.0).tobytes())
+        h.update(np.array([*props, amount, mixing, self.width]).tobytes())
+        for a in (spread, weights, *self._layers()):
+            h.update(np.ascontiguousarray(a, dtype=np.float64).tobytes())
+        return int.from_bytes(h.digest()[:8], "little")
+
     def work(self, passes: float = 1.0, pressure: float = 0.5) -> Brush:
         """Stroke the brush back and forth on the palette without painting:
         the paints on it blend into each other (side to side, and tip with
         belly) as they would over a few widths of real strokes."""
+        passes, pressure = _number("passes", passes), _number("pressure", pressure)
         blend = self.type.physics()["blending"]
-        widths = 3.0 * max(float(passes), 0.0)
+        widths = 3.0 * max(passes, 0.0)
         k = float(eng.BLEND_RATE * blend * (0.2 + pressure) ** 2 * widths)
         for layer in self._layers():
             eng.diffuse(layer, k, self.ring)
@@ -550,6 +761,10 @@ class Brush:
         on a flat; around the bundle on a round, starting from its front and
         turning towards its left side. ``depth`` is ``"tip"``, ``"belly"``,
         ``"heel"`` or ``"all"``."""
+        if depth not in ("tip", "belly", "heel", "all"):
+            raise ValueError(
+                f"depth must be 'tip', 'belly', 'heel' or 'all', got {depth!r:.80}"
+            )
         cols = {
             "tip": self.tip,
             "belly": self.reservoir,
@@ -566,27 +781,88 @@ class Brush:
 
 
 def load_paint(brush: Brush, paint: StrokePaint | None, amount: float) -> None:
-    """Load what a stroke asks for onto the brush: one paint, or several, each
-    as ``(paint, amount[, across[, depth]])`` or as :meth:`Brush.load` keywords."""
-    if isinstance(paint, list):
-        for item in paint:
-            if isinstance(item, dict):
-                brush.load(**item)
-            else:
-                item = tuple(cast(Sequence, item))
-                brush.load(
-                    item[0],
-                    item[1],
-                    across=item[2] if len(item) > 2 else None,
-                    depth=item[3] if len(item) > 3 else "belly",
-                )
-    elif paint is not None:
-        brush.load(paint, amount)
+    """Load what a stroke asks for onto the brush: one paint (``amount`` of
+    it), or several, each as ``(paint, amount[, across[, depth]])`` or as a
+    dict of :meth:`Brush.load` keywords (``amount`` is then not used). Every
+    load is checked before any goes on the brush."""
+    for colour, volume, across, depth, width in _checked_loads(brush, paint, amount):
+        brush.load(colour, volume, across=across, depth=depth, width=width)
+
+
+def _checked_loads(brush: Brush, paint, amount) -> list:
+    """What :func:`load_paint` would load on ``brush`` (see :func:`_loads`),
+    every part of it checked (on a round brush too)."""
+    loads = _loads(paint, amount)
+    for _, _, across, _, _ in loads:
+        _spread(brush, across)
+    return loads
 
 
 #: What a stroke loads on the brush: one paint, or several, each as
 #: ``(paint, amount[, across[, depth]])`` or as :meth:`Brush.load` keywords.
-StrokePaint = ColorLike | list[tuple | dict]
+StrokePaint = ColorLike | Sequence[tuple | dict]
+
+_LOAD_FORM = (
+    "a load is (paint, amount[, across[, depth]]) or a dict with the keys "
+    "paint, amount and optionally across, depth and width"
+)
+
+
+def _is_colour(paint) -> bool:
+    """A single colour rather than a list of loads: a Paint, a string, an
+    array, or a sequence of three numbers (an RGB triple)."""
+    if isinstance(paint, (Paint, str, np.ndarray)):
+        return True
+    return (
+        isinstance(paint, (tuple, list))
+        and len(paint) == 3
+        and all(map(_is_number, paint))
+    )
+
+
+def _loads(paint, amount) -> list[tuple[Paint, float, Any, Any, float | None]]:
+    """What ``paint`` asks to load, as (paint, amount, across, depth, width)
+    each, all checked (``across`` as on a flat brush; see :func:`load_paint`)
+    so that a stroke can refuse them before it starts."""
+    if paint is None:
+        return []
+    if _is_colour(paint) or not isinstance(paint, (tuple, list)):
+        return [(as_paint(paint), _number("amount", amount), None, "belly", None)]
+    if paint and all(map(_is_number, paint)):
+        raise TypeError(
+            f"a colour has three components (r, g, b), got {len(paint)} numbers: "
+            f"{paint!r:.80}"
+        )
+    return list(starmap(_load_item, enumerate(paint)))
+
+
+def _load_item(i: int, item) -> tuple[Paint, float, Any, Any, float | None]:
+    width = None
+    if isinstance(item, dict):
+        unknown = set(item) - {"paint", "amount", "across", "depth", "width"}
+        if unknown or not {"paint", "amount"} <= set(item):
+            what = (
+                f"has the key {min(unknown)!r}" if unknown else "misses paint or amount"
+            )
+            raise ValueError(f"load {i} {what}: {_LOAD_FORM}")
+        if item.get("width") is not None:
+            width = _width(f"width of load {i}", item["width"])
+        item = (
+            item["paint"],
+            item["amount"],
+            item.get("across"),
+            item.get("depth", "belly"),
+        )
+    elif not isinstance(item, (tuple, list)) or not 2 <= len(item) <= 4:
+        raise TypeError(f"load {i} is {item!r:.80}; {_LOAD_FORM}")
+    colour, volume = item[0], item[1]
+    across = item[2] if len(item) > 2 else None
+    depth = item[3] if len(item) > 3 and item[3] is not None else "belly"
+    loaded = as_paint(colour), _number(f"amount of load {i}", volume)
+    if not np.isfinite(_across_weights(across)).all():
+        raise ValueError(f"across must give finite weights, got {across!r:.80}")
+    _depth_weights(depth)
+    return *loaded, across, depth, width
 
 
 @dataclass
@@ -606,15 +882,28 @@ class Stroke:
         ``None`` paints with a clean (or the given) brush without loading
         paint, which just drags and blends the wet paint. A *list* loads
         several paints: each item is ``(paint, amount[, across[, depth]])``
-        as in :meth:`Brush.load`, e.g. ``[(red, 6), (white, 2, "left")]``.
+        as in :meth:`Brush.load`, e.g. ``[(red, 6), (white, 2, "left")]``
+        (a tuple of them works too), or a dict of :meth:`Brush.load`'s
+        keywords (``paint``, ``amount``, ``across``, ``depth``, ``width``).
+        A list or tuple of three numbers is one RGB colour.
     amount:
-        Paint loaded on the brush, measured in *brush-width squares at normal
-        thickness*. Roughly: ``amount=6`` paints about 6 brush widths of
-        solid stroke before the brush starts running dry. More paint also
-        means a thicker layer (impasto).
+        Paint loaded on the brush, measured in *squares of the stroke's
+        width at normal thickness*. Roughly: ``amount=6`` paints about 6
+        widths of solid stroke before the brush starts running dry. More
+        paint also means a thicker layer (impasto). The width it is measured
+        with is the stroke's *mean* width, after any ``taper`` and along any
+        width profile: a tapered or narrowing stroke loads less paint for the
+        same ``amount`` (``taper=0.3`` loads about 58% of what the same
+        stroke untapered does), and keeps the thickness about the same.
+        Not used when ``paint`` is a list of loads (each has its own amount).
     width:
-        Brush width in pixels: a number, one value per control point, or a
-        function of u (0..1 along the stroke). Defaults to the brush's width.
+        Brush width in pixels, 0 or more: a number, one value per control
+        point, or a function of u (0..1 along the stroke). A function is
+        called once with the array of all u; if it only takes one number
+        (``lambda u: 30 if u < 0.5 else 10``) it is called for each u in
+        turn. Where the width is less than 1 px (in any of these forms), the
+        stroke is 1 px wide.
+        Defaults to the brush's width.
     pressure:
         0..1 (default 0.5), same forms as ``width``. More pressure releases
         more paint and churns it into the wet paint underneath; light
@@ -661,14 +950,25 @@ class Stroke:
     lift:
         0..1: how the tool leaves the paint at the end. 0 slides off cleanly;
         higher pulls the paint up into little peaks and torn ridges, as a
-        knife lifted straight off thick paint does (default 0.6 for knives,
+        knife lifted straight off thick paint does (default 0.3 for knives,
         0 for brushes). Stiffer paint holds sharper peaks.
 
         ``mixing``, ``pickup``, ``drag``, ``streaks``, ``smear``,
         ``blending``, ``taper`` and ``lift`` default to values derived from
-        the brush type.
+        the brush type. Given here they are clipped as the brush type's are:
+        ``mixing``, ``pickup``, ``drag`` and ``streaks`` to 0..2,
+        ``blending`` and ``lift`` to 0..1, ``smear`` to 0 or more.
     seed:
-        Random seed for the stroke's texture.
+        Random seed for the stroke's texture: None (from the canvas's own
+        random numbers), or anything ``np.random.default_rng`` takes (a
+        whole number from 0 up, a sequence of them, a SeedSequence, ...).
+
+    A stroke checks its arguments when it is made, and raises ValueError or
+    TypeError (naming the argument) unless they have the forms above and
+    every number in them is finite (and no width negative). A function of u
+    is only called when the stroke is painted: if it gives a value that is
+    not finite there, the stroke raises ValueError before any paint is
+    laid.
     """
 
     path: object
@@ -690,26 +990,119 @@ class Stroke:
     lift: float | None = None
     seed: int | None = None
 
+    def __post_init__(self):
+        _check_tool(self.brush)
+        _number("amount", self.amount)
+        _loads(self.paint, self.amount)
+        if self.width is not None:
+            _check_profile("width", self.width, size=True)
+        _check_profile("pressure", self.pressure)
+        for name in ("angle", "roll"):
+            if getattr(self, name) is not None:
+                _check_profile(name, getattr(self, name))
+        for name in _PHYSICS:
+            if getattr(self, name, None) is not None:
+                _number(name, getattr(self, name))
+        if self.taper is not None:
+            _check_taper(self.taper)
+        _check_seed("seed", self.seed)
+
+
+#: How a tool behaves in a stroke (see BrushType.physics), and the range each
+#: is clipped to; a stroke may override all but rough and ridge.
+_PHYSICS = {
+    "streaks": (0.0, 2.0),
+    "pickup": (0.0, 2.0),
+    "drag": (0.0, 2.0),
+    "mixing": (0.0, 2.0),
+    "rough": (0.0, 2.0),
+    "smear": (0.0, None),
+    "blending": (0.0, 1.0),
+    "ridge": (None, None),
+    "lift": (0.0, 1.0),
+}
+
+
+def _physics(bt: BrushType, stroke: Stroke | None = None) -> dict:
+    """How tool ``bt`` behaves in a stroke: derived from its character,
+    unless the stroke (first) or the tool overrides a value. Each is clipped
+    to the range the engine works in (an override out of range would make
+    paint negative or blow up); a non-finite override raises ValueError."""
+    st, br = bt.stiffness - 0.5, bt.bristles - 0.5
+    if bt.rigid:  # smooth steel: no streaks, lays paint on top, little mixing
+        # (a knife drags wet paint rather than picking it up: pickup and drag
+        # unused)
+        derived = {
+            "streaks": 0.03,
+            "pickup": 0.0,
+            "drag": 0.0,
+            "mixing": 0.12,
+            "rough": 0.04,
+            "blending": 0.12,
+        }
+    else:
+        derived = {
+            "streaks": 0.35 + 0.5 * st - 0.3 * br,
+            "pickup": 0.35 - 0.2 * st,
+            "drag": 0.2 + 0.3 * st,
+            "mixing": 0.35 + 0.2 * st,
+            "rough": 0.1 + 0.2 * st - 0.1 * br,
+            "blending": 0.4 + 0.5 * st,
+        }
+    # (how much paint the tips hold: at least a little)
+    derived["smear"] = max(bt.capacity, 0.05)
+    # a slight build-up of paint at the edges of a brushed stroke
+    derived["ridge"] = 0.0 if bt.rigid else 0.3 + 0.4 * st
+    derived["lift"] = 0.3 if bt.rigid else 0.0
+    out = {}
+    for key, (lo, hi) in _PHYSICS.items():
+        value = derived[key]
+        for source, prefix in ((stroke, ""), (bt, "BrushType ")):
+            given = getattr(source, key, None)
+            if given is not None:
+                value = _number(prefix + key, given)
+                break
+        out[key] = value if lo is None else float(_clip(value, lo, hi))
+    return out
+
+
+def _finite_width(f: Callable) -> Callable:
+    """Width function ``f``, refusing values that are not finite as it gives
+    them. (The stroke tries its width out before it samples the path; a NaN
+    there would otherwise surface as an error from deep in the sampling.)
+    It calls ``f`` exactly as often as the stroke would."""
+
+    def width(u):
+        values = f(u)
+        arr = np.asarray(values)
+        if arr.dtype.kind not in "biuf":
+            return values  # (not numbers: refused as such by the stroke)
+        if not np.isfinite(arr).all():
+            raise ValueError(
+                "width must be finite along the stroke; the width function "
+                f"gave {arr.flat[int(np.argmax(~np.isfinite(arr)))]}"
+            )
+        return values
+
+    return width
+
 
 def _resolve(stroke: Stroke):
     """The Brush to paint with, its type, and the effective stroke settings."""
     tool = stroke.brush
-    if isinstance(tool, Brush):
-        brush = tool
-    else:
-        brush = Brush(tool if isinstance(tool, BrushType) else None)
+    _check_tool(tool)
+    brush = tool if isinstance(tool, Brush) else Brush(tool)
     bt = brush.type
-    phys = bt.physics()
+    phys = _physics(bt, stroke)
     eff = {
-        k: (getattr(stroke, k) if getattr(stroke, k) is not None else phys[k])
-        for k in ("mixing", "pickup", "drag", "streaks", "smear", "blending")
+        k: phys[k] for k in ("mixing", "pickup", "drag", "streaks", "smear", "blending")
     }
     eff["rough"] = phys["rough"]
     eff["ridge"] = phys["ridge"]
-    eff["lift"] = float(
-        _clip(stroke.lift if stroke.lift is not None else phys["lift"], 0.0, 1.0)
-    )
+    eff["lift"] = phys["lift"]
     eff["width"] = stroke.width if stroke.width is not None else bt.width
+    if callable(eff["width"]):
+        eff["width"] = _finite_width(eff["width"])
     eff["taper"] = stroke.taper if stroke.taper is not None else bt.taper
     eff["angle"] = stroke.angle if stroke.angle is not None else bt.angle
     eff["follow_path"] = (
@@ -718,7 +1111,6 @@ def _resolve(stroke: Stroke):
     return brush, bt, eff
 
 
-_CHORD_CACHE: dict = {}
 _SUPERELLIPSE = {"flat": 10.0, "filbert": 3.0, "fan": 6.0, "round": 2.0, "spoon": 2.0}
 
 # Knife blades as polygons: (u along the blade from heel -1 to tip +1, v
@@ -778,12 +1170,17 @@ def _chord_table(shape: str, aspect: float, phi: float):
     rotated by ``phi`` from the lateral direction) and ``aspect``. For each
     lateral offset l, the line through it parallel to the motion crosses the
     footprint over [c - h, c + h]. Returns (l grid, c, h, lateral half-extent, max h).
+
+    Tables are kept for the aspect to 3 decimals and the angle to 2, and
+    built for those rounded values: the same tool gets the same table
+    whatever was painted before. (The arrays are shared: don't change them.)
     """
-    key = (shape, round(aspect, 3), round(phi, 2))
-    tab = _CHORD_CACHE.get(key)
-    if tab is not None:
-        return tab
-    phi = key[2]
+    return _chord_table_at(shape, round(aspect, 3), round(phi, 2))
+
+
+@functools.lru_cache(maxsize=4096)
+def _chord_table_at(shape: str, aspect: float, phi: float):
+    """:func:`_chord_table` for an aspect and angle already rounded."""
     u, v = _outline(shape, aspect)
     lat = u * np.cos(phi) - v * np.sin(phi)
     al = u * np.sin(phi) + v * np.cos(phi)
@@ -801,11 +1198,7 @@ def _chord_table(shape: str, aspect: float, phi: float):
     lo, hi = np.where(hit, lo, 0.0), np.where(hit, hi, 0.0)
     c = (lo + hi) / 2
     h = (hi - lo) / 2
-    tab = (grid, c, h, lmax, float(h.max()))
-    if len(_CHORD_CACHE) > 4000:
-        _CHORD_CACHE.clear()
-    _CHORD_CACHE[key] = tab
-    return tab
+    return grid, c, h, lmax, float(h.max())
 
 
 def _signed_floor(x, floor):
@@ -923,6 +1316,7 @@ class _Run:
                     path.n_knots,
                 )
             )
+            _check_sampled(u, width=widths, pressure=pressure, angle=angles, roll=rolls)
             return pts, widths, pressure, angles, rolls
 
         pts, widths, pressure, angles, rolls = sample(spacing)

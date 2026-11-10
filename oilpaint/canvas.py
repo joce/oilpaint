@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import numbers
 from collections.abc import Sequence
 
 import numpy as np
@@ -17,10 +19,15 @@ from .brush import (
     BrushType,
     Stroke,
     StrokePaint,
+    _check_seed,
+    _check_tool,
+    _checked_loads,
+    _number,
+    _width,
     apply_stroke,
     load_paint,
 )
-from .paint import DEFAULT_BODY, ColorLike
+from .paint import DEFAULT_BODY, ColorLike, as_paint
 from .png import write_png
 from .spline import Profile
 from .surface import DEFAULT_SURFACE, Surface
@@ -58,6 +65,11 @@ class Canvas:
 
     Memory: about 0.3 KB per pixel (24 spectral bands for the dry ground and
     for each of the two wet sublayers); 0.5 KB painted in reverse.
+
+    Raises ValueError or TypeError unless ``width`` and ``height`` are whole
+    numbers above 0, ``texture`` (if given) a finite number >= 0, ``weave``
+    a finite number above 0, and ``seed`` something ``np.random.default_rng``
+    takes (None, a whole number >= 0, ...).
     """
 
     def __init__(
@@ -71,9 +83,12 @@ class Canvas:
         surface: Surface | None = None,
         reverse: bool = False,
     ):
-        self.width, self.height = int(width), int(height)
-        if self.width <= 0 or self.height <= 0:
-            raise ValueError("canvas size must be positive")
+        self.width, self.height = _size("width", width), _size("height", height)
+        if texture is not None and _number("texture", texture) < 0:
+            raise ValueError(f"texture must be 0 (flat) or more, got {texture}")
+        if weave is not None:
+            _width("weave", weave)
+        _check_seed("seed", seed)
         if reverse and not (surface or DEFAULT_SURFACE).transparent:
             raise ValueError(
                 "reverse painting needs a clear support, such as surfaces.GLASS"
@@ -136,6 +151,17 @@ class Canvas:
             self.und[..., N],
             self.und[..., N + 1],
         )
+
+    def copy(self) -> Canvas:
+        """An independent copy of the canvas: its paint, wet and dry, its
+        surface and where its random numbers have got to, so the copy paints
+        on exactly as the original would. Painting on one, or letting it
+        dry, leaves the other as it was. ``copy.copy(canvas)`` does the same
+        (a shallow copy would share the paint, which painting changes in
+        place)."""
+        return copy.deepcopy(self)
+
+    __copy__ = copy
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -217,16 +243,34 @@ class Canvas:
         pointillism). The brush (``brushes.STIPPLER`` by default) turns a
         little on every tap, so no two prints are the same, and it runs out as
         it goes. ``pressure`` is one value, or one per point: a light tap
-        prints sparse dots, a firmer one a fuller mark. Returns the brush."""
-        pts = np.asarray(points, dtype=float).reshape(-1, 2)
+        prints sparse dots, a firmer one a fuller mark. Returns the brush.
+
+        Raises ValueError or TypeError, before any paint is loaded, unless
+        ``points`` are (x, y) pairs of finite numbers, ``pressure`` one
+        finite number or one per point, ``width`` (if given) a finite number
+        above 0, and ``brush`` None, a BrushType or a Brush."""
+        _check_tool(brush)
+        pts = _points("points", points, empty=True)
+        press = np.asarray(pressure, dtype=float).reshape(-1)
+        if press.size not in (1, len(pts)):
+            raise ValueError(
+                f"pressure must be one number or one per point ({len(pts)}), "
+                f"got {press.size}"
+            )
+        if not np.isfinite(press).all():
+            raise ValueError(f"pressure must be finite, got {pressure!r:.80}")
+        if width is not None:
+            _width("width", width)
+        _number("amount", amount)
         if isinstance(brush, Brush):
             tool = brush
         else:
             tool = Brush(brush if isinstance(brush, BrushType) else brushes.STIPPLER)
+        _checked_loads(tool, paint, amount)  # (before its size changes)
         if width is not None:  # the paint it takes depends on its size
             tool.width = float(width)
         load_paint(tool, paint, amount)
-        press = np.broadcast_to(np.asarray(pressure, dtype=float), (len(pts),))
+        press = np.broadcast_to(press, (len(pts),))
         for (x, y), p in zip(pts, press, strict=True):
             self.stroke([(x, y)], brush=tool, width=width, pressure=float(p), **options)
         return tool
@@ -234,7 +278,7 @@ class Canvas:
     def spatter(
         self,
         at,
-        paint: ColorLike,
+        paint: ColorLike | None,
         amount: float = 1.0,
         direction: float = 0.0,
         spread: float = 25.0,
@@ -254,16 +298,34 @@ class Canvas:
         flying further come in at a slant and stretch into teardrops, their
         narrow tails pointing the way they flew. They sit on top of wet paint.
         ``amount`` sets how much paint flies: 1 is a good flick, about 120
-        drops. Returns the number of drops."""
+        drops. Returns the number of drops laid (those landing on or by the
+        canvas).
+
+        With no paint (``paint`` None, or ``amount`` 0 or less) nothing flies
+        and it returns 0. Raises ValueError or TypeError, before anything is
+        painted, unless ``at`` is one or more (x, y) points of finite
+        numbers, ``amount``, ``direction`` and ``spread`` finite numbers,
+        ``reach`` and ``size`` finite numbers above 0, and ``seed`` something
+        ``np.random.default_rng`` takes."""
+        path = _points("at", at)
+        # (checked, then used as given: as numpy numbers, if they are)
+        _number("amount", amount)
+        _number("direction", direction)
+        _number("spread", spread)
+        _width("reach", reach)
+        _width("size", size)
+        _check_seed("seed", seed)
+        if paint is None:  # nothing to flick
+            return 0
+        as_paint(paint)
         rng = np.random.default_rng(
             seed if seed is not None else self._rng.integers(1 << 31)
         )
-        path = np.asarray(at, dtype=float).reshape(-1, 2)
-        # distance along the path the brush sweeps (a single point: none)
-        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(path, axis=0).T))]
         n = round(120 * amount)
         if n <= 0:  # nothing flicked
             return 0
+        # distance along the path the brush sweeps (a single point: none)
+        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(path, axis=0).T))]
         heading = np.deg2rad(direction)
         drops = 0
         for _ in range(n):
@@ -424,7 +486,15 @@ class Canvas:
         return [slice(y, y + rows) for y in range(0, self.height, rows)]
 
     def color_at(self, x: int, y: int) -> str:
-        """Hex color of the paint at pixel (x, y), without lighting."""
+        """Hex color of the paint film at pixel (x, y): the colour of the
+        paint itself over the ground, without lighting, and without the
+        dullness of paint sunk into an absorbent ground that
+        ``render(lighting=False)`` shows (the two differ there in the darks).
+
+        ``x`` and ``y`` are whole numbers, 0 <= x < width and 0 <= y < height
+        (no counting from the end); anything else raises ValueError or
+        TypeError."""
+        x, y = _pixel("x", x, self.width), _pixel("y", y, self.height)
         if self.reverse:
             R = self._reflectance_rows((slice(y, y + 1), slice(x, x + 1)))[0, 0]
             return sp.to_hex(sp.reflectance_to_srgb(R))
@@ -676,6 +746,45 @@ WEAVE_DEPTH = 0.7
 #: Paint thinner than this cannot form a continuous film; it is rendered as
 #: partial coverage of a film this thick (dry-brush specks, stroke edges).
 MIN_FILM = 0.15
+
+
+def _size(name: str, value) -> int:
+    """A canvas side in pixels: a whole number above 0."""
+    v = _number(name, value)
+    if v != int(v) or v <= 0:
+        raise ValueError(
+            f"canvas {name} must be a whole number of pixels above 0, got {value}"
+        )
+    return int(v)
+
+
+def _pixel(name: str, value, size: int) -> int:
+    """A pixel coordinate on a side ``size`` pixels long."""
+    if not isinstance(value, numbers.Integral) or isinstance(value, bool):
+        v = _number(name, value)
+        if v != int(v):
+            raise TypeError(f"{name} must be a whole number (a pixel), got {value}")
+    value = int(value)
+    if not 0 <= value < size:
+        raise ValueError(f"{name} must be from 0 to {size - 1}, got {value}")
+    return value
+
+
+def _points(name: str, points, empty: bool = False) -> np.ndarray:
+    """(x, y) points of finite numbers, as an (n, 2) array (n > 0 unless
+    ``empty`` is allowed)."""
+    try:
+        pts = np.asarray(points, dtype=float)
+    except (TypeError, ValueError):
+        raise TypeError(f"{name} must be (x, y) points, got {points!r:.80}") from None
+    if pts.size % 2 or (pts.ndim > 1 and pts.shape[-1] != 2):
+        raise ValueError(f"{name} must be (x, y) points, got shape {pts.shape}")
+    pts = pts.reshape(-1, 2)
+    if not empty and len(pts) == 0:
+        raise ValueError(f"{name} needs at least one (x, y) point")
+    if not np.isfinite(pts).all():
+        raise ValueError(f"{name} must be finite numbers, got {points!r:.80}")
+    return pts
 
 
 def _composite(kappa, sigma, volume, alpha, below):

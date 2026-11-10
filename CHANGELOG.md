@@ -45,9 +45,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Paint squeezed out of an overloaded soft tool (a small mop, say) pressed
   hard now lies against the edge of its mark, instead of floating around it
   in a ring.
+- A brush dragged hard over wet paint no longer moves more of a pixel's paint
+  than is there: `drag` near 1 at high pressure (or a slick surface such as
+  glass or copper under a stiff brush pressed fully down) left negative paint
+  that grew into huge numbers and NaN in the render. Such strokes now paint
+  differently: the share of paint dragged is capped at all of it.
+- A stroke's own `mixing`, `pickup`, `drag`, `streaks`, `smear`, `blending`
+  and `lift` are clipped to the same ranges as a `BrushType`'s.
+- Strokes, brushes and canvases check their arguments where they come in and
+  raise `ValueError` or `TypeError` naming the argument, before anything is
+  painted: numbers that are not finite (a NaN pressure used to spread NaN
+  over the canvas), a `brush` that is not a `BrushType` or `Brush` (it used
+  to paint silently with the default round), malformed loads, a negative
+  width, an out-of-range `taper` (outside 0..1; a `taper=1.5` used to shrink
+  the whole stroke), seeds `np.random.default_rng` would refuse, canvas
+  sizes that are not whole numbers, `color_at` off the canvas (it used to
+  count from the end).
+- `paint=[0.8, 0.1, 0.1]` (a colour given as a list) and loads given as a
+  tuple work; a colour with other than three numbers is refused.
+- `Brush.load_mix` without a `seed` paints the same each time (on the same
+  machine and numpy build): its streaks follow from what is loaded.
+- `copy.copy(canvas)` is an independent copy (it used to share the paint, so
+  drying the copy dried the original); `Canvas.copy()` does the same.
+- `canvas.spatter(at, None)` flicks nothing and returns 0; it used to dab
+  clean drops over the wet paint and count them.
+- Footprint tables no longer depend on what was painted before (two brushes
+  whose aspects round alike to 3 decimals got whichever table was built
+  first).
+- A numba cache left from another number of spectral bands is refused with
+  a clear `RuntimeError` instead of corrupting memory.
 
 ### Changed
 
+- `Brush.load(paint, amount, across=None, depth="belly", *, width=None)`:
+  `width` is now keyword-only, so the third argument is `across`, as the
+  README always said. `load(RED, 6, 30)` raises a `TypeError` that says to
+  write `load(RED, 6, width=30)`.
 - Brushes stay dirty longer after working through thick wet paint. What a
   brush lifts no longer all goes into its tips: deeper wet paint comes
   further up the hairs, more so under pressure and with soft hair, and part
