@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "oilpaint",
+  "project_id": "c3586f07-2337-47ae-bbee-eb6ed17d3de0"
+}
