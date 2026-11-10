@@ -99,26 +99,14 @@ _K_HUGE[0], _K_BIG[0] = 0.9 * np.finfo(float).max, 1e291
 HUGE = P.Paint.from_optics(_K_HUGE, 1.0, name="huge")
 BIG = P.Paint.from_optics(_K_BIG, 1.0, name="big")
 
-# Cases decided by the order of the search and its tie-breaking: the first
-# of equal candidates wins (paints, then the main paint, then proportions),
-# NaN candidates spoil their block, and the refinement takes the first nudge
-# that helps by more than 1e-6, then goes on with the next part (more
-# of those below, on a made-up landscape).
+# Cases decided by the order of the search: NaN candidates spoil their
+# block, and the refinement takes the first nudge that helps by more than
+# 1e-6, then goes on with the next part. Every decision on the way is made by
+# a margin of 1e-5 or more (errors of ~3 and ~30), far above rounding. Ties
+# (the first of equal candidates wins) are pinned on a made-up landscape
+# below, where they are exact on any machine.
 ORDER = [
-    # twin paints tie exactly: the first one
-    (
-        ("#ffffff", [P.LEAD_WHITE, P.LEAD_WHITE, P.BONE_BLACK]),
-        {"max_paints": 2, "over": "#000000"},
-        [(P.LEAD_WHITE, 1.0)],
-        10.802489678249188,
-    ),
-    (
-        ("#ffffff", [P.BONE_BLACK, P.LEAD_WHITE, TWIN_WHITE]),
-        {"max_paints": 2, "over": "#000000"},
-        [(P.LEAD_WHITE, 1.0)],
-        10.802489678249188,
-    ),
-    # refinement: the first nudge that helps, not the best one
+    # refinement: the first nudge that helps (by 0.025), not the best (0.066)
     (
         ("#704432", [P.VERMILION, P.YELLOW_OCHRE, P.CASSEL_EARTH, P.BONE_BLACK]),
         {"over": "#5a4532"},
@@ -148,34 +136,79 @@ def test_match_keeps_its_search_order(args, kwargs, parts, error):
     assert m.error == pytest.approx(error, rel=1e-9)
 
 
-def test_match_takes_the_first_of_mixes_that_tie():
-    # with no paint at all on the ground every mix looks the same; which mix
-    # of one paint and two looks best then depends on the last bit
-    m = P.match(
-        "#acf03b",
-        [P.YELLOW_OCHRE, P.DIOXAZINE_PURPLE],
-        max_paints=2,
-        thickness=0.0,
-        over=sp.srgb_to_reflectance("#5a4532"),
-    )
-    assert m.parts in (
-        [(P.YELLOW_OCHRE, 1.0)],  # the first paint alone
-        [(P.YELLOW_OCHRE, 64.0), (P.DIOXAZINE_PURPLE, 1.0)],  # first mix of two
-    )
+@pytest.mark.parametrize(
+    "paints",
+    [
+        [P.LEAD_WHITE, P.LEAD_WHITE, P.BONE_BLACK],
+        [P.BONE_BLACK, P.LEAD_WHITE, TWIN_WHITE],
+    ],
+)
+def test_match_of_twin_paints_is_made_of_them_alone(paints):
+    # A mix of two identical paints, (w1 K + w2 K) / (w1 + w2), is K only
+    # to within an ulp or so, and which way it rounds depends on the CPU: the
+    # white alone or a mix of the twins may come first, so either is right.
+    # (Which of equal candidates wins is pinned on the landscape below.)
+    m = P.match("#ffffff", paints, max_paints=2, over="#000000")
+    assert m.parts
+    assert all(p is P.LEAD_WHITE or p is TWIN_WHITE for p, _ in m.parts)
+    one = P.match("#ffffff", [P.LEAD_WHITE], max_paints=1, over="#000000")
+    assert one.parts == [(P.LEAD_WHITE, 1.0)]
+    assert m.error == pytest.approx(one.error, rel=1e-9)
+    assert m.error == pytest.approx(10.802489678249188, rel=1e-9)
+    np.testing.assert_allclose(m.paint.K, P.LEAD_WHITE.K, rtol=1e-12)
+    np.testing.assert_allclose(m.paint.S, P.LEAD_WHITE.S, rtol=1e-12)
 
 
-def _match_on_landscape(monkeypatch, n, level, target):
-    """match n paints whose mixes all look grey, of a level given by
-    ``level(K)``, to grey ``target``. Paint i absorbs only in band i, so a
-    mix's K[..., i] is exactly its share of paint i."""
-    paints = [P.Paint.from_optics(k, 0.0) for k in np.eye(sp.N_BANDS)[:n]]
+def test_match_on_bare_ground_finds_the_ground():
+    # with no paint at all on the ground every mix looks the same: the ground
+    # (which of them comes first then depends on the last bit; the first of
+    # equal candidates is pinned on the landscape below)
+    paints = [P.YELLOW_OCHRE, P.DIOXAZINE_PURPLE]
+    ground = sp.srgb_to_reflectance("#5a4532")
+    m = P.match("#acf03b", paints, max_paints=2, thickness=0.0, over=ground)
+    assert 1 <= len(m.parts) <= 2
+    assert all(any(p is q for q in paints) for p, _ in m.parts)
+    bare = sp.srgb_to_lab(sp.reflectance_to_srgb(ground))
+    target = sp.srgb_to_lab(sp.parse_color("#acf03b"))
+    assert m.error == pytest.approx(np.linalg.norm(bare - target), rel=1e-9)
+
+
+def _landscape(monkeypatch, bands, level, target, **kwargs):
+    """match paints whose mixes all look grey, of a level given by
+    ``level(K)``, to grey ``target``; returns the match and the paints.
+
+    Paint j absorbs only in band ``bands[j]`` (paints on the same band are
+    twins under different names), so a mix's K[..., i] is exactly its share
+    of the paints on band i: one product per paint, each by 1 or 0, divided
+    by the total, the same bits on any machine for mixes of up to two
+    paints. A grey of level v has colour (v, v, v) and error
+    sqrt(3) |v - target|, by elementwise arithmetic alone: equal levels tie
+    exactly, whatever the BLAS."""
+    paints = [
+        P.Paint.from_optics(np.eye(sp.N_BANDS)[b], 0.0, name=f"band {b} #{j}")
+        for j, b in enumerate(bands)
+    ]
 
     def grey(K, S, ground):
         return np.repeat(level(K)[..., None], sp.N_BANDS, axis=-1)
 
+    def rgb(R):
+        return np.asarray(R)[..., :3]
+
+    def lab(c):
+        return np.asarray(c, dtype=np.float64)
+
     monkeypatch.setattr(sp, "km_layer", grey)
     monkeypatch.setattr(sp, "_km_layer_batch", grey)
-    m = P.match(sp.reflectance_to_srgb(np.full(sp.N_BANDS, target)), paints)
+    monkeypatch.setattr(sp, "reflectance_to_srgb", rgb)
+    monkeypatch.setattr(sp, "srgb_to_lab", lab)
+    return P.match(np.full(3, target), paints, **kwargs), paints
+
+
+def _match_on_landscape(monkeypatch, n, level, target):
+    """:func:`_landscape` with paint i on band i, n of them, which the match
+    must all use: returns their parts."""
+    m, paints = _landscape(monkeypatch, range(n), level, target)
     assert [p for p, _ in m.parts] == paints
     return [v for _, v in m.parts]
 
@@ -189,6 +222,52 @@ def _near(share):
     """Mixes of 1 : G (shares of the second paint) that a nudge of the first
     by 1.5 makes, but no mix of the grid."""
     return (share > 0.66 * _SHARE) & (share < 1.5 * _SHARE) & (share != _SHARE)
+
+
+# The first of equal candidates wins: fewer paints, then the paints in the
+# order given, then the main paint in that order, then smaller proportions
+# of the others. The best mixes here tie exactly, and no nudge of them helps.
+
+
+@pytest.mark.parametrize("bands, first", [([0, 0, 1], 0), ([1, 0, 0], 1)])
+def test_match_takes_the_first_of_twin_paints(monkeypatch, bands, first):
+    # the twins on band 0, alone or mixed together (K exactly the same),
+    # look best; the paint on band 1 spoils any mix
+    def level(K):
+        return np.where(K[..., 0] == 1.0, 0.8, 0.5)
+
+    m, paints = _landscape(monkeypatch, bands, level, 0.9, max_paints=2)
+    # the first twin alone: not the second, nor a mix of the two
+    assert m.parts == [(paints[first], 1.0)]
+    assert m.error == pytest.approx(np.sqrt(3) * (0.9 - 0.8), rel=1e-12)
+
+
+def test_match_takes_one_paint_over_an_equal_mix_of_two(monkeypatch):
+    def level(K):
+        share = K[..., 1]  # of the second paint
+        return np.where((share == 1.0) | (share == _SHARE), 0.8, 0.5)
+
+    m, paints = _landscape(monkeypatch, [0, 1], level, 0.9, max_paints=2)
+    assert m.parts == [(paints[1], 1.0)]  # not 1 : G of the two
+
+
+def test_match_takes_the_first_of_equal_mixes_of_a_main_paint(monkeypatch):
+    def level(K):
+        share = K[..., 1]
+        return np.where((share == _SHARE) | (share == _H / (1 + _H)), 0.8, 0.5)
+
+    m, paints = _landscape(monkeypatch, [0, 1], level, 0.9, max_paints=2)
+    assert m.parts == [(paints[0], 1 / _G), (paints[1], 1.0)]  # 1 : G, not 1 : H
+
+
+def test_match_takes_the_first_main_paint_of_equal_mixes(monkeypatch):
+    def level(K):
+        share = K[..., 1]
+        return np.where((share == _H / (1 + _H)) | (share == 1 / (1 + _G)), 0.8, 0.5)
+
+    m, paints = _landscape(monkeypatch, [0, 1], level, 0.9, max_paints=2)
+    # the first paint as the main one, 1 : H; not the second, G : 1
+    assert m.parts == [(paints[0], 1 / _H), (paints[1], 1.0)]
 
 
 def test_match_takes_the_first_of_two_nudges_that_tie(monkeypatch):
