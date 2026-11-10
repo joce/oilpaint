@@ -337,7 +337,7 @@ def test_a_loaded_dab_is_a_mound_not_a_coin():
     rr = np.hypot(yy + 0.5 - 60, xx + 0.5 - 60)
     rim = max(h[(rr >= k) & (rr < k + 1)].mean() for k in range(22))
     assert h[rr < 3].mean() > 0.8 * rim  # (it was ~0.4: a thin centre, a rim)
-    loaded = 40 * 0.9 * 30**2
+    loaded = 40 * bm._VOLUME_PER_AMOUNT * 30**2
     assert h.sum() > 0.15 * loaded  # (it was 4%)
     assert h.sum() + brush.volume == pytest.approx(loaded, rel=1e-6)
 

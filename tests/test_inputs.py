@@ -18,8 +18,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
+import oilpaint
 from oilpaint import Brush, BrushType, Canvas, brushes, spline, surfaces
 from oilpaint import _engine as eng
 from oilpaint import brush as bm
@@ -590,7 +589,7 @@ def test_kernels_cached_for_another_band_count_are_refused(tmp_path):
     # spectral.WAVELENGTHS alone used to corrupt memory.
     package = tmp_path / "oilpaint"
     shutil.copytree(
-        os.path.join(os.path.dirname(__file__), "..", "oilpaint"),
+        os.path.dirname(oilpaint.__file__),
         package,
         ignore=shutil.ignore_patterns("__pycache__"),
     )
@@ -670,9 +669,13 @@ def test_brush_types_check_their_numbers(changes, message):
         BrushType(**changes)
 
 
-def test_every_preset_is_a_valid_brush_type_and_teeth_are_counted():
-    for tool in brushes.ALL.values():
-        assert tool.with_() == tool
+@pytest.mark.parametrize("name", list(brushes.ALL))
+def test_every_preset_is_a_valid_brush_type(name):
+    tool = brushes.ALL[name]
+    assert tool.with_() == tool
+
+
+def test_teeth_are_counted():
     with pytest.raises(ValueError, match="teeth of a comb"):
         brushes.knife("straight", 50, teeth=-1)
 
