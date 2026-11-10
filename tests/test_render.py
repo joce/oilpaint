@@ -364,6 +364,419 @@ def test_white_impasto_facing_the_lamp_reaches_near_white():
 
 
 # --------------------------------------------------------------------------
+# glints along slanting crests: lines, not beads at the pixel staircase
+
+
+def _furrowed_ridge(angle, seed=1, furrows=0.3, n=120):
+    """A narrow crest of wet paint running at ``angle`` degrees, with fine
+    furrows along it (the crest of a loaded brush), on a smooth support, and
+    a lamp turned with it: only how it falls on the pixels changes with the
+    angle. Returns the canvas, the lamp and the direction of the crest."""
+    c = _layer(
+        Canvas(n, n, surface=surfaces.GLASS.with_(transparent=False)),
+        Paint("#3060a0"),
+        4.0,
+    )
+    a = np.radians(angle)
+    tx, ty = np.cos(a), np.sin(a)
+    yy, xx = np.mgrid[0:n, 0:n] - n / 2
+    across = -xx * ty + yy * tx
+    along = xx * tx + yy * ty
+    rng = np.random.default_rng(seed)
+    freq = rng.uniform(0.15, 0.45, (64, 1, 1))
+    drift = 0.05 * rng.normal(size=(64, 1, 1))
+    phase = rng.uniform(0, 2 * np.pi, (64, 1, 1))
+    texture = np.cos(2 * np.pi * freq * across + drift * along + phase).sum(0) / 8
+    h = (4.0 * np.exp(-0.5 * (across / 1.5) ** 2) + furrows * texture).astype(
+        np.float32
+    )
+    c.surface_height = lambda relief=1.0: h  # type: ignore[method-assign]
+    light = np.array([np.sin(a), -np.cos(a), 0.6])
+    return c, light / np.linalg.norm(light), (tx, ty)
+
+
+def _highlight(c, light):
+    """The highlight alone, in 8-bit levels, on mid-grey paint."""
+    grey = np.full((c.height, c.width, 3), 0.18, np.float32)
+
+    def levels(gloss):
+        lit = c._light(grey, light, 1.0, gloss).astype(np.float64)
+        return 255 * sp.linear_to_srgb(lit).mean(-1)
+
+    return levels(1.0) - levels(0.0)
+
+
+def _bilinear(a, x, y):
+    x0 = np.clip(np.floor(x).astype(int), 0, a.shape[1] - 2)
+    y0 = np.clip(np.floor(y).astype(int), 0, a.shape[0] - 2)
+    fx, fy = x - x0, y - y0
+    top = a[y0, x0] * (1 - fx) + a[y0, x0 + 1] * fx
+    return top * (1 - fy) + (a[y0 + 1, x0] * (1 - fx) + a[y0 + 1, x0 + 1] * fx) * fy
+
+
+def _bead_share(S, direction):
+    """Share of the lit pixels (8 levels or more) in the middle of the
+    canvas that stand alone along the crest: 8 levels or more above, and
+    over twice as bright as, both neighbours one pixel along it. A line,
+    even one pixel wide at any slant, has neighbours along it more than
+    half as bright; a string of beads does not."""
+    n = S.shape[0]
+    yy, xx = np.mgrid[0:n, 0:n].astype(float)
+    tx, ty = direction
+    nb = np.maximum(_bilinear(S, xx + tx, yy + ty), _bilinear(S, xx - tx, yy - ty))
+    mid = np.zeros(S.shape, bool)
+    mid[n // 4 : 3 * n // 4, n // 4 : 3 * n // 4] = True
+    lit = mid & (S >= 8)
+    beads = lit & (S - nb >= 8) & (nb < 0.5 * S)
+    return beads.sum() / max(lit.sum(), 1)
+
+
+def test_a_slanting_crest_glints_in_a_line_as_a_level_one_does():
+    # point by point, a sharp highlight picks out each step of a slanting
+    # crest on the pixels: beads. Gathered along the crest it is a line.
+    for seed in (1, 2):
+        level = _bead_share(_highlight(*_furrowed_ridge(0, seed)[:2]), (1.0, 0.0))
+        for angle in (22, 30, 60):
+            c, light, along = _furrowed_ridge(angle, seed)
+            slanting = _bead_share(_highlight(c, light), along)
+            # (each pixel on its own: 0.25 to 0.4 at these angles)
+            assert slanting <= level + 0.05, (seed, angle, level, slanting)
+
+
+def _glint_width(S):
+    """Full width at half maximum (px) across a crest running along the rows,
+    of the highlight averaged along it over the middle of the canvas; and
+    its peak."""
+    n = S.shape[0]
+    p = S[:, n // 4 : 3 * n // 4].mean(1)
+    i = int(np.argmax(p))
+    half = 0.5 * p[i]
+    a = i
+    while p[a - 1] > half:
+        a -= 1
+    b = i
+    while p[b + 1] > half:
+        b += 1
+    # interpolated where the profile crosses half its height
+    lo = a - (p[a] - half) / (p[a] - p[a - 1])
+    hi = b + (p[b] - half) / (p[b] - p[b + 1])
+    return hi - lo, p[i]
+
+
+def test_the_glint_along_a_level_crest_stays_narrow(monkeypatch):
+    from oilpaint import canvas as cm
+
+    for furrows, seed in ((0.0, 1), (0.3, 1), (0.3, 2)):
+        c, light, _ = _furrowed_ridge(0, seed, furrows)
+        width, peak = _glint_width(_highlight(c, light))
+        if not furrows:
+            assert width < 2.2, width  # a crest 1.5 px across: a fine line
+        # as narrow and as bright as each pixel's own highlight, not gathered
+        with monkeypatch.context() as m:
+            m.setattr(cm, "GLOSS_SPAN", 0.0)
+            own_width, own_peak = _glint_width(_highlight(c, light))
+        assert width <= own_width + 0.2, (furrows, seed, width, own_width)
+        assert peak >= 0.9 * own_peak, (furrows, seed, peak, own_peak)
+
+
+def _width_across(S, direction, n=120):
+    """Full width at half maximum (px) of the highlight across a crest
+    through the middle of the canvas in ``direction``, averaged along it
+    over its middle half (sampled every 1/8 px, bilinear)."""
+    tx, ty = direction
+    lat = np.arange(-8, 8, 0.125)
+    p = np.zeros(len(lat))
+    for s in np.arange(-n / 4, n / 4, 0.5):
+        p += _bilinear(S, n / 2 + s * tx - lat * ty, n / 2 + s * ty + lat * tx)
+    i = int(np.argmax(p))
+    above = np.nonzero(p > 0.5 * p[i])[0]
+    return (above[-1] - above[0] + 1) * 0.125
+
+
+def test_a_slanting_glint_is_about_as_narrow_as_a_level_one():
+    # the light moves along the crest, by at most half a pixel across it
+    level = _width_across(_highlight(*_furrowed_ridge(0, furrows=0.0)[:2]), (1, 0))
+    for angle in (22, 30, 45, 60):
+        c, light, along = _furrowed_ridge(angle, furrows=0.0)
+        width = _width_across(_highlight(c, light), along)
+        assert width <= level + 0.5, (angle, width, level)
+
+
+def _dome(sigma, top, n=64):
+    c = _layer(
+        Canvas(n, n, surface=surfaces.GLASS.with_(transparent=False)),
+        Paint("#3060a0"),
+        4.0,
+    )
+    yy, xx = np.mgrid[0:n, 0:n] - (n - 1) / 2
+    h = (top * np.exp(-0.5 * (xx**2 + yy**2) / sigma**2)).astype(np.float32)
+    c.surface_height = lambda relief=1.0: h  # type: ignore[method-assign]
+    return c
+
+
+def test_domes_and_round_dabs_keep_their_own_highlight(monkeypatch):
+    # nothing is gathered on round paint: the curvature runs no one way
+    from oilpaint import canvas as cm
+
+    def both(c, light):
+        lin = c._render_linear()
+        L = np.asarray(light, float) / np.linalg.norm(light)
+        with monkeypatch.context() as m:
+            m.setattr(cm, "GLOSS_SPAN", 0.0)
+            own = c._light(lin, L, 1.0, 1.0)
+        return c._light(lin, L, 1.0, 1.0), own
+
+    for sigma, top in ((1.5, 4.0), (4.0, 6.0), (8.0, 10.0)):
+        for light in ((0.0, -1.0, 0.6), RAKING):
+            got, own = both(_dome(sigma, top), light)
+            assert np.abs(got - own).max() < 1.5 / 255, (sigma, light)
+    c = Canvas(300, 200, seed=4)
+    for i in range(12):
+        x, y = 30 + (i % 6) * 45, 50 + (i // 6) * 90
+        c.stroke(
+            [(x, y), (x + 1.5, y + 1.0)],
+            P.CADMIUM_RED,
+            amount=40,
+            pressure=0.8,
+            brush=brushes.ROUND_HOG.sized(14 + i),
+            seed=i,
+        )
+    for light in ((-0.6, -0.8, 1.1), RAKING):
+        got, own = both(c, light)
+        gloss = (
+            got
+            - c._light(
+                c._render_linear(), np.asarray(light) / np.linalg.norm(light), 1.0, 0.0
+            )
+        ).mean(-1)
+        lit, own_lit = (got - own).mean(-1) + gloss, gloss
+        assert abs(got.max() - own.max()) < 1e-6
+        a, b = (lit >= 8 / 255).sum(), (own_lit >= 8 / 255).sum()
+        assert abs(a - b) <= 0.03 * b, (light, a, b)
+
+
+def test_a_row_of_highlight_spreads_to_exactly_its_neighbourhood():
+    from oilpaint import _render
+
+    rng = np.random.default_rng(0)
+    for W in (1, 2, 7, 40):
+        src = np.where(rng.random(W) < 0.1, rng.random(W), 0.0)
+        for r in (0, 1, 3):
+            out = np.empty(W, np.uint8)
+            _render._near_row(src, r, out)
+            want = [(src[max(x - r, 0) : x + r + 1] != 0).any() for x in range(W)]
+            assert out.tolist() == [int(v) for v in want], (W, r)
+
+
+def _own_and_gathered(c, light, monkeypatch, **const):
+    """The canvas lit (black paint: the highlight alone, rolled off) with
+    the highlight gathered, and each pixel's own (GLOSS_SPAN 0)."""
+    from oilpaint import canvas as cm
+
+    black = np.zeros((c.height, c.width, 3), np.float32)
+    with monkeypatch.context() as m:
+        for k, v in const.items():
+            m.setattr(cm, k, v)
+        got = c._light(black, light, 1.0, 1.0)
+        m.setattr(cm, "GLOSS_SPAN", 0.0)
+        own = c._light(black, light, 1.0, 1.0)
+    return got, own
+
+
+def test_far_from_any_highlight_nothing_changes(monkeypatch):
+    # a pixel takes highlight only from within the span (and the pixel next
+    # to it); elsewhere the light is exactly the ungathered light
+    from oilpaint import canvas as cm
+
+    c, light, _ = _furrowed_ridge(30, 1, furrows=0.0)
+    got, own = _own_and_gathered(c, light, monkeypatch)
+    lit = own.max(-1) > 0
+    reach = int(np.ceil(cm.GLOSS_SPAN)) + 1
+    near = np.zeros_like(lit)
+    for dy in range(-reach, reach + 1):
+        for dx in range(-reach, reach + 1):
+            near |= np.roll(np.roll(lit, dy, 0), dx, 1)
+    assert near.mean() < 0.5 and np.array_equal(got[~near], own[~near])
+    # and with nothing gathered by the gate, all is exactly as ungathered
+    shut, own = _own_and_gathered(
+        c, light, monkeypatch, CREST_GATE=(2.0, 3.0, 1e9, 2e9)
+    )
+    assert np.array_equal(shut, own)
+
+
+def test_paint_too_thin_to_shine_takes_no_highlight_from_its_neighbours():
+    # gathered light is shown as glossy as the pixel's own film lets it
+    from oilpaint import canvas as cm
+
+    c, light, _ = _furrowed_ridge(30, 1, furrows=0.0)
+    n = c.width
+    film = np.full((n, n), 4.0, np.float32)
+    film[:, n // 2 :] = cm.GLOSS_FILM[0] + 0.05  # barely a film: almost no gloss
+    _layer(c, Paint("#3060a0"), film)
+    S = _highlight(c, light)
+    assert S[:, : n // 2].max() > 50
+    assert S[:, n // 2 :].max() < 1.0
+
+
+def test_bowls_planes_and_saddles_keep_their_highlight_up_to_the_border(
+    monkeypatch,
+):
+    # at the border the curvature stencils would run off the canvas and
+    # read a slope as a crest: nothing is gathered there
+    n = 40
+    yy, xx = np.mgrid[0:n, 0:n] - (n - 1) / 2
+    for h in (
+        0.012 * (xx**2 + yy**2),  # a bowl
+        0.3 * xx + 0.4 * yy,  # a plane, near the slope that mirrors RAKING
+        0.012 * (xx**2 - yy**2),  # a saddle
+    ):
+        c = _layer(
+            Canvas(n, n, surface=surfaces.GLASS.with_(transparent=False)),
+            Paint("#3060a0"),
+            4.0,
+        )
+        hh = h.astype(np.float32)
+        c.surface_height = lambda relief=1.0, hh=hh: hh  # type: ignore[method-assign]
+        lit = 0
+        for light in ((0.0, -1.0, 0.6), RAKING, (0.8, 0.3, 0.6)):
+            L = np.asarray(light, float) / np.linalg.norm(light)
+            got, own = _own_and_gathered(c, L, monkeypatch)
+            lit += int((own.max(-1) > 0.01).sum())
+            assert np.array_equal(got, own), light
+        assert lit > 20, lit  # there is a highlight to keep
+
+
+def test_gathered_light_takes_the_receiving_pixels_mattness(monkeypatch):
+    from oilpaint import _render
+    from oilpaint import canvas as cm
+
+    c, light, _ = _furrowed_ridge(30, 1)
+    black = np.zeros((c.height, c.width, 3), np.float32)
+    matte = np.zeros((c.height, c.width), np.float32)
+    matte[:, c.width // 2 :] = 0.5
+
+    def spec(m):
+        v = c._light(black, light, 1.0, 1.0, m)[..., 0].astype(np.float64)
+        return v / np.sqrt(1 - v * v)
+
+    full, half = spec(None), spec(matte)
+    keep = 1 - _render.MATTE_GLOSS_LOSS * 0.5
+    right = np.s_[:, c.width // 2 :]
+    assert np.abs(half[right] - keep * full[right]).max() < 1e-5 * full.max()
+    assert np.array_equal(half[:, : c.width // 2], full[:, : c.width // 2])
+    # and gloss 0 is the ungathered render, bit for bit, on painted paint
+    p = Canvas(120, 80, seed=2)
+    p.stroke([(10, 60), (110, 20)], P.CADMIUM_RED, amount=80, width=30, seed=3)
+    with monkeypatch.context() as m:
+        m.setattr(cm, "GLOSS_SPAN", 0.0)
+        want = p.render(light=RAKING, gloss=0.0)
+    assert np.array_equal(p.render(light=RAKING, gloss=0.0), want)
+
+
+def _gathered_by_hand(own, h, span, taps, gate):
+    """The highlight gathered along crests as shade defines it (_crest,
+    _gather, _tap), written out plainly, from each pixel's own highlight
+    ``own`` (where the lamp's share, the film and mattness are the same at
+    every pixel)."""
+    H, W = h.shape
+    yy, xx = np.mgrid[0:H, 0:W]
+
+    def at(dy, dx):
+        return h[np.clip(yy + dy, 0, H - 1), np.clip(xx + dx, 0, W - 1)]
+
+    h64 = h.astype(np.float64)
+    hxy = 0.25 * (at(1, 1) - at(1, -1) - at(-1, 1) + at(-1, -1)).astype(np.float64)
+    wxx = 0.25 * (at(0, 2) - 2.0 * h64 + at(0, -2))
+    wyy = 0.25 * (at(2, 0) - 2.0 * h64 + at(-2, 0))
+    k = np.array([1, 4, 6, 4, 1]) / 16
+
+    def blur(a):
+        rows = np.zeros_like(a)
+        for i in range(5):
+            rows += k[i] * a[:, np.clip(np.arange(W) + i - 2, 0, W - 1)]
+        out = np.zeros_like(a)
+        for i in range(5):
+            out += k[i] * rows[np.clip(np.arange(H) + i - 2, 0, H - 1)]
+        return out
+
+    sxx, sxy, syy = (
+        blur(wxx**2 + hxy**2),
+        blur(hxy * (wxx + wyy)),
+        blur(wyy**2 + hxy**2),
+    )
+    d = np.sqrt((sxx - syy) ** 2 + 4 * sxy**2)
+    l1 = 0.5 * (sxx + syy + d)
+    c1, c2 = np.sqrt(l1), np.sqrt(np.maximum(0.5 * (sxx + syy - d), 0))
+
+    def smooth(e0, e1, v):
+        u = np.clip((v - e0) / (e1 - e0), 0, 1)
+        return u * u * (3 - 2 * u)
+
+    aniso = np.where(c1 > 0, (c1 - c2) / np.where(c1 > 0, c1 + c2, 1), 0)
+    reach = span * smooth(gate[0], gate[1], aniso) * smooth(gate[2], gate[3], c1)
+    tx = np.where(sxx >= syy, -sxy, -(l1 - sxx))
+    ty = np.where(sxx >= syy, l1 - syy, sxy)
+    norm = np.hypot(tx, ty)
+    reach = np.where(norm > 0, reach, 0.0)
+    edge = 4  # nothing gathered this near the border
+    inside = (yy >= edge) & (yy < H - edge) & (xx >= edge) & (xx < W - edge)
+    reach = np.where(inside, reach, 0.0)
+    tx, ty = tx / np.where(norm > 0, norm, 1), ty / np.where(norm > 0, norm, 1)
+    out = own.copy()
+    for y, x in zip(*np.nonzero(reach > 1e-3), strict=True):
+        total = weights = 0.0
+        for kk in range(-taps, taps + 1):
+            w = 1.0 - abs(kk) / (taps + 1.0)
+            o = reach[y, x] * kk / taps
+            fx = min(max(x + o * tx[y, x], 0.0), W - 1.0)
+            fy = min(max(y + o * ty[y, x], 0.0), H - 1.0)
+            if abs(tx[y, x]) >= abs(ty[y, x]):
+                j, i = min(int(fy + 0.5), H - 1), int(fx)
+                a = fx - i
+                v = (1 - a) * own[j, i] + a * own[j, min(i + 1, W - 1)]
+            else:
+                i, j = min(int(fx + 0.5), W - 1), int(fy)
+                a = fy - j
+                v = (1 - a) * own[j, i] + a * own[min(j + 1, H - 1), i]
+            total += w * v
+            weights += w
+        out[y, x] = total / weights
+    return out
+
+
+def test_the_highlight_is_its_own_averaged_along_the_crest(monkeypatch):
+    # the kernel against the definition, on a furrowed slanting crest under
+    # a high lamp (no cast shadows: every pixel sees all of it)
+    from oilpaint import _render
+    from oilpaint import canvas as cm
+
+    c, _, _ = _furrowed_ridge(30, 2, n=64)
+    a = np.radians(30)
+    light = np.array([0.3 * np.sin(a), -0.3 * np.cos(a), 1.0])
+    light /= np.linalg.norm(light)
+    h = c.surface_height()
+    vis = np.empty_like(h)
+    lx, ly, lz = (float(v) for v in light)
+    _render.shadows(h, lx, ly, lz, cm.LIGHT_SIZE, cm.SHADOW_REACH, vis)
+    assert vis.min() == 1.0
+    got, own = _own_and_gathered(c, light, monkeypatch)
+
+    def unroll(v):  # the roll-off towards white, undone (black paint)
+        v = v[..., 0].astype(np.float64)
+        return v / np.sqrt(1 - v * v)
+
+    own_spec = unroll(own)
+    gy, gx = np.gradient(h.astype(np.float64))
+    facing = light[2] - gx * light[0] - gy * light[1] > 0  # (all but the edges)
+    want = _gathered_by_hand(own_spec, h, cm.GLOSS_SPAN, cm.GLOSS_TAPS, cm.CREST_GATE)
+    inner = np.zeros(h.shape, bool)
+    inner[2:-2, 2:-2] = True
+    sel = inner & facing
+    assert own_spec.max() > 0.05 and (want != own_spec)[sel].mean() > 0.05
+    assert np.abs(unroll(got) - want)[sel].max() < 1e-5 * own_spec.max()
+
+
+# --------------------------------------------------------------------------
 # cast shadows against a brute-force march
 
 

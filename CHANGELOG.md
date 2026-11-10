@@ -79,6 +79,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Glints along slanting crests, furrows and lips of thick paint are lines,
+  as on level strokes, instead of strings of beads at the pixel steps.
+  Domes and broad slopes keep their highlights exactly, painted round dabs
+  to within a few percent.
 - Dabs press down evenly: a round or oval dab was up to twice as thick at
   the two ends of its outline as in its middle, and its rim built up in two
   lips instead of all round.
