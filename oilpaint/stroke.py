@@ -1094,7 +1094,9 @@ def _dab_lift(run: _Run) -> None:
         return
     thick = float(V.sum() / max(float((V > 0.15).sum()), 1.0))
     body = float(np.where(own, top[..., IB], 0.0).sum() / V.sum())
-    amp = 1.2 * lift * eng.smoothstep(2.0, 6.0, thick) * eng.smoothstep(0.3, 0.8, body)
+    amp = (
+        1.2 * lift * (eng.smoothstep(2.0, 6.0, thick) * eng.smoothstep(0.3, 0.8, body))
+    )
     if amp <= 0:
         return
     rng = run.rng
