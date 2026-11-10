@@ -24,7 +24,7 @@ follows the forms (:class:`oilpaint.Reference`).
 
     python examples/rembrandt_self_portrait.py [output.png]
 
-It takes about 20 minutes; ``REMBRANDT_SCALE=0.5`` paints a half-size version in
+It takes about 5 minutes; ``REMBRANDT_SCALE=0.5`` paints a half-size version in
 about half the time.
 """
 

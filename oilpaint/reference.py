@@ -23,22 +23,12 @@ pixels. Only numpy and Pillow are needed::
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import numpy as np
 
 from . import spectral as sp
-
-
-def _box(a, r, axis):
-    """Box blur of radius r along an axis (edges repeat the border value)."""
-    if r <= 0:
-        return a
-    pad = [(0, 0)] * a.ndim
-    pad[axis] = (r + 1, r)
-    c = np.cumsum(np.pad(a, pad, mode="edge"), axis=axis, dtype=np.float64)
-    n = a.shape[axis]
-    hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
-    lo = np.take(c, np.arange(0, n), axis=axis)
-    return ((hi - lo) / (2 * r + 1)).astype(a.dtype)
+from ._filters import _bilinear, _box_blur
 
 
 def _blur(a, sigma):
@@ -48,38 +38,45 @@ def _blur(a, sigma):
     # box radii whose three passes add up to the Gaussian's variance
     r = max(int(round((np.sqrt(4.0 * sigma * sigma + 1.0) - 1.0) / 2.0)), 1)
     for _ in range(3):
-        a = _box(_box(a, r, 0), r, 1)
+        a = _box_blur(_box_blur(a, r, axis=0), r, axis=1)
     return a
 
 
 def _sample(img, x, y):
-    """Bilinear sample of img (H, W, ...) at points x, y."""
+    """Bilinear sample of img (H, W, ...) at points x, y (clamped to it)."""
     H, W = img.shape[:2]
     x = np.clip(np.asarray(x, np.float64), 0, W - 1)
     y = np.clip(np.asarray(y, np.float64), 0, H - 1)
-    x0, y0 = np.minimum(x.astype(int), W - 2), np.minimum(y.astype(int), H - 2)
-    fx, fy = x - x0, y - y0
-    if img.ndim == 3:
-        fx, fy = fx[..., None], fy[..., None]
-    return (img[y0, x0] * (1 - fx) + img[y0, x0 + 1] * fx) * (1 - fy) + (
-        img[y0 + 1, x0] * (1 - fx) + img[y0 + 1, x0 + 1] * fx
-    ) * fy
+    return _bilinear(img, y, x)
 
 
 class Reference:
     """A reference image fitted to a ``width`` x ``height`` canvas.
 
-    ``image`` is a path, a PIL image or an (H, W, 3) array (0..1 floats or
-    0..255 ints). ``box`` optionally crops it first: (left, top, right,
-    bottom) in the image's own pixels."""
+    ``image`` is a path, a PIL image or an (H, W, 3) array: whole numbers
+    (of any integer type) are on the 0..255 scale; floats are on the 0..1
+    scale, or on the 0..255 scale if any value is above 1. ``box``
+    optionally crops it first: (left, top, right, bottom) in the image's own
+    pixels.
+
+    Each softened map (one per kind of query and scale) is the size of the
+    canvas, so only the ``max_maps`` used most recently are kept; one asked
+    for again after that is made again. A painting works at a few scales at
+    a time, so that is rare."""
+
+    #: How many softened maps to keep (each one canvas-sized).
+    max_maps: int = 16
 
     def __init__(self, image, width: int, height: int, box=None):
         from PIL import Image
 
         if isinstance(image, np.ndarray):
             arr = image.astype(np.float64)
+            # whole numbers are 0..255 whatever their values (as ground images
+            # are); floats are 0..1 unless some value is above 1
+            on_255 = np.issubdtype(image.dtype, np.integer) or arr.max() > 1.0
             image = Image.fromarray(
-                np.clip(arr * (255 if arr.max() <= 1.0 else 1), 0, 255).astype(np.uint8)
+                np.clip(arr * (1 if on_255 else 255), 0, 255).astype(np.uint8)
             )
         elif not hasattr(image, "convert"):
             image = Image.open(image)
@@ -97,14 +94,31 @@ class Reference:
         lab = sp.srgb_to_lab(self.image.astype(np.float64))
         # perceptual, 0..1
         self.lightness = (lab[..., 0] / 100.0).astype(np.float32)
-        self._cache = {}
+        self._cache: OrderedDict = OrderedDict()
+        # the scale each map was first made at (a few floats per scale used)
+        self._made_at: dict = {}
+
+    def __setstate__(self, state) -> None:
+        # References pickled before the maps were limited kept them in a plain
+        # dict, and had no record of the scales they were made at.
+        self.__dict__.update(state)
+        self._cache = OrderedDict(self.__dict__.get("_cache", {}))
+        self.__dict__.setdefault("_made_at", {})
 
     # ------------------------------------------------------------------ maps
     def _map(self, name, scale):
         key = (name, round(float(scale), 2))
         m = self._cache.get(key)
         if m is None:
+            # Scales that round alike share a map. Made again after being
+            # dropped, it is made at the same scale as the first time, so it is
+            # the same map whatever was asked for in between.
+            scale = self._made_at.setdefault(key, scale)
             m = self._cache[key] = getattr(self, "_make_" + name)(scale)
+            while len(self._cache) > max(int(self.max_maps), 1):
+                self._cache.popitem(last=False)
+        else:
+            self._cache.move_to_end(key)
         return m
 
     def _make_color(self, scale):

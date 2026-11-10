@@ -3,10 +3,43 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Any
 
 import numpy as np
 
-Profile = float | Sequence[float] | Callable[[np.ndarray], np.ndarray]
+#: A value along a stroke: a number, a sequence, or a function of u in 0..1
+#: (called with the array of all u, or with one u at a time if that fails).
+Profile = (
+    float
+    | Sequence[float]
+    | Callable[[np.ndarray], np.ndarray]
+    | Callable[[float], float]
+)
+
+
+def _as_points(points, kind: str) -> np.ndarray:
+    """Control points as an (n, 2) float array, checked: a clear error here
+    beats an IndexError or a NaN cast deep inside the sampling."""
+    try:
+        P = np.asarray(points, dtype=np.float64)
+    except (TypeError, ValueError):
+        raise TypeError(
+            f"{kind} points must be (x, y) pairs of numbers, got {points!r:.80}"
+        ) from None
+    if P.size % 2:
+        raise ValueError(
+            f"{kind} points must be (x, y) pairs, got {P.size} numbers in all"
+        )
+    P = P.reshape(-1, 2)
+    if len(P) == 0:
+        raise ValueError(f"{kind} needs at least one point (x, y), got none")
+    bad = ~np.isfinite(P).all(axis=1)
+    if bad.any():
+        i = int(np.argmax(bad))
+        raise ValueError(
+            f"{kind} points must be finite numbers; point {i} is ({P[i, 0]}, {P[i, 1]})"
+        )
+    return P
 
 
 class Path:
@@ -54,7 +87,7 @@ class CatmullRom(Path):
     """
 
     def __init__(self, points, alpha: float = 0.5, closed: bool = False):
-        self.points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        self.points = _as_points(points, "path")
         self.alpha = alpha
         self.closed = closed
         self.n_knots = len(self.points) + (1 if closed else 0)
@@ -107,7 +140,7 @@ class Bezier(Path):
     points). Knots are the anchors."""
 
     def __init__(self, points):
-        P = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        P = _as_points(points, "Bezier")
         if (len(P) - 1) % 3 != 0 or len(P) < 4:
             raise ValueError(
                 "Bezier needs 3n+1 points: anchor, handle, handle, anchor, ..."
@@ -142,7 +175,7 @@ class Polyline(Path):
     """Straight segments between points."""
 
     def __init__(self, points):
-        self.points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        self.points = _as_points(points, "Polyline")
         self.n_knots = len(self.points)
 
     def _dense(self):
@@ -163,10 +196,25 @@ def evaluate_profile(
     * scalar -> constant
     * sequence with one value per control point -> interpolated between knots
     * any other sequence -> spread evenly along the stroke length
-    * callable f(u) with u in 0..1 along the stroke
+    * callable f(u) with u in 0..1 along the stroke. It is called once with
+      the whole array of u; if it only takes a single number (it raises
+      TypeError or ValueError on the array, as ``30 if u < 0.5 else 10``
+      does), it is called again for each u.
     """
     if callable(profile):
-        return np.asarray(profile(u), dtype=np.float64) * np.ones_like(u)
+        f: Callable[[Any], Any] = profile
+        try:
+            values = f(u)
+        except (TypeError, ValueError) as array_error:
+            try:
+                values = [f(x) for x in u.tolist()]
+            except Exception as error:
+                error.add_note(
+                    "(raised calling the profile with each u, after calling it "
+                    f"with the array of all u raised {array_error!r})"
+                )
+                raise error from array_error
+        return _profile_values(values, u)
     arr = np.asarray(profile, dtype=np.float64)
     if arr.ndim == 0:
         return np.full_like(u, float(arr))
@@ -175,3 +223,21 @@ def evaluate_profile(
     if arr.size == n_knots:
         return np.interp(knot, np.arange(n_knots), arr)
     return np.interp(u, np.linspace(0, 1, arr.size), arr)
+
+
+def _profile_values(values, u: np.ndarray) -> np.ndarray:
+    """What a profile function returned, as one value per u: it must be a
+    number, or numbers shaped like u (or that spread to its shape)."""
+    raw = np.asarray(values)
+    if raw.dtype.kind not in "biuf":
+        raise TypeError(f"a profile function must return numbers, got {values!r:.80}")
+    try:
+        fits = np.broadcast_shapes(raw.shape, u.shape) == u.shape
+    except ValueError:
+        fits = False
+    if not fits:
+        raise ValueError(
+            "a profile function must return a number, or an array of one "
+            f"number per u (shape {u.shape}); got shape {raw.shape}"
+        )
+    return raw.astype(np.float64) * np.ones_like(u)

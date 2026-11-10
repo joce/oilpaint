@@ -14,9 +14,12 @@ using spectral Kubelka-Munk theory.
 
 Install with `pip install oilpaint` (Python 3.11 or newer).
 
-Dependencies: `numpy` and `numba` (the stroke engine is compiled; the first
-stroke after installing takes about 20 seconds while it compiles, and the
-result is cached). Pillow is optional, for `Canvas.to_pil()`.
+Dependencies: `numpy` and `numba` (the stroke engine and the renderer are
+compiled: the first stroke after installing takes about 35 seconds while it
+compiles, the first knife stroke about 7 seconds more, and the first lit
+render about 10; the result is cached, so this happens once per install and
+per machine). Pillow is optional, for `Canvas.to_pil()` and
+`Reference`.
 
 ## Quick start
 
@@ -41,8 +44,9 @@ canvas.stroke([(80, 300), (560, 300)], width=40, pressure=0.6)
 canvas.save("painting.png")
 ```
 
-Run `python examples/demo.py` to regenerate the demo images in `examples/output/`;
-see [Development](#development) for the tests and checks.
+Run `python examples/demo.py` to regenerate the demo images in
+`examples/output/` (about a minute and a half); see
+[Development](#development) for the tests and checks.
 
 ## Four paintings made with it
 
@@ -66,7 +70,7 @@ his manner, like the Bruegel, and painted on the back of glass, in reverse.
   laid on with almost no pressure so it breaks; a misty tree line tapped in;
   evergreens built with the fan brush from the top down; happy little bushes
   tapped dark and then highlighted; water lines cut with the knife edge
-  (~3.5 minutes).
+  (about 32,000 strokes, ~3 minutes).
 * `examples/rembrandt_self_portrait.py`: a study after Rembrandt's
   *Self-Portrait* of 1659 (National Gallery of Art, Washington; public
   domain), painted from a reproduction (`examples/reference`) the way he
@@ -78,7 +82,7 @@ his manner, like the Bruegel, and painted on the back of glass, in reverse.
   lead white; the hair in thin strokes following the swirl of its curls,
   the curls themselves traced from a close-up of the head, scratched into the
   wet paint with the brush handle or drawn on with a liner;
-  transparent glazes over the dried shadows (about 18,000 strokes, ~6 minutes;
+  transparent glazes over the dried shadows (about 18,000 strokes, ~5 minutes;
   `REMBRANDT_SCALE=0.5` for a quick half-size version).
 * `examples/kandinsky_glass.py`: a reverse glass painting in the manner of
   Wassily Kandinsky's Murnau years (1909-1911), when he and Gabriele Münter
@@ -90,7 +94,7 @@ his manner, like the Bruegel, and painted on the back of glass, in reverse.
   lines first, then the windows and glints, the floating patches, the colours
   of things (uneven dabs, then a solid coat behind them), and the sky last of
   all, over everything. Black card behind the glass, as Kandinsky used
-  (about 4,800 strokes, ~2 minutes).
+  (about 4,800 strokes, ~1.5 minutes).
 
 ![bruegel](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/bruegel_winter.png)
 
@@ -132,18 +136,18 @@ the colour that brings the canvas closer (`examples/_studies.py`).
 
 * `examples/seurat_grande_jatte.py`: Georges Seurat's *Gray Weather, Grande
   Jatte* (about 1886-88, The Metropolitan Museum of Art), in pointillist dots
-  tapped on with `canvas.stipple` over a thin lay-in: about 134,000 dots,
-  bigger ones first, each the colour the photograph shows where it falls,
-  made purer and set further apart from its neighbours' colours, with now and
-  then a dot of its complement. Each layer of dots is tapped on in sittings
+  tapped on with `canvas.stipple` over a thin lay-in of about 4,000 strokes:
+  about 134,000 dots, bigger ones first, each the colour the photograph shows
+  where it falls, made purer and set further apart from its neighbours'
+  colours, with now and then a dot of its complement. Each layer of dots is tapped on in sittings
   left to dry, so the dots keep their own colour (~3 minutes).
 * `examples/whistler_rocket.py`: James McNeill Whistler's *Nocturne in Black
   and Gold: The Falling Rocket* (1875, Detroit Institute of Arts), the
   painting John Ruskin said flung "a pot of paint in the public's face": thin
   washes of fluid paint swept over a dark ground with a mop, the smoke soft;
   and the sparks flicked on with `canvas.spatter`, a flick for each shower of
-  sparks in the photograph, falling from just above it (about 1,700
-  drops; ~1.5 minutes).
+  sparks in the photograph, falling from just above it (about 3,200 brush
+  strokes, then 160 flicks and 1,700 drops; ~1 minute).
 
 ![after seurat](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/seurat_grande_jatte.png)
 
@@ -157,20 +161,25 @@ of night and smoke, and the falling sparks spattered on.*
 
 ## API
 
-### `Paint(color, opacity=1.0, strength=1.0, name=None, body=None)`
+### `Paint(color, opacity=None, strength=None, name=None, body=None)`
 
 * `color`: how the paint looks brushed out at normal thickness on white
-  canvas. Use `"#rrggbb"`, a float triple in 0..1, or an int triple in 0..255.
-* `opacity`: 0..1, how much it hides what's underneath. 1 is a body color,
-  ~0.3 a glazing color, 0 a pure dye.
-* `strength`: tinting strength, i.e. how much it dominates mixtures.
+  canvas. Use `"#rrggbb"`, a float triple in 0..1, or an int triple in 0..255
+  (a triple with a component of 2 or more is read on the 0..255 scale, one
+  whose largest component is between 1 and 2 is refused). It can also be a
+  paint: `Paint(paint, ...)` is a copy with what you pass changed.
+* `opacity`: 0..1, how much it hides what's underneath (default 1). 1 is a
+  body color, ~0.3 a glazing color, 0 a pure dye.
+* `strength`: tinting strength, i.e. how much it dominates mixtures (above 0,
+  default 1; on a copy, it multiplies the paint's own).
 * `body`: 0..1, how stiff the paint is (default 0.7, paint from the tube).
   Stiff paint holds the marks of the tool: ridges, peaks, bristle grooves.
   Fluid paint (thinned with medium) levels out smooth. See **Impasto** below.
 
 Useful members:
 
-* `Paint.mix((a, 1), (b, 3))` mixes paints by volume on the palette.
+* `Paint.mix((a, 1), (b, 3))` mixes paints by volume on the palette (a bare
+  paint or colour counts as one part).
 * `paint.appearance(thickness, over=color)` gives the color of a layer over a ground.
 * `paint.masstone` is the color straight from the tube.
 * `mix_colors(["#1b3fa0", "#f5d000"])` gives the hex color of a quick palette mix.
@@ -193,6 +202,8 @@ Useful members:
   `paint`, the recipe `parts` and the `error` (CIELAB delta E):
 
   ```python
+  from oilpaint import palette
+
   m = palette.match("#c89070", palette.OLD_MASTER, over="#5a4532")
   m.parts     # [(Lead White, 1.0), (Lead-Tin Yellow, 1.6), (Red Lake, 3.9)]
   m.error     # 0.6
@@ -202,15 +213,15 @@ Useful members:
   right over white won't be chosen then. Offering fewer paints (the ones you
   would use for flesh, say) gives more painterly recipes.
 
-### `canvas.stroke(path, paint, amount=6, width=None, pressure=0.5, brush=None, **options)`
+### `canvas.stroke(path, paint=None, amount=6, width=None, pressure=0.5, *, brush=None, **options)`
 
 | parameter  | meaning |
 |------------|---------|
 | `path`     | List of `(x, y)` points: a smooth Catmull-Rom spline passes through them. Or a `CatmullRom`, `Bezier` (anchor, handle, handle, anchor, …) or `Polyline`. One point makes a dab: pressed firmly, a solid mark; tapped lightly (pressure below about 0.4), only the tips of the longest bristles touch and the mark breaks into dots (bushes, foliage; see `tips` and `canvas.stipple`), and a soft brush gives a dab feathered all round. |
 | `paint`    | A `Paint` or a color. `None` uses a clean brush (blending), or the given `brush`. A list loads several paints: `[(paint, amount[, across[, depth]]), ...]` (see `Brush`). |
-| `amount`   | Paint on the brush, in "brush widths of solid stroke": `amount=6` covers about 6 widths before the brush runs dry and starts to break up. Small brushes need bigger amounts to go as far (they also hold more for their size). Loading a brush beyond what its hair holds (roughly `amount` 10 to 15 and up for a brush 20 px or wider, depending on the hair) puts a glob of paint on it that goes on thick: impasto. |
+| `amount`   | Paint on the brush, in "brush widths of solid stroke": `amount=6` covers about 6 widths before the brush runs dry and starts to break up. Small brushes need bigger amounts to go as far (they also hold more for their size). Loading a brush beyond what its hair holds (roughly `amount` 10 to 15 and up for a brush 20 px or wider, depending on the hair) puts a glob of paint on it that goes on thick: impasto. The width it is measured in is the stroke's *mean* width, after any `taper` and along any width profile, so a tapered or narrowing stroke loads less paint for the same `amount` (`taper=0.3` about 58% of the same stroke untapered). Not used when `paint` is a list of loads, which carry their own amounts. |
 | `brush`    | The tool: a `BrushType` (e.g. `brushes.FLAT_HOG`, see below), or a `Brush` that keeps leftover paint and dirt between strokes. Default: a medium round. |
-| `width`    | Brush width in px; defaults to the brush's own size. A number, one value per control point, or `f(u)` with `u` in 0..1 along the stroke. |
+| `width`    | Brush width in px; defaults to the brush's own size. A number, one value per control point, or `f(u)` with `u` in 0..1 along the stroke. `f` is called once with the array of all `u`; if it only takes one number (`lambda u: 30 if u < 0.5 else 10`), it is called for each `u` in turn. |
 | `pressure` | 0..1, same forms as `width`. Light pressure lays paint *on top of* wet paint. Heavy pressure releases more paint and churns it *into* the wet paint below. Soft, pointed brushes also get wider under pressure. An overloaded brush pressed hard squeezes paint out into ridges at its edges. A knife's pressure sets how thick its slab is: light leaves it thick, hard scrapes close to the canvas. |
 | `angle`    | Brush angle in degrees, same forms as `width`: 0 drags a flat broadside, 90 on its edge. Vary it to twist the brush mid-stroke. |
 | `follow_path` | `True`: the angle turns with the stroke. `False`: the angle is fixed on the canvas, like a calligraphy nib. |
@@ -220,17 +231,31 @@ Useful members:
 | `drag`     | How much wet paint the brush pushes ahead (brushes). |
 | `smear`    | How long picked-up color lingers on the brush tip, roughly in widths. |
 | `blending` | How readily the paints loaded on the brush merge into each other during the stroke. |
-| `streaks`  | Brush-hair streak texture, 0..1. |
-| `taper`    | Feathered ends: fraction of the length where the brush is lowered/lifted. |
-| `lift`     | 0..1, how the tool leaves the paint at the end: 0 slides off cleanly, higher pulls the paint up into streaks and torn ridges along the pull, as a knife lifted off thick paint does (1 gives a stucco-like texture). Default 0.3 for knives, 0 for brushes. |
-| `seed`     | Seed for the stroke's texture. |
+| `streaks`  | Strength of the brush-hair streak texture. |
+| `taper`    | Feathered ends: fraction of the length where the brush is lowered/lifted, 0..1, or a `(start, end)` pair. |
+| `lift`     | 0..1, how the tool leaves the paint at the end: 0 slides off cleanly; higher pulls the paint up as it goes. A knife pulls thick paint into streaks and torn ridges along the pull (1 gives a stucco-like texture). A brush's bristle clumps leave the paint one after another over the last stretch of the stroke, a ragged end, each pulling thick, stiff paint up into a crest as it goes. Default 0.3 for knives; for brushes, from the stiffness: about 1 for hog, 0 for sable and other soft hair (it closes up and slides off clean); given explicitly, it acts on any brush, strokes and dabs alike. |
+| `seed`     | Seed for the stroke's texture: anything `np.random.default_rng` takes. By default it comes from the canvas's own random numbers, so a canvas made with a `seed` paints the same every time. |
 
-`mixing`, `pickup`, `drag`, `smear`, `streaks`, `taper`, `lift`, `angle`
-and `follow_path` default to the brush type's own character; pass them to
-override it for one stroke.
+`mixing`, `pickup`, `drag`, `smear`, `streaks`, `blending`, `taper`, `lift`,
+`angle` and `follow_path` default to the brush type's own character; pass
+them to override it for one stroke. `mixing`, `pickup`, `drag` and `streaks`
+are clipped to 0..2, `blending` and `lift` to 0..1.
 
 `stroke()` returns the `Brush` it used. You can also build a `Stroke(...)`
 dataclass with the same fields and call `canvas.paint(stroke1, stroke2, ...)`.
+
+Arguments are checked before anything is painted: a number that is not
+finite, a negative width, a `taper` outside 0..1, a `brush` that is not a
+`BrushType` or `Brush`, a malformed load or an empty path raises
+`ValueError` or `TypeError` naming the argument. (A width or pressure
+function is checked as the stroke samples it, still before any paint is
+laid.)
+
+A stroke can run off the canvas. The tool goes on past the edge as if the
+canvas went on there, using up its paint as it would on canvas, so what
+lands on the canvas is what the same stroke would leave on a larger canvas
+(to within a few percent). The part off the canvas is simulated too, so it
+takes about as long as it would on that larger canvas.
 
 ### Brushes
 
@@ -296,9 +321,12 @@ springier, larger tip capacity). `brushes.catalog()` lists the presets.
 
 ![brush rack](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/brush_rack.png)
 
-*Each preset, top to bottom (`ROUND` … `BLENDER`, in the order of the table):
-a straight stroke, an S with light → heavy → light pressure, a dab, a stroke
-on the brush's edge, and a stroke that twists from broadside to edge-on.*
+*Sixteen of the presets, top to bottom: `ROUND`, `ROUND_SABLE`, `LINER`,
+`RIGGER`, `MOP`, `DEER_FOOT`, `FLAT_HOG`, `BRIGHT`, `ANGLED`, `DAGGER`,
+`FILBERT_HOG`, `FILBERT_SABLE`, `FAN_HOG`, `FAN_SOFT`, `PALETTE_KNIFE` and
+`BLENDER`. Each makes a straight stroke, an S with light → heavy → light
+pressure, a dab, a stroke on the brush's edge, and a stroke that twists from
+broadside to edge-on.*
 
 ![brush uses](https://raw.githubusercontent.com/joce/oilpaint/main/examples/output/brush_uses.png)
 
@@ -316,7 +344,7 @@ Some marks aren't brushed at all: they are tapped, pressed or flicked.
   a bristle brush prints only the tips of its longest bristles: sparse dots
   that fill in as the pressure rises (`tips` sets how many). `pressure` can be one value per
   point. Returns the brush.
-* `canvas.spatter(at, paint, amount=1, direction=0, spread=25, reach=120, size=3)`
+* `canvas.spatter(at, paint, amount=1, direction=0, spread=25, reach=120, size=3, seed=None)`
   flicks paint off a loaded brush: a spray of drops leaving from `at` (a
   point, or a path the brush sweeps along as it is flicked), flying
   `direction` degrees (0 to the right, 90 down the canvas), fanned out by
@@ -325,7 +353,8 @@ Some marks aren't brushed at all: they are tapped, pressed or flicked.
   bigger, with little satellites. Drops landing head-on stay round; those
   flying further come in at a slant and stretch into teardrops, their narrow
   tails pointing the way they flew. They sit on top of wet paint. `amount` 1
-  is a good flick, about 120 drops. Returns the number of drops.
+  is a good flick, about 120 drops. Returns the number of drops that land on
+  or by the canvas (0 with no paint).
 
 ```python
 from oilpaint import brushes
@@ -373,21 +402,33 @@ canvas.stroke(path, paint=paint, width=14)
 * `surface` is what you paint on (see **Surfaces** below). Default: a
   generic primed canvas.
 * `ground` overrides the surface's priming color, or is an `(H, W, 3)` sRGB
-  image to paint over. `texture` and `weave` are shortcuts for the surface's
-  `relief` and `scale`.
+  image to paint over (floats in 0..1, or whole numbers in 0..255). `texture`
+  and `weave` are shortcuts for the surface's `relief` and `scale`.
+* `seed` seeds the surface and the strokes' textures: the same seed and the
+  same strokes paint the same canvas.
 * `reverse=True` paints on the back of a clear support (`surfaces.GLASS`)
   and shows it through the front: a reverse glass painting (see **Reverse
   glass** below).
 * `canvas.dry()` lets everything dry. Later strokes stop mixing with it and
   glazes layer over it optically.
+* `canvas.copy()` (or `copy.copy(canvas)`) is an independent copy: paint on
+  it, or let it dry, and the original stays as it was. The copy paints on
+  exactly as the original would. Canvases also pickle.
 * `canvas.render(lighting=True, light=(-0.6, -0.8, 1.1), relief=1.0, gloss=1.0)`
-  returns an `(H, W, 3)` sRGB float image, lit to show impasto and the surface
-  texture: shading of the relief, cast shadows, darker hollows and the gloss
-  of oil. `light` is the direction of the light (x, y, z; y points down the
-  image): a smaller z rakes across the surface and brings out the relief
-  (the impasto images here use `(-0.6, -0.8, 0.7)`). `relief` scales the
-  height of the paint, `gloss` the highlights.
-* `canvas.surface_height()` is the height map used for lighting, in pixels.
+  returns an `(H, W, 3)` sRGB float image in 0..1, lit to show impasto and
+  the surface texture as if photographed under a studio lamp: shading of the
+  relief, soft cast shadows, darker grooves and hollows, and the gloss of
+  oil: sharp highlights on the crests and lips of thick wet paint, duller
+  once dry, while thin paint stays matte. Flat paint keeps its colour.
+  `light` is the direction of the lamp (x, y, z; y points down the image;
+  z must be positive, or `ValueError`): a smaller z rakes across the surface
+  and brings out the relief (the impasto images here use
+  `(-0.6, -0.8, 0.7)`). `relief` scales the height of the paint, `gloss` the
+  highlights (0 for none; neither may be negative). `lighting=False` gives
+  the flat colour, without relief, and ignores the other three; `light=None`
+  is the default lamp.
+* `canvas.surface_height(relief=1.0)` is the height map used for lighting,
+  in pixels.
 * `canvas.save("out.png", **render_options)` and `canvas.to_pil()` export the image.
 * `canvas.color_at(x, y)`, `canvas.thickness`, `canvas.wet_thickness` and
   `canvas.reflectance()` let you inspect the paint.
@@ -460,7 +501,7 @@ Münter took it up in Murnau around 1910, and Ivan Generalić and the Hlebine
 school in Croatia made it their main medium.
 
 ```python
-from oilpaint import Canvas, surfaces
+from oilpaint import Canvas, brushes, surfaces
 
 glass = Canvas(800, 600, surface=surfaces.GLASS, reverse=True)
 # the outlines first ...
@@ -529,8 +570,8 @@ canvas.stroke(path2, brush=deep, pressure=0.95)            # pressing hard squee
 
 | method / setting | meaning |
 |---|---|
-| `load(paint, amount, across=None, depth="belly")` | `across` says where on the brush: `"left"`, `"right"`, `"center"`, `"edges"`, `("left", 0.3)` (leftmost 30%), `(0.2, 0.6)` (a band, 0 = left edge, 1 = right edge), a function of x in 0..1, or one weight per column. Left and right are the brush's own sides, as seen looking along the stroke. On a round, `"left"` and `"right"` are the two sides of the bundle; `roll` then turns them. `depth`: `"tip"` (just touched: comes off first), `"belly"` (dipped in normally: the bulk of the load), `"heel"` (worked up to the ferrule), or a number, how far the brush went into the paint, 0..1 of the hair length: `0.1` loads the tip, `0.5` tip and belly, `1.0` all three layers. |
-| `load_mix(parts, amount, mixing=0.5)` | Several paints picked up together. `mixing` 1 = fully mixed (like `Paint.mix`), lower = left in streaks across the bristles, so the stroke comes out marbled. |
+| `load(paint, amount, across=None, depth="belly", *, width=None)` | `across` says where on the brush: `"left"`, `"right"`, `"center"`, `"edges"`, `("left", 0.3)` (leftmost 30%), `(0.2, 0.6)` (a band, 0 = left edge, 1 = right edge), a function of x in 0..1, or one weight per column. Left and right are the brush's own sides, as seen looking along the stroke. On a round, `"left"` and `"right"` are the two sides of the bundle; `roll` then turns them. `depth`: `"tip"` (just touched: comes off first), `"belly"` (dipped in normally: the bulk of the load), `"heel"` (worked up to the ferrule), or a number, how far the brush went into the paint, 0..1 of the hair length: `0.1` loads the tip, `0.5` tip and belly, `1.0` all three layers. `width` (by keyword) is the stroke width in px that `amount` is measured in; by default `brush.width`, which each stroke sets to its own mean width. |
+| `load_mix(parts, amount, mixing=0.5)` | Several paints picked up together. `mixing` 1 = fully mixed (like `Paint.mix`), lower = left in streaks across the bristles, so the stroke comes out marbled. Also takes `across`, `depth` and `width` as `load` does, and a `seed` for the streaks; without one, the same load on the same brush gives the same streaks. |
 | `work(passes, pressure=0.5)` | Stroke the brush back and forth on the palette without painting: its paints blend side to side, tip with belly, and a little with the heel. |
 | heel | Paint in the heel doesn't flow out by itself. Some of it is squeezed into the belly when the brush touches down (more when pressed hard) and whenever the pressure increases during a stroke; the rest stays in the brush until it is cleaned. It also counts in `brush.volume` and `brush.colors("heel")`. |
 | `BrushType.blending` / `Stroke(blending=...)` | How readily the paints on the brush merge as it is used (0..1). Low keeps a double-loaded brush crisply two-toned for a long stroke (soft synthetic flats); high blends within a few widths (scrubby hog). Pressure speeds it up. Default: from stiffness. |
@@ -615,16 +656,36 @@ Thin paint gives colour; thick paint also gives shape. Paint has a height on
 the canvas, and the tools push it around:
 
 * **Load.** A normal load lays a normal film. Beyond what the hair holds, the
-  extra sits on the brush as a glob that goes on thick, and the bristles comb
-  it into grooves and ridges.
+  extra sits on the brush as a glob that goes on thick (twice the load, about
+  twice as thick), and the bristles comb it into grooves and ridges.
+* **Bristle furrows.** The clumps of bristles that comb the paint are a
+  physical size (coarser for hog than for sable), so a big brush combs more
+  furrows, not bigger ones. Along the stroke the clumps drift sideways,
+  crowd together and part, and the brush regroups now and then: a furrow
+  lasts a brush width or two, merges with its neighbour, splits or fades,
+  and the edges of the stroke are ragged rather than ruled.
+* **Setting down and lifting off.** An overloaded brush set down squeezes a
+  lumpy bead of paint out behind and beside where it landed. At the end a
+  stiff brush leaves the paint one clump after another (a ragged end, over a
+  stretch set by how far its bristle tips travel as it comes up: barely
+  longer on a wide brush, and different on every stroke), and each clump
+  thins out and pulls thick, stiff paint up into a crest just behind its tip
+  (`lift`); a soft brush slides off clean.
+* **Dabs.** An overloaded brush pressed down leaves part of its glob as a
+  lumpy mound (flatter the harder it is pressed), and lifted straight off it
+  pulls the paint up into a peak or two. Tapped lightly, a full brush's glob
+  touches all over rather than printing only its bristle tips.
 * **Pressure.** Pressing an overloaded brush or knife squeezes paint out at its
-  edges into ridges. Light pressure leaves a thick deposit; heavy pressure
+  edges into ridges: as wide as the paint in them makes them, steep against
+  the stroke, swelling and breaking where the clumps at the brush's edge
+  pushed them out. Light pressure leaves a thick deposit; heavy pressure
   spreads it thin and pushes the excess aside.
 * **Ploughing.** Dragging a tool through thick wet paint pushes the paint above
   it aside into ridges and ahead of it, and leaves a pile where it lifts.
 * **Body.** How long the marks last depends on the paint's `body`. Paint thinned
-  with `MEDIUM` flows and levels out; tube paint keeps its bristle marks;
-  paint stiffened with `IMPASTO_MEDIUM` holds sharp ridges. Even stiff paint
+  with `MEDIUM` flows and levels out; tube paint keeps its bristle marks,
+  their sharpest crests rounding off a little where it lies thick; paint
+  stiffened with `IMPASTO_MEDIUM` holds sharp ridges. Even stiff paint
   slumps a little where it stands as a sheer cliff.
 
 ```python
@@ -689,8 +750,14 @@ the blade is filled up to the blade and everything above it is pushed away, so:
   0.6 and 0.9.*
 * **Over dry ridges.** The blade skims the high points and leaves the hollows:
   broken colour.
+* **Blade ends.** Near the two ends of the blade, paint is pressed out
+  sideways into a ridge along each edge of the slab, more the harder it is
+  pressed.
+* **Nicks.** Nicks and grit on the blade's edge score nearly straight lines
+  along the stroke, which come and go as grit catches and paint closes over
+  them.
 * **Lifting off.** A knife lifted off thick paint pulls it up into torn ridges
-  and peaks (`lift`).
+  and peaks along its trailing edge (`lift`).
 * **Comb knives.** The teeth score grooves into wet paint and push it into
   ridges between them (sgraffito).
 * **Edge lines.** For lines with the edge of the blade, use a blade with a tiny
@@ -795,6 +862,11 @@ opaque paints that hide it.*
 
 **The brush moves paint around.** The brush is a footprint (round,
 rectangular, oval-tipped or a fan of clumps; no individual bristles). Its
+hair is a pattern of clumps over the stroke, fixed in stroke coordinates
+(distance along it, position across the bundle), which every step of the
+stroke reads the same at a pixel: where the clumps run it lays less and
+combs thick paint into furrows, between them it lays more; its edges and
+the points where a running-dry brush still catches follow the same lanes. Its
 paint sits in 24 columns across it (around the bundle on a round, mapped to
 the footprint through the current roll), each with a tip, a belly
 (reservoir) and a heel that only gives paint up when squeezed. At each step
@@ -804,7 +876,10 @@ along the spline it does four things:
 2. It lifts some of the wet paint (pickup). A thin film only wets the tip;
    deeper wet paint comes further up between the hairs, more so when pressing
    bends them, so part of it goes into the reservoir and stays in the brush
-   for longer.
+   for longer. It glides on the paint it has just laid itself: it doesn't lift
+   that (it lays a little less instead, what its own bristles would have
+   carried on), and while it is loaded it doesn't push it either; a brush
+   running dry smears its own last paint on ahead.
 3. It lays down a mix of what the tip holds (deposit), refilling the tip from
    the reservoir. Neighbouring columns and layers slowly share their paint as
    the brush flexes (the `blending` setting).
@@ -858,7 +933,10 @@ knife lifts.
 
 Paint volume is conserved throughout. Each step integrates the
 brush's exact sweep over each pixel, so the result doesn't depend on the step
-size. The footprint is swept at its current angle and size (both can change
+size: a stroke cut into finer steps (a gentle curve) lays about the same
+paint as a straight one, also from an overloaded brush, whose glob feeds what
+it lays directly. (A tight wiggle of a wide brush still lays somewhat more:
+the inside of each turn is passed over twice.) The footprint is swept at its current angle and size (both can change
 along the stroke), which is what makes a flat's square ends, its thin edge
 and its twisted ribbons.
 
@@ -868,9 +946,14 @@ and its twisted ribbons.
 **Light.** Rendering lights the same surface the paint is pushed around on:
 the canvas weave, dried paint and wet paint. Thin strokes get soft
 shoulders; impasto keeps every ridge and groove.
-It then shades it with the light, casts shadows from ridges onto the paint
-behind them, darkens deep hollows, and adds the gloss of oil, sharper while
-it's wet.
+It then shades it with a lamp of some size: ridges cast shadows onto the
+paint behind them, sharp at their foot and softer further away; grooves,
+hollows and the foot of thick paint get less light from the room; and the oil
+mirrors the lamp in sharp highlights on the slopes that face it, brighter and
+sharper while the paint is wet. On a narrow crest, furrow or lip the
+highlight is gathered a little way along it, so a glint on a slanting crest
+is a line, not a string of beads at the steps of the pixels. Highlights roll
+off towards white rather than clip.
 
 ## Limitations
 
@@ -891,27 +974,53 @@ it's wet.
 * Knives lie flat on the canvas (or, with a tiny `aspect`, on their edge);
   the tilt of the blade (spreading with the trailing edge down vs scraping
   with the leading edge) is folded into pressure.
+* Paint volume is conserved, and so is each pigment, except where a loaded
+  dab holding several colours lifts off: the peak it pulls up is reshaped as
+  a whole, which keeps its volume but can change how much of each colour
+  it holds by a few percent.
 * Paint optics are derived from RGB colors, not measured pigment data. If you
   have measured spectra, `Paint.from_optics(K, S)` accepts them directly.
-* Speed: about a millisecond for a small brush stroke, tenths of a second for a
-  big heavily loaded one or a knife stroke. Memory is about 0.3 KB per pixel (a
-  1000×750 canvas needs ~250 MB).
+* Speed: a few milliseconds for a small brush stroke, about a tenth of a
+  second for a big heavily loaded one or a knife stroke; a lit render of an
+  800×600 canvas takes about a quarter of a second. Memory is about 0.35 KB
+  per pixel (a 1000×750 canvas needs ~265 MB, and ~100 MB more while it
+  renders); about 0.65 KB per pixel painted in reverse.
 
 ## Development
 
 Python 3.11 to 3.15. The checks run with [uv](https://docs.astral.sh/uv/) and tox:
 
 ```bash
-uv run tox            # every Python version: formatting, lint, types and tests
-uv run tox -e check   # the same, once, on the current Python
+uv sync --group dev   # the tools, and the package installed from the checkout
+uv run tox            # every Python version (formatting, lint, types and tests),
+                      # the spelling, and the built wheel installed on its own
+uv run tox -e check   # formatting, lint, types and tests, once, on the current Python
 uv run pytest         # just the tests
 make coverage         # test coverage, with an HTML report in htmlcov/
-make spell            # spelling (cspell; needs Node.js)
-make pre-push         # tox, and the spelling of the files you changed
+make spell            # spelling (cspell; needs Node.js, installs the npm packages if needed)
+make pre-push         # tox, the coverage, and the spelling of the files you changed
 ```
 
-Formatting is black and ruff format (88 columns), lint is ruff, types are
-pyright. CI runs the spell check, then the tox checks on each Python version
-and the coverage (sent to Codecov), on every pull request and every push to
-`main`. The coverage leaves out the compiled engine (`oilpaint/_engine.py`):
-coverage.py can't see inside numba-compiled code, though every test runs it.
+Formatting is black and ruff format (88 columns), lint is ruff (with a cap
+on how complex a function may grow, outside the compiled kernels), types are
+pyright. The tests are in `tests/`, one file per topic (`test_strokes.py`,
+`test_knives.py`, `test_render.py`, `test_inputs.py` and so on). Run on an
+empty numba cache, they first wait for the compiler, as the first stroke
+after installing does.
+
+CI runs the spell check, then the tox checks on each Python version, the
+tests and the built wheel on Windows, and the coverage (sent to Codecov), on
+every pull request and every push to `main`. The coverage leaves out the
+compiled engine (`oilpaint/_engine.py`): coverage.py can't see inside
+numba-compiled code, though every test runs it.
+
+`tools/bench.py` times the stroke engine on sixteen fixed scenes of marks
+and prints a hash of what each paints, so a change meant to make it faster
+can show that it paints the same:
+
+```bash
+uv run python tools/bench.py                 # the timing table
+uv run python tools/bench.py -k knife -n 9   # the scenes whose name has "knife", best of 9
+uv run python tools/bench.py --save DIR      # also keep each scene's canvas state
+uv run python tools/bench.py --compare DIR   # ... and compare with a kept one, byte for byte
+```

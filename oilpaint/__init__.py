@@ -14,11 +14,12 @@ Quick start::
 
 from . import brushes, palette, reference, spectral, surfaces
 from ._about import __version__
-from .brush import Brush, BrushType, Stroke
+from .brush import Brush, BrushType
 from .canvas import Canvas
 from .paint import Paint, mix_colors
 from .reference import Reference
 from .spline import Bezier, CatmullRom, Polyline
+from .stroke import Stroke
 from .surface import Surface
 
 __all__ = [
