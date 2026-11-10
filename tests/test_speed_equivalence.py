@@ -53,6 +53,15 @@ def test_likeness_bounds_decide_as_the_logarithms_do():
                 assert same or (up == np.inf and not full < thr)
             if dtype == np.float32:
                 assert eng.harmless(a[i], b[i]) == _harmless_ref(a[i], b[i])
+    # and they do decide: most ordinary pairs (not tied to a threshold)
+    a, b = _paints(rng, 4_000, np.float32)
+    floor = np.float32(1e-9)
+    decided = 0
+    for i in range(len(a)):
+        va, vb = max(a[i, IV], floor), max(b[i, IV], floor)
+        lo, hi = eng.likeness_bounds(a[i], b[i], va, vb, False)
+        decided += hi / IV < SAME_PAINT or lo / IV >= SAME_PAINT
+    assert decided > 0.6 * len(a)
 
 
 def test_harmless_near_its_threshold():
@@ -241,3 +250,160 @@ def test_a_brush_footprint_is_the_same_where_it_is_read():
                 assert (
                     Fb[:, box[0], box[1]].tobytes() == Ff[:, box[0], box[1]].tobytes()
                 )
+
+
+# --- a knife's blade, as it was worked out before the stages were compiled
+# (verbatim from the base, ac672aa: _knife._along_blade, _blade_rest and
+# _blade_level; ``s.ucoord`` read as the F_U plane, the film passed in)
+
+
+def _along_blade_ref(lat, under, values, span):
+    b = np.round(lat - lat.min()).astype(int)
+    n = int(b.max()) + 1
+    cnt = np.bincount(b[under], minlength=n).astype(np.float64)
+    tot = np.bincount(b[under], values[under], minlength=n)
+    kernel = np.ones(2 * span + 1)
+    cnt_s = np.convolve(cnt, kernel, mode="same")
+    tot_s = np.convolve(tot, kernel, mode="same")
+    prof = np.where(cnt_s > 0, tot_s / np.maximum(cnt_s, 1e-9), 0.0)
+    return np.where(cnt_s[b] > 0, prof[b], values)
+
+
+def _blade_rest_ref(run, s):
+    from oilpaint._engine import IB
+    from oilpaint._knife import _KNIFE_SINK
+
+    canvas, bt, st = run.canvas, run.bt, s.st
+    p, sl, wsl = st.p, s.sl, s.wsl
+    top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
+    fine, wide = run.relief.peaks_fine[sl], run.relief.peaks_wide[sl]
+    rest = fine + run.stiff_blade * (wide - fine)
+    earlier = canvas.top_id[sl] != run.stroke_id
+    old_v = und[..., IV] + np.where(earlier, top[..., IV], 0.0)
+    if old_v.max() > 0.05:
+        old_body = float(
+            (und[..., IB].sum() + np.where(earlier, top[..., IB], 0.0).sum())
+            / max(float(old_v.sum()), 1e-9)
+        )
+        depth = float(
+            np.clip(p**_KNIFE_SINK * (1.15 - 0.3 * min(old_body, 1.0)), 0.0, 1.0)
+        )
+        if bt.clumps > 0:
+            depth = max(depth, 0.9)
+        under_blade = (s.aa * np.clip(s.h - np.abs(s.rel) + 0.5, 0.0, 1.0))[wsl] > 0.5
+        if under_blade.any():
+            span = int(np.clip(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2, 10))
+            hi = eng.max_filter(floor + old_v, 1)
+            high = _along_blade_ref(s.lat_px[wsl], under_blade, hi, span)
+            base = _along_blade_ref(s.lat_px[wsl], under_blade, rest, span)
+            rest = np.maximum(rest, high - depth * np.maximum(high - base, 0.0))
+    return rest
+
+
+def _blade_level_ref(run, s, gap, film):
+    from oilpaint._filters import _smoothstep
+    from oilpaint._knife import _KNIFE_FILM, _KNIFE_SKIM
+
+    st, wsl = s.st, s.wsl
+    rest = _blade_rest_ref(run, s)
+    hair = s.hair[wsl]
+    ride = np.minimum(gap, _KNIFE_FILM * film) if run.bt.clumps == 0 else gap
+    chat = 0.25 * (1.0 - float(_smoothstep(_KNIFE_SKIM, 0.05, st.p)))
+    level = rest + ride * (
+        1.0
+        + chat * run.chatter[st.i]
+        + 0.12 * (hair - 0.5)
+        + run.blade_tilt * np.clip(s.F[eng.F_U][wsl], -1.0, 1.0)
+    )
+    return level, ride
+
+
+def test_a_knife_rests_and_rides_as_it_did(monkeypatch):
+    """Where a knife's blade rests and how high it rides (blade_rest,
+    blade_bins, blade_sink, blade_level), on its part of the canvas and over
+    all of its window past the edge of the canvas (gathered from the nearest
+    pixels), and what it adds to the surface out there (off_surface), as the
+    numpy code worked them out: every blade shape, a comb, lifted off, on
+    wet paint of earlier strokes; and a blade wider than 128 px on the
+    canvas, whose paint below is summed as numpy summed it (over a strided
+    view of the canvas, see _knife._blade_rest)."""
+    import oilpaint.stroke as stm
+    from oilpaint import Brush, Canvas, brushes
+    from oilpaint import _knife as kn
+    from oilpaint import palette as P
+
+    checked = {"on": 0, "whole": 0, "wide": 0}
+    original = kn._knife_step
+
+    def same(got, want):
+        want = np.broadcast_to(np.asarray(want, np.float64), got.shape)
+        return got.tobytes() == np.ascontiguousarray(want).tobytes()
+
+    def check(run, s):
+        st = s.st
+        area = max(run.area_unit * st.r * st.r, 1e-9)
+        gap, _ = kn._blade_gap(run, st.p)
+        if st.ch and st.cw:
+            film = kn._film(run, s, area)
+            level, ride = kn._blade_level(run, s, gap, film)
+            want_l, want_r = _blade_level_ref(run, s, gap, film)
+            assert same(level, want_l) and same(ride, want_r)
+            checked["on"] += 1
+            checked["wide"] += st.cw > 128
+        if st.ch < st.hh or st.cw < st.ww:
+            whole = kn._whole_window(run, s)
+            sw = whole.s
+            H, W = run.canvas.height, run.canvas.width
+            ys = np.clip(np.arange(st.y0, st.y0 + st.hh), 0, H - 1)
+            xs = np.clip(np.arange(st.x0, st.x0 + st.ww), 0, W - 1)
+            ref = kn._Step(sw.st, sw.F, sw.tables, sw.taps)
+            ref.sl = np.ix_(ys, xs)
+            film = kn._film(run, sw, area)
+            level, ride = kn._blade_level(run, sw, gap, film)
+            want_l, want_r = _blade_level_ref(run, ref, gap, film)
+            assert same(level, want_l) and same(ride, want_r)
+            canvas = run.canvas
+            own = np.where(
+                canvas.top_id[ref.sl] == run.stroke_id, canvas.top[ref.sl][..., IV], 0.0
+            )
+            on = np.zeros((st.hh, st.ww), bool)
+            on[s.wsl] = True
+            want = np.where(on, 0.0, kn._laid_off(run, st) - own)
+            assert whole.surf_add.tobytes() == want.tobytes()
+            checked["whole"] += 1
+        original(run, s)
+
+    monkeypatch.setattr(stm, "_knife_step", check)
+    rng = np.random.default_rng(7)
+    c = Canvas(220, 160, seed=4)
+    tools = (
+        brushes.PALETTE_KNIFE, brushes.KNIFE_PEAR, brushes.KNIFE_STRAIGHT,
+        brushes.KNIFE_ANGLED, brushes.KNIFE_SPOON, brushes.KNIFE_COMB,
+        brushes.KNIFE_TROWEL,
+    )  # fmt: skip
+    for k in range(14):
+        brush = Brush(tools[k % len(tools)])
+        if k % 3 != 2:
+            brush.load((P.TITANIUM_WHITE, P.CADMIUM_RED)[k % 2], 4.0)
+        pts = [tuple(p) for p in rng.uniform(-30, 250, (2, 2))]
+        c.stroke(pts, brush=brush, pressure=float(rng.uniform(0.15, 0.9)),
+                 lift=(0.0, 0.8)[k % 2], seed=k)  # fmt: skip
+    wide = Canvas(400, 200, seed=5)
+    wide.stroke([(20, 60), (380, 70)], P.COBALT_BLUE, amount=10, width=60)
+    for y in (90, 110):
+        blade = Brush(brushes.SCRAPER.sized(260)).load(P.TITANIUM_WHITE, 3.0)
+        wide.stroke([(200, y - 40), (205, y + 30)], brush=blade, pressure=0.6)
+    assert checked["on"] > 100 and checked["whole"] > 50 and checked["wide"] > 3
+
+
+def test_a_strided_sum_is_not_its_copys():
+    """Why _knife._blade_rest sums the paint below over the canvas itself:
+    numpy sums a strided float32 view row by row and a contiguous copy of it
+    as one run, and the two round differently."""
+    rng = np.random.default_rng(8)
+    differ = 0
+    for _ in range(50):
+        und = rng.uniform(0.0, 3.0, (40, 400, PACKED)).astype(np.float32)
+        view = und[..., 1][3:33, 20:300]
+        differ += view.sum() != np.ascontiguousarray(view).sum()
+    assert differ > 0
