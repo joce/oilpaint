@@ -40,13 +40,13 @@ from . import _engine as eng
 from . import spectral as sp
 from ._engine import COLUMNS, IB, IS, IV, PACKED
 from ._filters import _smoothstep
+from ._geometry import _chord_table as _chord_table
+from ._geometry import _chord_table_at as _chord_table_at
+from ._hair import _hair_field as _hair_field
 from .noise import value_noise_1d
 from .paint import ColorLike, Paint, as_paint
 
 if TYPE_CHECKING:  # (at run time, see __getattr__ at the end)
-    from ._geometry import _chord_table as _chord_table
-    from ._geometry import _chord_table_at as _chord_table_at
-    from ._hair import _hair_field as _hair_field
     from .stroke import Stroke as Stroke
     from .stroke import _brush_step as _brush_step
     from .stroke import _pending as _pending
@@ -874,23 +874,19 @@ def _physics(bt: BrushType, stroke: Stroke | None = None) -> dict:
 
 
 #: What a stroke paints with is defined here; the stroke and its simulation
-#: are in modules that build on this one. These names are found here too
-#: (imported from there when first asked for).
-_ELSEWHERE = {
-    "Stroke": "stroke",
-    "apply_stroke": "stroke",
-    "_resolve": "stroke",
-    "_Run": "stroke",
-    "_pending": "stroke",
-    "_brush_step": "stroke",
-    "_chord_table": "_geometry",
-    "_chord_table_at": "_geometry",
-    "_hair_field": "_hair",
-}
+#: are in oilpaint.stroke, which builds on this module. These names of it are
+#: found here too (imported from there when first asked for).
+_OF_THE_STROKE = (
+    "Stroke",
+    "apply_stroke",
+    "_resolve",
+    "_Run",
+    "_pending",
+    "_brush_step",
+)
 
 
 def __getattr__(name: str) -> Any:
-    if name in _ELSEWHERE:
-        module = importlib.import_module(f".{_ELSEWHERE[name]}", __package__)
-        return getattr(module, name)
+    if name in _OF_THE_STROKE:
+        return getattr(importlib.import_module(".stroke", __package__), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
