@@ -875,7 +875,7 @@ def _physics(bt: BrushType, stroke: Stroke | None = None) -> dict:
 
 #: What a stroke paints with is defined here; the stroke and its simulation
 #: are in oilpaint.stroke, which builds on this module. These names of it are
-#: found here too (imported from there when first asked for).
+#: found here too: imported from there when first asked for, and kept.
 _OF_THE_STROKE = (
     "Stroke",
     "apply_stroke",
@@ -888,5 +888,19 @@ _OF_THE_STROKE = (
 
 def __getattr__(name: str) -> Any:
     if name in _OF_THE_STROKE:
-        return getattr(importlib.import_module(".stroke", __package__), name)
+        value = getattr(importlib.import_module(".stroke", __package__), name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_OF_THE_STROKE))
+
+
+# (``import *`` gives every public name here, as it would with no __all__,
+# and the stroke's public names, as it did when they were defined here)
+__all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
+    *(n for n in globals() if not n.startswith("_")),
+    *(n for n in _OF_THE_STROKE if not n.startswith("_")),
+]
