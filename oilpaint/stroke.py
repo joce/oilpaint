@@ -24,7 +24,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NamedTuple
+from typing import NamedTuple, Protocol
 
 import numpy as np
 
@@ -60,10 +60,9 @@ from .brush import (
     load_paint,
 )
 from .noise import value_noise_1d
+from .paint import Paint as Paint  # (named by the hints of StrokePaint)
 from .spline import Path, Profile, as_path, evaluate_profile
-
-if TYPE_CHECKING:
-    from .canvas import Canvas
+from .surface import Surface
 
 # --- lifting a brush off (see _Run._lift) ------------------------------------------
 # Over how much of the end (px, for a brush 36 px wide, at most) a stiff
@@ -316,7 +315,45 @@ def _resolve(stroke: Stroke):
     return brush, bt, eff
 
 
-def apply_stroke(canvas: Canvas, stroke: Stroke) -> Brush:
+class _Relief(NamedTuple):
+    """The surface under the wet paint, as a stroke meets it: the solid
+    surface (the weave and dried paint, in units of paint thickness), what a
+    nearly dry brush catches on (0..1), how far each point lies below the
+    surface around it, and where a blade comes to rest on it (flexible,
+    stiff)."""
+
+    floor: np.ndarray
+    tooth: np.ndarray
+    hollows: np.ndarray
+    peaks_fine: np.ndarray
+    peaks_wide: np.ndarray
+
+
+class _Canvas(Protocol):
+    """What a stroke paints on (a :class:`oilpaint.Canvas`): its size and
+    surface, the wet paint (see :mod:`oilpaint._engine`), and what it hands
+    a stroke: its random numbers, its id and the relief under the paint."""
+
+    width: int
+    height: int
+    surface: Surface
+    top: np.ndarray
+    und: np.ndarray
+    top_a: np.ndarray
+    und_a: np.ndarray
+    top_id: np.ndarray
+    top_v: np.ndarray
+    und_v: np.ndarray
+    dry_height: np.ndarray
+
+    def _stroke_rng(self, seed) -> np.random.Generator: ...
+
+    def _new_stroke_id(self) -> int: ...
+
+    def _relief(self) -> _Relief: ...
+
+
+def apply_stroke(canvas: _Canvas, stroke: Stroke) -> Brush:
     """Run the stroke simulation on ``canvas``. Returns the brush used.
 
     The tool moves along the path in short straight segments. For every pixel
@@ -587,7 +624,7 @@ class _Run:
     one out, or drawing one earlier, would change every stroke."""
 
     @classmethod
-    def begin(cls, canvas: Canvas, stroke: Stroke) -> _Run:
+    def begin(cls, canvas: _Canvas, stroke: Stroke) -> _Run:
         """Set ``stroke`` going on ``canvas``: its random numbers, the tool,
         the path sampled, and the brush sized for the stroke and loaded with
         its paint (a load it refuses raises before the stroke has an id)."""
@@ -601,7 +638,7 @@ class _Run:
         return cls(canvas, rng, brush, bt, eff, smp)
 
     def __init__(
-        self, canvas: Canvas, rng, brush: Brush, bt: BrushType, eff: dict, smp
+        self, canvas: _Canvas, rng, brush: Brush, bt: BrushType, eff: dict, smp
     ):
         self.canvas, self.rng = canvas, rng
         self.brush, self.bt, self.eff = brush, bt, eff

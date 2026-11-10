@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import numbers
 from collections.abc import Sequence
-from typing import NamedTuple
 
 import numpy as np
 
@@ -29,22 +28,8 @@ from .brush import (
 from .paint import DEFAULT_BODY, ColorLike, as_paint
 from .png import write_png
 from .spline import Profile
-from .stroke import Stroke, apply_stroke
+from .stroke import Stroke, _Relief, apply_stroke
 from .surface import DEFAULT_SURFACE, Surface
-
-
-class _Relief(NamedTuple):
-    """The surface under the wet paint, as a stroke meets it: the solid
-    surface (the weave and dried paint, in units of paint thickness), what a
-    nearly dry brush catches on (0..1), how far each point lies below the
-    surface around it, and where a blade comes to rest on it (flexible,
-    stiff)."""
-
-    floor: np.ndarray
-    tooth: np.ndarray
-    hollows: np.ndarray
-    peaks_fine: np.ndarray
-    peaks_wide: np.ndarray
 
 
 class Canvas:
