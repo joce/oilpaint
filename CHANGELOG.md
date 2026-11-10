@@ -45,6 +45,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carry further than before, about 7%: the glob feeds the line directly.
 - A clean brush blending wet paint only moves it: only paint a stroke lays
   rounds off as it settles.
+- `Stroke` and the stroke simulation now live in `oilpaint.stroke` (still
+  importable from `oilpaint` and `oilpaint.brush`). A `Stroke` pickled by
+  this version cannot be loaded by earlier versions.
+- `tools/bench.py --compare` compares what the scenes paint byte for byte
+  (a change in the sign of a zero counts, and is reported as such), and
+  there are more scenes: dabs of several paints, knives lifted off, tapered
+  and curving strokes, reverse glass and strokes running off the canvas.
 
 ### Added
 

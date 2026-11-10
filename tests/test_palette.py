@@ -255,3 +255,13 @@ def test_km_layer_batch_is_km_layer_to_the_bit():
     assert np.array_equal(
         sp._km_layer_batch(kappa, sigma, ground), sp.km_layer(kappa, sigma, ground)
     )
+
+
+def test_palette_match_finds_a_close_mix_of_the_given_paints():
+    m = P.match("#c89070", P.OLD_MASTER, over="#5a4532")
+    assert m.error < 2.0
+    assert all(any(p is q for q in P.OLD_MASTER) for p, _ in m.parts)
+    assert len(m.parts) <= 3
+    # the mix it returns really looks like that over that ground
+    got = sp.srgb_to_lab(m.paint.appearance(1.0, over="#5a4532"))
+    assert np.linalg.norm(got - sp.srgb_to_lab(sp.parse_color("#c89070"))) < 2.0

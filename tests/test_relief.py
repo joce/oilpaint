@@ -130,7 +130,7 @@ def test_no_ripple_at_the_step_period():
     # the brush neither lifts nor pushes its own fresh paint step by step
     c, _ = _stroke(amount=60, texture=0.0)
     stroke = bm.Stroke(path=[(X0, YC), (X1, YC)], brush=brushes.FLAT_HOG.sized(36))
-    run = bm._Run(Canvas(470, 120, seed=12), stroke)
+    run = bm._Run.begin(Canvas(470, 120, seed=12), stroke)
     ds = float(np.mean(np.linalg.norm(np.diff(run.pts, axis=0), axis=1)))
     h = c.thickness[YC - 10 : YC + 11, X0 + 60 : X1 - 60].astype(np.float64)
     band = h.mean(0)
@@ -194,7 +194,7 @@ def _deposit_rate(path):
         brush=brushes.FLAT_HOG.sized(36),
         seed=1,
     )
-    run = bm._Run(c, stroke)
+    run = bm._Run.begin(c, stroke)
     run.pend = bm._pending(*run.bounds())
     arc, i, v0, a0 = 0.0, 1, 0.0, 0.0
     while arc < 120:
@@ -337,7 +337,7 @@ def test_a_loaded_dab_is_a_mound_not_a_coin():
     rr = np.hypot(yy + 0.5 - 60, xx + 0.5 - 60)
     rim = max(h[(rr >= k) & (rr < k + 1)].mean() for k in range(22))
     assert h[rr < 3].mean() > 0.8 * rim  # (it was ~0.4: a thin centre, a rim)
-    loaded = 40 * 0.9 * 30**2
+    loaded = 40 * bm._VOLUME_PER_AMOUNT * 30**2
     assert h.sum() > 0.15 * loaded  # (it was 4%)
     assert h.sum() + brush.volume == pytest.approx(loaded, rel=1e-6)
 
@@ -382,7 +382,7 @@ def test_a_brush_s_edge_ridge_is_as_wide_as_the_paint_in_it():
             brush=brushes.FLAT_HOG.sized(36),
             seed=1,
         )
-        run = bm._Run(c, stroke)
+        run = bm._Run.begin(c, stroke)
         got = run.step(20)
         assert got is not None
         st, tables = got
@@ -425,7 +425,7 @@ def _lift_length(w, seed):
         brush=brushes.FLAT_HOG.sized(w),
         seed=seed,
     )
-    run = bm._Run(c, stroke)
+    run = bm._Run.begin(c, stroke)
     run.pend = bm._pending(*run.bounds())
     last = 0.0
     for i in range(1, len(run.pts)):
@@ -596,7 +596,7 @@ def test_the_random_hair_and_lift_off_come_from_the_stroke_s_seed():
             brush=brushes.FLAT_HOG.sized(36),
             seed=seed,
         )
-        return bm._Run(Canvas(470, 120, seed=12), stroke)
+        return bm._Run.begin(Canvas(470, 120, seed=12), stroke)
 
     a, b, other = run(5), run(5), run(6)
     assert np.array_equal(a.tex2, b.tex2) and a.lift_var == b.lift_var

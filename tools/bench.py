@@ -33,7 +33,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from oilpaint import Brush, Canvas, Paint, brushes
+from oilpaint import Brush, Canvas, Paint, brushes, surfaces
 from oilpaint import palette as P
 
 W, H = 800, 600
@@ -83,22 +83,36 @@ def digest(state: dict[str, np.ndarray]) -> str:
 
 
 def compare(state: dict[str, np.ndarray], path: str) -> list[str]:
-    """How ``state`` differs from the one kept at ``path`` (no lines: not at all)."""
+    """How ``state`` differs from the one kept at ``path`` (no lines: not at all).
+
+    Arrays are compared byte for byte, as the ``state`` hash sees them: a
+    value that only changed the sign of a zero, or the bits of a NaN, counts
+    as a difference, and is reported as such."""
     lines = []
     with np.load(path) as kept:
         for name in sorted(set(state) | set(kept.files)):
             if name not in state or name not in kept.files:
                 lines.append(f"{name}: only in one of the two")
                 continue
-            a, b = state[name], kept[name]
+            a, b = np.ascontiguousarray(state[name]), np.ascontiguousarray(kept[name])
             if a.shape != b.shape or a.dtype != b.dtype:
                 lines.append(f"{name}: {a.dtype}{a.shape} was {b.dtype}{b.shape}")
+            elif a.tobytes() == b.tobytes():
+                continue
             elif a.dtype.kind not in "fiub":
-                if not np.array_equal(a, b):
-                    lines.append(f"{name}: {a.tolist()} was {b.tolist()}")
-            elif not np.array_equal(a, b, equal_nan=True):
+                lines.append(f"{name}: {a.tolist()} was {b.tolist()}")
+            elif np.array_equal(a, b, equal_nan=True):
+                zeros = (a == 0) & (np.signbit(a) != np.signbit(b))
+                lines.append(
+                    f"{name}: equal in value but not in bits: {int(zeros.sum())} "
+                    "zeros changed sign"
+                    + ("" if zeros.any() else " (NaN payloads differ)")
+                )
+            else:
                 a64, b64 = a.astype(np.float64), b.astype(np.float64)
                 diff = np.abs(a64 - b64)
+                diff[np.isnan(diff)] = np.inf
+                diff[np.isnan(a64) & np.isnan(b64)] = 0.0
                 rel = diff / np.maximum(np.abs(b64), 1e-12)
                 lines.append(
                     f"{name}: {int((diff > 0).sum())} of {diff.size} values differ, "
@@ -284,6 +298,140 @@ def knife(c):
             brush.load(paints[i % 3], 3.0)
         c.stroke(path[::2], brush=brush, pressure=(0.25, 0.5, 0.85)[i % 3])
     return 12, ()
+
+
+@scene("dabs", "300 dabs of rounds, flats and a fan loaded with two or three paints")
+def dabs(c):
+    rng = np.random.default_rng(12)
+    tools = (
+        brushes.ROUND_HOG,
+        brushes.FLAT_SABLE,
+        brushes.FILBERT_HOG,
+        brushes.FAN_HOG,
+    )
+    kept = []
+    for i in range(300):
+        tool = tools[i % len(tools)]
+        x, y = rng.uniform(30, W - 30), rng.uniform(30, H - 30)
+        if i % 3 == 0:  # loads given with the stroke
+            paint = [(P.CADMIUM_RED, 4), (P.TITANIUM_WHITE, 2, "left")]
+            c.stroke([(x, y)], paint, brush=tool, pressure=0.5, angle=i * 7.0)
+            continue
+        brush = Brush(tool).load(P.ULTRAMARINE_BLUE, 3, across="right")
+        brush.load(P.CADMIUM_YELLOW, 1.5, across=(0.2, 0.6), depth="tip")
+        if i % 3 == 2:
+            brush.load(P.BURNT_SIENNA, 2, depth="heel")
+        c.stroke([(x, y)], brush=brush, pressure=float(rng.uniform(0.2, 0.9)))
+        if i % 50 == 1:
+            kept.append(brush)
+    return 300, tuple(kept)
+
+
+@scene("knife-lift", "10 knife strokes lifted off thick paint", setup=impasto)
+def knife_lift(c):
+    rng = np.random.default_rng(13)
+    tools = (brushes.PALETTE_KNIFE, brushes.KNIFE_PEAR, brushes.KNIFE_SPOON)
+    kept = []
+    for i, path in enumerate(_short_strokes(rng, 10, 150)):
+        brush = Brush(tools[i % 3])
+        if i % 2 == 0:
+            brush.load((P.TITANIUM_WHITE, P.CADMIUM_ORANGE)[i % 4 // 2], 4.0)
+        c.stroke(
+            path[::2],
+            brush=brush,
+            pressure=(0.2, 0.45, 0.7)[i % 3],
+            lift=(0.4, 0.8, 1.0)[i % 3],
+            seed=i,
+        )
+        kept.append(brush)
+    # a stiff brush lifted off its own thick paint, and one told to lift
+    c.stroke(
+        [(80, 520), (400, 540)],
+        P.TITANIUM_WHITE,
+        amount=40,
+        width=30,
+        brush=brushes.FLAT_HOG,
+    )
+    c.stroke(
+        [(420, 520), (740, 500)],
+        P.CADMIUM_RED,
+        amount=30,
+        width=24,
+        brush=brushes.ROUND_SABLE,
+        lift=0.9,
+    )
+    return 12, tuple(kept)
+
+
+@scene("taper-curve", "16 tapered, curving, turning strokes", setup=wet)
+def taper_curve(c):
+    rng = np.random.default_rng(14)
+    tools = (brushes.FLAT_HOG, brushes.FILBERT_SABLE, brushes.ROUND, brushes.DAGGER)
+    for i in range(16):
+        x, y = rng.uniform(100, W - 100), rng.uniform(100, H - 100)
+        t = np.linspace(0, 1.5 * np.pi, 7)
+        r = rng.uniform(40, 90)
+        pts = [(x + r * np.cos(a) * (1 - 0.1 * a), y + r * np.sin(a)) for a in t]
+        c.stroke(
+            pts,
+            (P.CADMIUM_YELLOW, P.PHTHALO_BLUE, P.TITANIUM_WHITE)[i % 3],
+            amount=8,
+            width=[18, 30, 26, 12] if i % 2 else (lambda u: 10 + 20 * u),
+            pressure=(lambda u: 0.2 + 0.6 * np.sin(np.pi * u)) if i % 3 else 0.5,
+            brush=tools[i % 4],
+            taper=((0.3, 0.1), 0.25, 0.0)[i % 3],
+            angle=None if i % 4 else (lambda u: 90 * u),
+            roll=(lambda u: 360 * u) if i % 4 == 2 else None,
+        )
+    return 16, ()
+
+
+def glass_blank() -> Canvas:
+    """Clear glass, to be painted on the back and seen through the front."""
+    return Canvas(W // 2, H // 2, surface=surfaces.GLASS, reverse=True, seed=7)
+
+
+@scene(
+    "glass",
+    "reverse glass: lines, dried, colour over them, dried, a coat",
+    setup=glass_blank,
+)
+def glass(c):
+    rng = np.random.default_rng(15)
+    for path in _short_strokes(rng, 20, 80):
+        brush = Brush(brushes.LINER).load(P.IVORY_BLACK, 20)
+        c.stroke([(x / 2, y / 2) for x, y in path], brush=brush, pressure=0.4)
+    c.dry()
+    for i, path in enumerate(_short_strokes(rng, 20, 120)):
+        c.stroke(
+            [(x / 2, y / 2) for x, y in path],
+            (P.CADMIUM_RED, P.COBALT_BLUE)[i % 2],
+            amount=10,
+            width=30,
+        )
+    c.dry()
+    c.stroke([(10, 150), (390, 150)], P.TITANIUM_WHITE, amount=12, width=100)
+    return 41, ()
+
+
+@scene("edges", "9 strokes and 60 dabs running off the canvas", setup=wet)
+def edges(c):
+    rng = np.random.default_rng(16)
+    tools = (brushes.FLAT_HOG, brushes.ROUND_SABLE, brushes.PALETTE_KNIFE)
+    kept = []
+    for i in range(9):
+        y = rng.uniform(-40, H + 40)
+        out = rng.uniform(40, 120)
+        path = [(60, y), (-out, y + rng.uniform(-60, 60)), (100, y + 30)]
+        if i % 2:  # across the top or bottom edge instead
+            x = rng.uniform(-40, W + 40)
+            path = [(x, H - 60), (x + rng.uniform(-60, 60), H + out), (x + 30, H - 100)]
+        brush = Brush(tools[i % 3]).load((P.CADMIUM_RED, P.TITANIUM_WHITE)[i % 2], 5)
+        c.stroke(path, brush=brush, pressure=(0.3, 0.6)[i % 2])
+        kept.append(brush)
+    pts = np.column_stack([rng.uniform(-30, W + 30, 60), rng.uniform(-30, 30, 60)])
+    kept.append(c.stipple(pts, P.VIRIDIAN, amount=20, width=24, pressure=0.4))
+    return 69, tuple(kept)
 
 
 @scene("stipple", "400 taps of a stippler, in four loads")

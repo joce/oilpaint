@@ -16,6 +16,10 @@ concurrency:
 permissions:
   contents: read
 
+# A Python version tox cannot find fails the run (locally, tox.ini skips it).
+env:
+  TOX_SKIP_MISSING_INTERPRETERS: "false"
+
 jobs:
   spell-check:
     runs-on: ubuntu-latest
