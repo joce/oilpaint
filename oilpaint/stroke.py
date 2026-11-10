@@ -60,7 +60,6 @@ from .brush import (
     load_paint,
 )
 from .noise import value_noise_1d
-from .paint import Paint as Paint  # (named by the hints of StrokePaint)
 from .spline import Path, Profile, as_path, evaluate_profile
 from .surface import Surface
 

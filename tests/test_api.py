@@ -36,6 +36,22 @@ def test_type_hints_of_the_public_api_resolve(name, target):
     typing.get_type_hints(target)
 
 
+def _forward_refs(hint):
+    if isinstance(hint, (str, typing.ForwardRef)):
+        yield hint
+    for arg in typing.get_args(hint):
+        yield from _forward_refs(arg)
+
+
+@pytest.mark.parametrize("name", ["ColorLike", "StrokePaint"])
+def test_the_public_type_aliases_hold_no_names_to_look_up(name):
+    # A name in an alias is looked up in whichever module's hints use it, and
+    # fails there unless that module imports it too; before Python 3.14 it
+    # even passed or failed with the order hints were first resolved in (the
+    # first lookup was kept).
+    assert not list(_forward_refs(getattr(bm, name)))
+
+
 def test_the_stroke_is_found_in_oilpaint_brush():
     for name in ("Stroke", "apply_stroke"):
         bm.__dict__.pop(name, None)  # (as if not looked up yet)

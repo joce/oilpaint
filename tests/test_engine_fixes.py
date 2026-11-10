@@ -696,17 +696,43 @@ def test_thick_paint_pushed_well_past_an_edge_is_covered_by_its_own_volume():
     assert top_a[22, 20] >= 0.9
 
 
+def _kernel_signatures() -> int:
+    """How many signatures the compiled kernels have between them (each new
+    one is compiled, or loaded from numba's cache, on its first call)."""
+    from oilpaint import _dab, _render, spectral
+    from oilpaint import _engine as eng
+
+    return sum(
+        len(getattr(f, "signatures", ()))
+        for module in (eng, _render, _dab, spectral)
+        for f in vars(module).values()
+    )
+
+
 def test_a_long_knife_stroke_off_the_canvas_keeps_little_memory():
     """What a knife has laid past the edge is kept only where it laid it: a
-    3,000 px diagonal stroke over a small canvas peaks at a few MB (a record
-    over its bounding box took 40 MB at 2,100 px, and grows with its
-    square)."""
+    3,000 px diagonal stroke over a small canvas peaks at about 6 MB. A record
+    over the stroke's bounding box (2,100 px square) takes 18 MB in float32
+    alone, and the stroke with one peaks at about 27 MB (a float64 one took
+    40 MB), growing with the square of the stroke.
+
+    A shorter knife stroke from far past the edge, across a throwaway canvas,
+    runs through the same kernels with the same signatures first: compiling
+    them inside the measurement (with numba's cache empty, as on CI) took the
+    peak to 18 MB and more, whatever the record kept."""
     import tracemalloc
 
-    c = Canvas(200, 200, seed=1)
-    knife = Brush(brushes.PALETTE_KNIFE).load(P.CADMIUM_RED, 6)
+    def knife():
+        return Brush(brushes.PALETTE_KNIFE).load(P.CADMIUM_RED, 6)
+
+    Canvas(200, 200, seed=1).stroke(
+        [(-400, -400), (100, 100)], brush=knife(), pressure=0.5, seed=1
+    )
+    c, k = Canvas(200, 200, seed=1), knife()
+    compiled = _kernel_signatures()
     tracemalloc.start()
-    c.stroke([(-950, -950), (1150, 1150)], brush=knife, pressure=0.5, seed=1)
+    c.stroke([(-950, -950), (1150, 1150)], brush=k, pressure=0.5, seed=1)
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
+    assert _kernel_signatures() == compiled, "a kernel compiled in the measurement"
     assert peak < 12e6
