@@ -2324,6 +2324,7 @@ def pick_up(cv, br, taps, F, st, K, f_pick):
     if gain <= 0:
         return
     lifted = np.empty(PACKED)
+    lifted_und = np.empty(PACKED)
     for y in range(st.ch):
         for x in range(st.cw):
             Y, X = st.cy0 + y, st.cx0 + x
@@ -2343,17 +2344,20 @@ def pick_up(cv, br, taps, F, st, K, f_pick):
             )
             other = und[Y, X, IV] + (0.0 if own else top[Y, X, IV])
             deep = past_tips(other, p, K)
-            for li in range(2):
-                layer = top if li == 0 else und
-                a = a_top if li == 0 else a_und
+            for c in range(PACKED):
+                lifted[c] = a_top * top[Y, X, c]
+                top[Y, X, c] -= lifted[c]
+                lifted_und[c] = a_und * und[Y, X, c]
+                und[Y, X, c] -= lifted_und[c]
+            # (into each column what it lifted from the top layer, then from
+            # the one below)
+            for t in range(ntap[q]):
+                b, wt = cols[q, t], wts[q, t]
                 for c in range(PACKED):
-                    lifted[c] = a * layer[Y, X, c]
-                    layer[Y, X, c] -= lifted[c]
-                for t in range(ntap[q]):
-                    b, wt = cols[q, t], wts[q, t]
-                    for c in range(PACKED):
-                        tip[b, c] += wt * (1.0 - deep) * lifted[c]
-                        belly[b, c] += wt * deep * lifted[c]
+                    tip[b, c] += wt * (1.0 - deep) * lifted[c]
+                    belly[b, c] += wt * deep * lifted[c]
+                    tip[b, c] += wt * (1.0 - deep) * lifted_und[c]
+                    belly[b, c] += wt * deep * lifted_und[c]
 
 
 @njit(cache=True, error_model="numpy")
