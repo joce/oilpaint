@@ -3254,6 +3254,240 @@ def grown(lo, hi, r, w):
     return lo2, hi2
 
 
+# ----------------------------------------------------------------------------
+# a knife's blade (see _knife): its stages pixel by pixel, with the same
+# arithmetic, in the same order and precision, as numpy works them out there.
+# (numpy's exp and log differ from the C library's in the last bit, so those
+# stay in numpy: the kernels take them worked out.) A stage works on the
+# pixels at rows ``ys`` and columns ``xs`` of the canvas, the part of the
+# step's footprint ``F`` at (wy0, wx0): its part of the canvas, or past the
+# edge of the canvas all of its window, read from the nearest canvas pixels.
+
+
+@njit(cache=True, error_model="numpy")
+def np_max(a, b):
+    """``np.maximum(a, b)`` (no NaN): b when the two are equal (+0 or -0)."""
+    return max(b, a)
+
+
+@njit(cache=True, error_model="numpy")
+def np_min(a, b):
+    """``np.minimum(a, b)`` (no NaN): b when the two are equal."""
+    return min(b, a)
+
+
+@njit(cache=True, error_model="numpy")
+def blade_rest(top, und, ids, fine, wide, ys, xs, stroke_id, stiff, F, wy0, wx0):
+    """Where a blade of stiffness ``stiff`` rests on the solid surface (from
+    the thread tops, ``fine``, to the highest ridges around, ``wide``); the
+    wet paint of earlier strokes (single precision, as the paint) and the
+    most of it; which pixels lie under the blade (mostly covered by its
+    chord); whether any do; and the IB plane of the top layer where it is
+    an earlier stroke's (0 elsewhere). See _knife._blade_rest."""
+    h, w = ys.shape[0], xs.shape[0]
+    rest = np.empty((h, w), np.float32)
+    old_v = np.empty((h, w), np.float32)
+    top_ib = np.empty((h, w), np.float32)
+    under = np.empty((h, w), np.bool_)
+    k = np.float32(stiff)
+    zero = np.float32(0.0)
+    vmax = -np.inf
+    any_under = False
+    for y in range(h):
+        Y = ys[y]
+        for x in range(w):
+            X = xs[x]
+            rest[y, x] = fine[Y, X] + k * (wide[Y, X] - fine[Y, X])
+            earlier = ids[Y, X] != stroke_id
+            v = und[Y, X, IV] + (top[Y, X, IV] if earlier else zero)
+            old_v[y, x] = v
+            vmax = max(vmax, v)
+            top_ib[y, x] = top[Y, X, IB] if earlier else zero
+            wy, wx = wy0 + y, wx0 + x
+            ub = (
+                F[F_AA, wy, wx]
+                * clip(F[F_H, wy, wx] - abs(F[F_REL, wy, wx]) + 0.5, 0.0, 1.0)
+                > 0.5
+            )
+            under[y, x] = ub
+            any_under = any_under or ub
+    return rest, old_v, vmax, under, any_under, top_ib
+
+
+@njit(cache=True, error_model="numpy")
+def blade_bins(floor, ys, xs, old_v, rest, under, F, wy0, wx0):
+    """The high points of the paint and surface under a blade (``floor`` and
+    ``old_v``, the highest within a pixel), and, by position along the
+    blade (whole pixels from its end), how many pixels lie under it and the
+    sum of those and of where it rests (``rest``) over them: what
+    _knife._along_blade averages along it. Returns (high points, each
+    pixel's position, counts, sums of high points, sums of rest)."""
+    h, w = ys.shape[0], xs.shape[0]
+    hi_in = np.empty((h, w), np.float32)
+    lat_min = np.inf
+    for y in range(h):
+        for x in range(w):
+            hi_in[y, x] = floor[ys[y], xs[x]] + old_v[y, x]
+            lat_min = min(lat_min, F[F_LAT, wy0 + y, wx0 + x])
+    hi = max_filter(hi_in, 1)
+    b = np.empty((h, w), np.int64)
+    n = 0
+    for y in range(h):
+        for x in range(w):
+            b[y, x] = int(np.rint(F[F_LAT, wy0 + y, wx0 + x] - lat_min))
+            n = max(n, b[y, x] + 1)
+    cnt = np.zeros(n)
+    tot_hi = np.zeros(n)
+    tot_rest = np.zeros(n)
+    for y in range(h):
+        for x in range(w):
+            if under[y, x]:
+                cnt[b[y, x]] += 1.0
+                tot_hi[b[y, x]] += hi[y, x]
+                tot_rest[b[y, x]] += rest[y, x]
+    return hi, b, cnt, tot_hi, tot_rest
+
+
+@njit(cache=True, error_model="numpy")
+def blade_sink(rest, hi, b, cnt_s, hi_s, rest_s, depth):
+    """Where the blade rests over each pixel (see _knife._blade_rest): on the
+    high points under it, averaged along the blade (``hi_s`` over ``cnt_s``
+    pixels at each position ``b``), sunk ``depth`` of the way down towards
+    the surface below (``rest_s``), and never below that."""
+    h, w = rest.shape
+    out = np.empty((h, w))
+    for y in range(h):
+        for x in range(w):
+            k = b[y, x]
+            if cnt_s[k] > 0:
+                high = hi_s[k] / np_max(cnt_s[k], 1e-9)
+                base = rest_s[k] / np_max(cnt_s[k], 1e-9)
+            else:
+                high, base = np.float64(hi[y, x]), np.float64(rest[y, x])
+            out[y, x] = np_max(
+                np.float64(rest[y, x]), high - depth * np_max(high - base, 0.0)
+            )
+    return out
+
+
+@njit(cache=True, error_model="numpy")
+def blade_level(rest, film, k_film, gap, comb, chat, tilt, F, wy0, wx0):
+    """How high the blade rides over each pixel (see _knife._blade_level):
+    ``gap`` above where it rests (``rest``), or no higher than ``k_film`` of
+    the ``film`` of paint under it (not a comb's teeth), wavering by ``chat``
+    (1 + its chatter), the nicks of its edge (the hair plane of ``F``) and
+    its ``tilt``. Returns the level and how high it rides."""
+    h, w = rest.shape
+    level = np.empty((h, w))
+    ride = np.empty((h, w))
+    for y in range(h):
+        for x in range(w):
+            r = gap if comb else np_min(gap, k_film * film[y, x])
+            ride[y, x] = r
+            hair, u = F[F_HAIR, wy0 + y, wx0 + x], F[F_U, wy0 + y, wx0 + x]
+            level[y, x] = rest[y, x] + r * (
+                chat + 0.12 * (hair - 0.5) + tilt * clip(u, -1.0, 1.0)
+            )
+    return level, ride
+
+
+@njit(cache=True, error_model="numpy")
+def blade_slab(top, und, floor, ys, xs, level, surf_add, film, fill):
+    """How much paint the blade lays under it over each pixel (see
+    _knife._slab): it fills the share ``fill`` (1 - e^(-k exposure), worked
+    out in numpy) of the gap between its ``level`` and the surface (the
+    solid surface and the wet paint, plus ``surf_add`` where it is not
+    empty), where the ``film`` on it reaches. Returns that and the surface."""
+    h, w = ys.shape[0], xs.shape[0]
+    add = surf_add.shape[0] > 0
+    d = np.empty((h, w))
+    surf = np.empty((h, w))
+    for y in range(h):
+        Y = ys[y]
+        for x in range(w):
+            X = xs[x]
+            s = np.float64(floor[Y, X] + top[Y, X, IV] + und[Y, X, IV])
+            if add:
+                s += surf_add[y, x]
+            surf[y, x] = s
+            gap_px = np_max(level[y, x] - s, 0.0)
+            reach = smoothstep(1.3, 0.7, gap_px / np_max(film[y, x], 1e-9))
+            d[y, x] = gap_px * reach * fill[y, x]
+    return d, surf
+
+
+@njit(cache=True, error_model="numpy")
+def blade_ends(ride, F, wy0, wx0, half, end_px, coef, on_y0, on_x0, on_h, on_w):
+    """How much paint the blade presses out near its two ends over each pixel
+    (see _knife._press_out_ends): ``coef`` of how high it rides, where the
+    pixel lies within ``end_px`` of an end (``half``: the half-length of the
+    blade, px) and as much as it passes over it; none in the (on_h, on_w)
+    part at (on_y0, on_x0)."""
+    h, w = ride.shape
+    out = np.empty((h, w))
+    for y in range(h):
+        for x in range(w):
+            if on_y0 <= y < on_y0 + on_h and on_x0 <= x < on_x0 + on_w:
+                out[y, x] = 0.0
+                continue
+            r = ride[y, x]
+            near = smoothstep(end_px, 0.0, half - abs(F[F_LAT, wy0 + y, wx0 + x]))
+            out[y, x] = (
+                r * F[F_EXPO, wy0 + y, wx0 + x] * coef * near * smoothstep(0.5, 2.0, r)
+            )
+    return out
+
+
+@njit(cache=True, error_model="numpy")
+def blade_excess(
+    top, und, floor, sy0, sx0, level, fill, F, wy0, wx0, half, spill_px, spill, wet
+):
+    """The wet paint standing above the blade over each pixel of the (h, w)
+    window at (sy0, sx0) (see _knife._push_aside), the share ``fill`` of it
+    the blade passes over, and of that, within ``spill_px`` of the edges of
+    the mark (``half`` px from its middle), the share ``spill`` of it or of
+    the paint lying there before the stroke (``wet``), whichever is less,
+    that spills out sideways (``wet`` empty, a comb: all of it stays).
+    Returns that, the volume of the top layer, and the most of it."""
+    h, w = level.shape
+    excess = np.empty((h, w))
+    tv = np.empty((h, w))
+    emax = -np.inf
+    for y in range(h):
+        for x in range(w):
+            Y, X = sy0 + y, sx0 + x
+            t = np.float64(top[Y, X, IV])
+            tv[y, x] = t
+            e = np_max(floor[Y, X] + t + und[Y, X, IV] - level[y, x], 0.0)
+            e *= fill[y, x]
+            if wet.shape[0] > 0:
+                near = smoothstep(spill_px, 0.0, half - abs(F[F_LAT, wy0 + y, wx0 + x]))
+                e = spill * near * np_min(e, np.float64(wet[y, x]))
+            excess[y, x] = e
+            emax = max(emax, e)
+    return excess, tv, emax
+
+
+@njit(cache=True, error_model="numpy")
+def blade_folds(und, floor, sy0, sx0, level, mix, F, wy0, wx0):
+    """How far the blade folds the two wet layers of each pixel of the window
+    at (sy0, sx0) into each other (see _knife._fold_layers): ``mix`` (1 -
+    e^(-...), worked out in numpy), in streaks along its nicks, as far as
+    it cuts into the layer below its ``level``."""
+    h, w = level.shape
+    m = np.empty((h, w))
+    half = np.float32(0.5)
+    for y in range(h):
+        for x in range(w):
+            Y, X = sy0 + y, sx0 + x
+            into = clip(
+                np.float64(floor[Y, X] + und[Y, X, IV] + half) - level[y, x], 0.0, 1.0
+            )
+            hair = F[F_HAIR, wy0 + y, wx0 + x]
+            m[y, x] = clip(mix[y, x] * (0.1 + 1.8 * hair) * into, 0.0, 1.0)
+    return m
+
+
 @njit(cache=True, error_model="numpy")
 def layer_speed(z0, z1, gap, slip):
     """Speed, as a fraction of the blade's, of a wet layer between heights z0
