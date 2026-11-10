@@ -910,8 +910,11 @@ def bristle_taps(u_px, span, nsub, ring, rho):
     the nearest columns, sampled ``nsub`` times across the pixel."""
     ch, cw = u_px.shape
     npx = ch * cw
-    cols = np.empty((npx, COLUMNS), np.int32)
-    wts = np.empty((npx, COLUMNS))
+    # (each sample touches two columns, two on each side of a ring: no pixel
+    # has more taps than that)
+    most = min(4 * nsub if ring else 2 * nsub, COLUMNS)
+    cols = np.empty((npx, most), np.int32)
+    wts = np.empty((npx, most))
     ntap = np.zeros(npx, np.int32)
     # (the columns a pixel touches, lo..hi, are all that is set in acc: only
     # those are read, in order, and cleared again)
@@ -967,8 +970,8 @@ def crop_taps(taps, ww, wy0, wx0, ch, cw):
     of a window ``ww`` px wide, from the taps of all of it."""
     cols, wts, ntap = taps
     n = ch * cw
-    out_cols = np.empty((n, COLUMNS), np.int32)
-    out_wts = np.empty((n, COLUMNS))
+    out_cols = np.empty((n, cols.shape[1]), np.int32)
+    out_wts = np.empty((n, cols.shape[1]))
     out_n = np.zeros(n, np.int32)
     for y in range(ch):
         for x in range(cw):
