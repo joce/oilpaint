@@ -80,6 +80,7 @@ include = [
     "RELEASING.md",
     "pyproject.toml",
     "tox.ini",
+    "uv.lock",
 ]
 
 [tool.black]
