@@ -3259,9 +3259,9 @@ def grown(lo, hi, r, w):
 # arithmetic, in the same order and precision, as numpy works them out there.
 # (numpy's exp and log differ from the C library's in the last bit, so those
 # stay in numpy: the kernels take them worked out.) A stage works on the
-# pixels at rows ``ys`` and columns ``xs`` of the canvas, the part of the
-# step's footprint ``F`` at (wy0, wx0): its part of the canvas, or past the
-# edge of the canvas all of its window, read from the nearest canvas pixels.
+# (h, w) pixels from (oy, ox) of the canvas, the part of the step's
+# footprint ``F`` at (wy0, wx0): its part of the canvas, or all of its window,
+# where past the edge of the canvas each pixel reads the nearest one on it.
 
 
 @njit(cache=True, error_model="numpy")
@@ -3277,32 +3277,41 @@ def np_min(a, b):
 
 
 @njit(cache=True, error_model="numpy")
-def blade_rest(top, und, ids, fine, wide, ys, xs, stroke_id, stiff, F, wy0, wx0):
+def nearest(i, n):
+    """The nearest of the indices 0..n-1 to ``i``."""
+    return min(max(i, 0), n - 1)
+
+
+@njit(cache=True, error_model="numpy")
+def blade_rest(top, und, ids, fine, wide, oy, ox, h, w, stroke_id, stiff, F, wy0, wx0):
     """Where a blade of stiffness ``stiff`` rests on the solid surface (from
     the thread tops, ``fine``, to the highest ridges around, ``wide``); the
     wet paint of earlier strokes (single precision, as the paint) and the
     most of it; which pixels lie under the blade (mostly covered by its
-    chord); whether any do; and the IB plane of the top layer where it is
-    an earlier stroke's (0 elsewhere). See _knife._blade_rest."""
-    h, w = ys.shape[0], xs.shape[0]
+    chord); whether any do; the IB plane of the top layer where it is an
+    earlier stroke's (0 elsewhere), and of the layer below. See
+    _knife._blade_rest."""
+    H, W = top.shape[0], top.shape[1]
     rest = np.empty((h, w), np.float32)
     old_v = np.empty((h, w), np.float32)
     top_ib = np.empty((h, w), np.float32)
+    und_ib = np.empty((h, w), np.float32)
     under = np.empty((h, w), np.bool_)
     k = np.float32(stiff)
     zero = np.float32(0.0)
     vmax = -np.inf
     any_under = False
     for y in range(h):
-        Y = ys[y]
+        Y = nearest(oy + y, H)
         for x in range(w):
-            X = xs[x]
+            X = nearest(ox + x, W)
             rest[y, x] = fine[Y, X] + k * (wide[Y, X] - fine[Y, X])
             earlier = ids[Y, X] != stroke_id
             v = und[Y, X, IV] + (top[Y, X, IV] if earlier else zero)
             old_v[y, x] = v
             vmax = max(vmax, v)
             top_ib[y, x] = top[Y, X, IB] if earlier else zero
+            und_ib[y, x] = und[Y, X, IB]
             wy, wx = wy0 + y, wx0 + x
             ub = (
                 F[F_AA, wy, wx]
@@ -3311,23 +3320,24 @@ def blade_rest(top, und, ids, fine, wide, ys, xs, stroke_id, stiff, F, wy0, wx0)
             )
             under[y, x] = ub
             any_under = any_under or ub
-    return rest, old_v, vmax, under, any_under, top_ib
+    return rest, old_v, vmax, under, any_under, top_ib, und_ib
 
 
 @njit(cache=True, error_model="numpy")
-def blade_bins(floor, ys, xs, old_v, rest, under, F, wy0, wx0):
+def blade_bins(floor, oy, ox, old_v, rest, under, F, wy0, wx0):
     """The high points of the paint and surface under a blade (``floor`` and
     ``old_v``, the highest within a pixel), and, by position along the
     blade (whole pixels from its end), how many pixels lie under it and the
     sum of those and of where it rests (``rest``) over them: what
     _knife._along_blade averages along it. Returns (high points, each
     pixel's position, counts, sums of high points, sums of rest)."""
-    h, w = ys.shape[0], xs.shape[0]
+    H, W = floor.shape
+    h, w = old_v.shape
     hi_in = np.empty((h, w), np.float32)
     lat_min = np.inf
     for y in range(h):
         for x in range(w):
-            hi_in[y, x] = floor[ys[y], xs[x]] + old_v[y, x]
+            hi_in[y, x] = floor[nearest(oy + y, H), nearest(ox + x, W)] + old_v[y, x]
             lat_min = min(lat_min, F[F_LAT, wy0 + y, wx0 + x])
     hi = max_filter(hi_in, 1)
     b = np.empty((h, w), np.int64)
@@ -3392,20 +3402,21 @@ def blade_level(rest, film, k_film, gap, comb, chat, tilt, F, wy0, wx0):
 
 
 @njit(cache=True, error_model="numpy")
-def blade_slab(top, und, floor, ys, xs, level, surf_add, film, fill):
+def blade_slab(top, und, floor, oy, ox, level, surf_add, film, fill):
     """How much paint the blade lays under it over each pixel (see
     _knife._slab): it fills the share ``fill`` (1 - e^(-k exposure), worked
     out in numpy) of the gap between its ``level`` and the surface (the
     solid surface and the wet paint, plus ``surf_add`` where it is not
     empty), where the ``film`` on it reaches. Returns that and the surface."""
-    h, w = ys.shape[0], xs.shape[0]
+    H, W = floor.shape
+    h, w = level.shape
     add = surf_add.shape[0] > 0
     d = np.empty((h, w))
     surf = np.empty((h, w))
     for y in range(h):
-        Y = ys[y]
+        Y = nearest(oy + y, H)
         for x in range(w):
-            X = xs[x]
+            X = nearest(ox + x, W)
             s = np.float64(floor[Y, X] + top[Y, X, IV] + und[Y, X, IV])
             if add:
                 s += surf_add[y, x]
@@ -3414,6 +3425,28 @@ def blade_slab(top, und, floor, ys, xs, level, surf_add, film, fill):
             reach = smoothstep(1.3, 0.7, gap_px / np_max(film[y, x], 1e-9))
             d[y, x] = gap_px * reach * fill[y, x]
     return d, surf
+
+
+@njit(cache=True, error_model="numpy")
+def off_surface(top, ids, stroke_id, oy, ox, laid, on_y0, on_x0, on_h, on_w):
+    """What a blade over the (h, w) pixels from (oy, ox), past the edge of
+    the canvas, adds to the surface it reads off the nearest canvas pixel
+    (see _knife._whole_window): the slab ``laid`` out there, in place of
+    the stroke's own paint at that pixel. Nothing in the (on_h, on_w) part
+    at (on_y0, on_x0), on the canvas."""
+    H, W = ids.shape
+    h, w = laid.shape
+    out = np.empty((h, w))
+    for y in range(h):
+        Y = nearest(oy + y, H)
+        for x in range(w):
+            if on_y0 <= y < on_y0 + on_h and on_x0 <= x < on_x0 + on_w:
+                out[y, x] = 0.0
+                continue
+            X = nearest(ox + x, W)
+            own = top[Y, X, IV] if ids[Y, X] == stroke_id else np.float32(0.0)
+            out[y, x] = laid[y, x] - own
+    return out
 
 
 @njit(cache=True, error_model="numpy")
