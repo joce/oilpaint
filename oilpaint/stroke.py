@@ -24,6 +24,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 
@@ -31,8 +32,8 @@ from . import _engine as eng
 from ._dab import dab_pattern
 from ._engine import COLUMNS, IB, IV, PACKED
 from ._geometry import _NO_TABLES, _chord_table, _footprint_area, _signed_floor, _Step
-from ._hair import _NICK_WANDER, _NO_TEX, _hair_field
-from ._knife import _KNIFE_BAND_WANDER, _bilinear, _knife_step
+from ._hair import _NICK_WANDER, _NO_TEX, _NO_TEX2, _hair_field
+from ._knife import _before_the_blade, _knife_step, _wandering_bands
 from .brush import (
     _COL_X,
     _PHYSICS,
@@ -51,7 +52,7 @@ from .brush import (
     _smoothstep,
     load_paint,
 )
-from .noise import value_noise_1d, value_noise_2d
+from .noise import value_noise_1d
 from .spline import Path, Profile, as_path, evaluate_profile
 
 # --- lifting a brush off (see _Run._lift) ------------------------------------------
@@ -305,20 +306,18 @@ def apply_stroke(canvas, stroke: Stroke) -> Brush:
     and does not depend on the step size. Each segment is then one step of
     :func:`_brush_step` or :func:`_knife_step`.
     """
-    run = _Run(canvas, stroke)
+    run = _Run.begin(canvas, stroke)
     if run.bt.rigid:
-        for i in range(1, len(run.pts)):
-            s = run.footprint(i)
+        for st, tables in run.steps():
+            s = run.footprint(st, tables)
             if s is not None:
                 _knife_step(run, s)
     else:
         y0, y1, x0, x1 = run.bounds()
         if y0 < y1 and x0 < x1:
             run.pend = _pending(y0, y1, x0, x1)
-        for i in range(1, len(run.pts)):
-            got = run.step(i)
-            if got is not None:
-                _brush_step(run, *got)
+        for st, tables in run.steps():
+            _brush_step(run, st, tables)
     eng.settle_pending(run.cv, run.pend, run.stroke_id)
     if run.is_dab and not run.bt.rigid and run.bt.deposits:
         _dab_lift(run)
@@ -360,109 +359,240 @@ _NO_PENDING = (
 )
 
 
+class _Samples(NamedTuple):
+    """A stroke's path sampled into steps: the points, and the tool's width
+    (px), pressure, angle and roll (radians) at each."""
+
+    pts: np.ndarray
+    widths: np.ndarray
+    pressure: np.ndarray
+    angles: np.ndarray
+    rolls: np.ndarray
+    spacing: float  # the nominal step (px)
+    w_typ: float  # the stroke's typical width (px)
+    is_dab: bool  # a single point, pressed down with a tiny movement
+
+
+def _circular(bt: BrushType) -> bool:
+    """A round footprint: the same whichever way it turns."""
+    return bt.shape == "round" and abs(bt.aspect - 1.0) < 1e-6
+
+
+def _sample_stroke(path: Path, stroke: Stroke, bt: BrushType, eff: dict) -> _Samples:
+    """The stroke's path cut into steps about a quarter of its width long
+    (shorter where an elongated footprint turns), with the width (tapered at
+    the ends), pressure, angle and roll at each point. Raises ValueError if a
+    function of u gives a value that is not finite."""
+    n_probe = max(path.n_knots, 2) * 8
+    w_probe = evaluate_profile(
+        eff["width"],
+        np.linspace(0, 1, n_probe),
+        np.linspace(0, max(path.n_knots - 1, 0), n_probe),
+        path.n_knots,
+    )
+    w_typ = max(float(np.mean(w_probe)), 1.0)
+    spacing = float(_clip(0.25 * w_typ, 0.5, 8.0))
+    taper = eff["taper"]
+    t0, t1 = (taper, taper) if isinstance(taper, (int, float, np.number)) else taper
+
+    def sample(spacing):
+        pts, _, u, knot = path.sample(spacing)
+        widths = evaluate_profile(eff["width"], u, knot, path.n_knots)
+        if t0 > 0:
+            widths = widths * (0.25 + 0.75 * _smoothstep(0.0, t0, u))
+        if t1 > 0:
+            widths = widths * (0.25 + 0.75 * _smoothstep(1.0, 1.0 - t1, u))
+        widths = np.maximum(widths, 1.0)
+        pressure = _clip(
+            evaluate_profile(stroke.pressure, u, knot, path.n_knots), 0.0, 1.0
+        )
+        angles = np.radians(evaluate_profile(eff["angle"], u, knot, path.n_knots))
+        rolls = np.radians(
+            evaluate_profile(
+                stroke.roll if stroke.roll is not None else 0.0,
+                u,
+                knot,
+                path.n_knots,
+            )
+        )
+        _check_sampled(u, width=widths, pressure=pressure, angle=angles, roll=rolls)
+        return pts, widths, pressure, angles, rolls
+
+    pts, widths, pressure, angles, rolls = sample(spacing)
+    if not _circular(bt) and len(pts) > 2:
+        # An elongated footprint that turns between two steps leaves a thin
+        # wedge uncovered at the outside of the turn. Step finely enough that
+        # no turn moves the brush's edge by more than about half a pixel.
+        seg = np.diff(pts, axis=0)
+        heading = np.arctan2(seg[:, 1], seg[:, 0])
+        turn = np.abs(np.angle(np.exp(1j * np.diff(heading))))
+        twist = np.abs(np.diff(angles))[1:] if len(angles) > 2 else 0.0
+        reach_px = 0.5 * float(widths.max()) * (1.0 + bt.spread)
+        gap = float(np.max(turn + twist)) * reach_px
+        if gap > 0.5:
+            pts, widths, pressure, angles, rolls = sample(
+                max(spacing * 0.5 / gap, 0.35)
+            )
+    is_dab = len(pts) == 1
+    # a dab: press the brush down with a tiny movement (small next to its narrow
+    # side)
+    if is_dab:
+        nudge = max(0.05 * widths[0] * min(1.0, bt.aspect), 0.25)
+        pts = np.vstack([pts[0] - [nudge, 0], pts[0] + [nudge, 0]])
+        widths = np.repeat(widths, 2)
+        pressure = np.repeat(pressure, 2)
+        angles = np.repeat(angles, 2)
+        rolls = np.repeat(rolls, 2)
+    return _Samples(pts, widths, pressure, angles, rolls, spacing, w_typ, is_dab)
+
+
+class _Textures(NamedTuple):
+    """How a stroke wavers along its length (one value per point)."""
+
+    wobble: np.ndarray  # the width's slow wobble, -0.5..0.5
+    chatter: np.ndarray  # a knife's height, wavering as it is pushed
+    lip: np.ndarray  # how much the lips squeezed out along it swell
+    blade_tilt: float  # a knife pressed harder at one end of its blade
+    dab: np.ndarray  # the bristle tips a dab prints (see _dab)
+
+
+def _stroke_textures(rng, bt: BrushType, smp: _Samples, arc) -> _Textures:
+    """The first textures of a stroke, drawn from its random numbers in this
+    order (see :class:`_Run`)."""
+    pts, w_typ, spacing = smp.pts, smp.w_typ, smp.spacing
+    # A slow wobble of the width.
+    wobble = (
+        value_noise_1d(len(pts) + 2, max(2.0, 0.8 * w_typ / spacing), rng)[: len(pts)]
+        - 0.5
+    )
+    # a knife's height wavers as it is pushed along (faint ripples across the
+    # slab: chatter), and a hand never presses both ends of the blade quite
+    # equally (the slab is thicker towards one side); the lips squeezed out
+    # along a stroke swell and break
+    period = max(0.4 * w_typ, 2.0)  # ripples about half a blade width apart
+    ripple = value_noise_1d(int(arc[-1] / period) + 4, 1.0, rng)
+    chatter = np.interp(arc / period, np.arange(len(ripple)), ripple) - 0.5
+    swell = value_noise_1d(int(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
+    lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
+    blade_tilt = float(_clip(rng.normal(0.0, 0.08), -0.2, 0.2))
+    # the bristle tips a dab prints (see _dab)
+    dab = dab_pattern(bt, 0.5 * w_typ, rng) if smp.is_dab else _NO_TEX2
+    return _Textures(wobble, chatter, lip, blade_tilt, dab)
+
+
+def _radii(smp: _Samples, wobble, bt: BrushType) -> tuple[np.ndarray, np.ndarray]:
+    """The brush's half-width at every sample: the bristle bundle's size with
+    a slow wobble (nominal), and that as far as the hairs splay under pressure
+    (a pointed round paints thin with a light touch)."""
+    radii = 0.5 * smp.widths * (1.0 + 0.06 * wobble)
+    # the bristle bundle's size; pressure only splays it
+    nominal = radii.copy()
+    if bt.spread > 0:
+        radii = radii * (
+            (1.0 - bt.spread)
+            + bt.spread * (np.maximum(smp.pressure, 0.02) / 0.5) ** 0.8
+        )
+    return nominal, radii
+
+
+def _lift_reach(bt: BrushType, eff: dict, smp: _Samples, arc, radii):
+    """Lifting a brush off at the end (see _Run._lift): how far before the
+    end it starts, at most (px), and the arc length from which a step can be
+    lifting off."""
+    reach = (
+        0.0
+        if smp.is_dab or bt.rigid or not bt.deposits
+        else _LIFT_LEN * eff["lift"] * 1.5 * (2.0 * float(radii.max()) / 36.0) ** 0.3
+    )
+    pts = smp.pts
+    # (no step further than this from the end can be lifting off)
+    steps = np.linalg.norm(np.diff(pts, axis=0), axis=1) if len(pts) > 1 else [0.0]
+    lift_from = (
+        float(arc[-1]) - reach - float(np.max(steps)) - 2.0 * float(radii.max()) - 1.0
+    )
+    return reach, lift_from
+
+
+class _Segment(NamedTuple):
+    """Step ``i`` of a stroke, from point i-1 to point i."""
+
+    i: int
+    ax: float  # where it starts
+    ay: float
+    cx: float  # where it ends
+    cy: float
+    tx: float  # the way the tool moves
+    ty: float
+    ds: float  # how far (px)
+    p: float  # pressure
+    r0: float  # the tool's half-width at the start, at the end and on average
+    r1: float
+    r: float
+    Wd: float  # its width
+    phi: float  # its long side from the cross direction (radians)
+    side: float  # -1 for a brush turned past 90 degrees: its sides swapped
+
+
+class _Window(NamedTuple):
+    """The pixels around a step's swept segment, x0..x1 and y0..y1 (which may
+    stick out of the canvas), and their part on the canvas."""
+
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+    cx0: int
+    cy0: int
+    cx1: int
+    cy1: int
+
+    @property
+    def on_canvas(self) -> bool:
+        return self.cx0 < self.cx1 and self.cy0 < self.cy1
+
+
 class _Run:
     """One stroke in progress: the tool, the sampled path, and the textures
-    and constants that stay the same along the stroke."""
+    and constants that stay the same along the stroke.
 
-    def __init__(self, canvas, stroke: Stroke):
-        self.canvas = canvas
+    Every texture of a stroke is drawn from its own random numbers (one draw
+    from the canvas's seeds them, unless the stroke has a seed), always in
+    this order: the wobble of the width, the chatter, the swell of the lips
+    and the tilt of a blade (drawn for brushes too, which do not use them),
+    a dab's bristle tips, a knife's colour bands, the hair, how ragged the
+    end is, and at the end the peaks pulled up as the tool lifts off. Leaving
+    one out, or drawing one earlier, would change every stroke."""
+
+    @classmethod
+    def begin(cls, canvas, stroke: Stroke) -> _Run:
+        """Set ``stroke`` going on ``canvas``: its random numbers, the tool,
+        the path sampled, and the brush sized for the stroke and loaded with
+        its paint (a load it refuses raises before the stroke has an id)."""
         path: Path = as_path(stroke.path)
-        rng = self.rng = np.random.default_rng(
+        rng = np.random.default_rng(
             stroke.seed if stroke.seed is not None else canvas._rng.integers(1 << 31)
         )
-        brush, bt, eff = self.brush, self.bt, self.eff = _resolve(stroke)
-
-        n_probe = max(path.n_knots, 2) * 8
-        w_probe = evaluate_profile(
-            eff["width"],
-            np.linspace(0, 1, n_probe),
-            np.linspace(0, max(path.n_knots - 1, 0), n_probe),
-            path.n_knots,
-        )
-        w_typ = self.w_typ = max(float(np.mean(w_probe)), 1.0)
-        spacing = float(_clip(0.25 * w_typ, 0.5, 8.0))
-        taper = eff["taper"]
-        t0, t1 = (taper, taper) if isinstance(taper, (int, float, np.number)) else taper
-        circle = self.circle = bt.shape == "round" and abs(bt.aspect - 1.0) < 1e-6
-
-        def sample(spacing):
-            pts, _, u, knot = path.sample(spacing)
-            widths = evaluate_profile(eff["width"], u, knot, path.n_knots)
-            if t0 > 0:
-                widths = widths * (0.25 + 0.75 * _smoothstep(0.0, t0, u))
-            if t1 > 0:
-                widths = widths * (0.25 + 0.75 * _smoothstep(1.0, 1.0 - t1, u))
-            widths = np.maximum(widths, 1.0)
-            pressure = _clip(
-                evaluate_profile(stroke.pressure, u, knot, path.n_knots), 0.0, 1.0
-            )
-            angles = np.radians(evaluate_profile(eff["angle"], u, knot, path.n_knots))
-            rolls = np.radians(
-                evaluate_profile(
-                    stroke.roll if stroke.roll is not None else 0.0,
-                    u,
-                    knot,
-                    path.n_knots,
-                )
-            )
-            _check_sampled(u, width=widths, pressure=pressure, angle=angles, roll=rolls)
-            return pts, widths, pressure, angles, rolls
-
-        pts, widths, pressure, angles, rolls = sample(spacing)
-        if not circle and len(pts) > 2:
-            # An elongated footprint that turns between two steps leaves a thin
-            # wedge uncovered at the outside of the turn. Step finely enough that
-            # no turn moves the brush's edge by more than about half a pixel.
-            seg = np.diff(pts, axis=0)
-            heading = np.arctan2(seg[:, 1], seg[:, 0])
-            turn = np.abs(np.angle(np.exp(1j * np.diff(heading))))
-            twist = np.abs(np.diff(angles))[1:] if len(angles) > 2 else 0.0
-            reach_px = 0.5 * float(widths.max()) * (1.0 + bt.spread)
-            gap = float(np.max(turn + twist)) * reach_px
-            if gap > 0.5:
-                pts, widths, pressure, angles, rolls = sample(
-                    max(spacing * 0.5 / gap, 0.35)
-                )
-        is_dab = self.is_dab = len(pts) == 1
-        # a dab: press the brush down with a tiny movement (small next to its narrow
-        # side)
-        if is_dab:
-            nudge = max(0.05 * widths[0] * min(1.0, bt.aspect), 0.25)
-            pts = np.vstack([pts[0] - [nudge, 0], pts[0] + [nudge, 0]])
-            widths = np.repeat(widths, 2)
-            pressure = np.repeat(pressure, 2)
-            angles = np.repeat(angles, 2)
-            rolls = np.repeat(rolls, 2)
-        self.pts, self.pressure, self.angles, self.rolls = pts, pressure, angles, rolls
-
-        brush.width = float(np.mean(widths))
+        brush, bt, eff = _resolve(stroke)
+        smp = _sample_stroke(path, stroke, bt, eff)
+        # a load is measured in widths of the stroke (see Stroke.amount)
+        brush.width = float(np.mean(smp.widths))
         load_paint(brush, stroke.paint, stroke.amount)
-        self.lays_paint = bool(bt.deposits and brush.volume > 0)
+        return cls(canvas, rng, brush, bt, eff, smp)
 
-        self.tex = _NO_TEX
-        # A slow wobble of the width.
-        wobble = (
-            value_noise_1d(len(pts) + 2, max(2.0, 0.8 * w_typ / spacing), rng)[
-                : len(pts)
-            ]
-            - 0.5
-        )
-        # a knife's height wavers as it is pushed along (faint ripples across the
-        # slab: chatter), and a hand never presses both ends of the blade quite
-        # equally (the slab is thicker towards one side); the lips squeezed out
-        # along a stroke swell and break
+    def __init__(self, canvas, rng, brush: Brush, bt: BrushType, eff: dict, smp):
+        self.canvas, self.rng = canvas, rng
+        self.brush, self.bt, self.eff = brush, bt, eff
+        pts, is_dab, w_typ = smp.pts, smp.is_dab, smp.w_typ
+        self.pts, self.is_dab, self.w_typ = pts, is_dab, w_typ
+        self.lays_paint = bool(bt.deposits and brush.volume > 0)
         arc = self.arc = np.concatenate(
             [[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
         )
-        period = max(0.4 * w_typ, 2.0)  # ripples about half a blade width apart
-        ripple = value_noise_1d(int(arc[-1] / period) + 4, 1.0, rng)
-        self.chatter = np.interp(arc / period, np.arange(len(ripple)), ripple) - 0.5
-        swell = value_noise_1d(int(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
-        self.lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
-        self.blade_tilt = float(_clip(rng.normal(0.0, 0.08), -0.2, 0.2))
-        # the bristle tips a dab prints (see _dab)
-        if is_dab:
-            self.tex2 = dab_pattern(bt, 0.5 * w_typ, rng)
+        self.tex = _NO_TEX
+        tex = _stroke_textures(rng, bt, smp, arc)
+        self.chatter, self.blade_tilt = tex.chatter, tex.blade_tilt
+
+        circle = self.circle = _circular(bt)
         aspect = self.aspect = 1.0 if circle else bt.aspect
         self.reach = 1.0 if circle else float(np.hypot(1.0, aspect))
         # in half-widths squared
@@ -472,65 +602,19 @@ class _Run:
         self.col_u = (_RING_X if brush.ring else _COL_X) * 2.0 - 1.0
         # squeezed-out ridges are at most this wide (px); they lie just outside the mark
         self.margin = float(_clip(0.12 * w_typ * (1.0 + bt.spread), 0.6, 7.0)) + 1.0
-
-        # brush half-width at every sample: size, a slow wobble, and how far the
-        # hairs splay under pressure (a pointed round paints thin with a light touch)
-        radii = 0.5 * widths * (1.0 + 0.06 * wobble)
-        # the bristle bundle's size; pressure only splays it
-        self.nominal = radii.copy()
-        if bt.spread > 0:
-            radii = radii * (
-                (1.0 - bt.spread)
-                + bt.spread * (np.maximum(pressure, 0.02) / 0.5) ** 0.8
-            )
+        nominal, radii = _radii(smp, tex.wobble, bt)
         self.radii = radii
-        # soft brushes fade in and out over this many widths
-        self.feather = bt.softness * 3.0
-        # lifting a brush off at the end (see _lift): how far before the end it
-        # starts, at most (px)
-        self.lift_reach = (
-            0.0
-            if is_dab or bt.rigid or not bt.deposits
-            else _LIFT_LEN
-            * eff["lift"]
-            * 1.5
-            * (2.0 * float(radii.max()) / 36.0) ** 0.3
-        )
-        # (no step further than this from the end can be lifting off)
-        steps = np.linalg.norm(np.diff(pts, axis=0), axis=1) if len(pts) > 1 else [0.0]
-        self._lift_from = (
-            float(arc[-1])
-            - self.lift_reach
-            - float(np.max(steps))
-            - 2.0 * float(radii.max())
-            - 1.0
-        )
-
-        surf = canvas.surface
-        self.surface_acts = surf.affects_paint
-        # how much the surface texture (vs. the hair pattern) decides where a dry brush
-        # catches
-        self.tooth_w = float(_clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85))
+        self.lift_reach, self._lift_from = _lift_reach(bt, eff, smp, arc, radii)
 
         if bt.rigid:
-            # The wet paint lying on the canvas before the stroke: the blade's ends
-            # push it aside into lips (a pile it is carrying mostly rides along).
-            # (Over the part of the canvas the steps' windows cover, from
-            # (wet_y0, wet_x0); see step.)
             pad = float(radii.max()) * self.reach + 3.0
-            H, W = canvas.height, canvas.width
-            self.wet_y0 = min(max(math.floor(float(pts[:, 1].min()) - pad - 1), 0), H)
-            self.wet_x0 = min(max(math.floor(float(pts[:, 0].min()) - pad - 1), 0), W)
-            wet_y1 = max(math.ceil(float(pts[:, 1].max()) + pad + 1) + 1, self.wet_y0)
-            wet_x1 = max(math.ceil(float(pts[:, 0].max()) + pad + 1) + 1, self.wet_x0)
-            box = (slice(self.wet_y0, wet_y1), slice(self.wet_x0, wet_x1))
-            self.wet_before = canvas.top_v[box] + canvas.und_v[box]
-            # Paint on a blade isn't held in lanes like paint in bristles: its
-            # colour bands wander a little from side to side along the stroke.
-            period = max(0.5 * w_typ, 4.0)
-            n_s = int(arc[-1] / period) + 3
-            self.bands = value_noise_2d(8 * n_s, 64, 8.0, rng)
-            self.band_period = period
+            (
+                self.wet_y0,
+                self.wet_x0,
+                self.wet_before,
+                self.bands,
+                self.band_period,
+            ) = _before_the_blade(canvas, rng, pts, pad, w_typ, arc)
 
         self.stroke_id = canvas._new_stroke_id()
         self.dry = False
@@ -539,12 +623,12 @@ class _Run:
         # the samples as plain floats, for the per-step arithmetic
         self._pts = [(float(x), float(y)) for x, y in pts]
         self._pressure, self._angles, self._rolls = (
-            pressure.tolist(),
-            angles.tolist(),
-            rolls.tolist(),
+            smp.pressure.tolist(),
+            smp.angles.tolist(),
+            smp.rolls.tolist(),
         )
-        self._radii, self._nominal = radii.tolist(), self.nominal.tolist()
-        self._arc, self._lip = arc.tolist(), self.lip.tolist()
+        self._radii, self._nominal = radii.tolist(), nominal.tolist()
+        self._arc, self._lip = arc.tolist(), tex.lip.tolist()
 
         # what the compiled engine works on
         self.cv = (canvas.top, canvas.und, canvas.top_a, canvas.und_a, canvas.top_id)
@@ -554,14 +638,16 @@ class _Run:
         # the brush's hair: where its bristle clumps run along the stroke (see
         # _hair_field)
         hair_at = (0.0, 0.0, 1.0, 1.0)
-        if not is_dab:
+        if is_dab:
+            self.tex2 = tex.dab
+        else:
             pad = float(radii.max()) * self.reach + 4.0
             # (a blade's nicks score nearly straight lines, which come and go
             # as grit catches and paint closes over them)
             self.tex2, hair_at = _hair_field(
                 bt,
                 w_typ,
-                float(self.nominal.max()),
+                float(nominal.max()),
                 -pad,
                 float(arc[-1]) + pad,
                 rng,
@@ -569,15 +655,22 @@ class _Run:
             )
         # how ragged this stroke's end is (each stroke ends its own way)
         self.lift_var = float(0.4 + 1.2 * rng.random()) if self.lift_reach > 0 else 1.0
-        self.K = eng.StrokeConsts(
+        self.K = self._consts(hair_at, smp.spacing)
+
+    def _consts(self, hair_at, spacing: float):
+        """The stroke's settings as the engine takes them."""
+        bt, eff, surf = self.bt, self.eff, self.canvas.surface
+        return eng.StrokeConsts(
             stroke_id=int(self.stroke_id),
-            circle=bool(circle),
-            is_dab=bool(is_dab),
-            ring=bool(brush.ring),
+            circle=bool(self.circle),
+            is_dab=bool(self.is_dab),
+            ring=bool(self.brush.ring),
             rigid=bool(bt.rigid),
             deposits=bool(bt.deposits),
             margin=float(self.margin),
-            tooth_w=self.tooth_w,
+            # how much the surface texture (vs. the hair pattern) decides
+            # where a dry brush catches
+            tooth_w=float(_clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85)),
             drag=float(eff["drag"]),
             pickup=float(eff["pickup"]),
             streaks=float(eff["streaks"]),
@@ -592,28 +685,51 @@ class _Run:
             softness=float(bt.softness),
             slant=float(bt.slant),
             clumps=float(bt.clumps),
-            feather=float(self.feather),
+            # soft brushes fade in and out over this many widths
+            feather=float(bt.softness * 3.0),
             # soft brushes are lowered and lifted gently, so their ends feather
-            end_k=1.0 if is_dab else max(0.0, 1.0 - 1.5 * float(bt.softness)),
-            surface_acts=bool(self.surface_acts),
+            end_k=1.0 if self.is_dab else max(0.0, 1.0 - 1.5 * float(bt.softness)),
+            surface_acts=bool(surf.affects_paint),
             slickness=float(surf.slickness),
             absorbency=float(surf.absorbency),
             surface_tooth=float(surf.tooth),
-            arc_end=float(arc[-1]),
+            arc_end=float(self.arc[-1]),
             hair_s0=hair_at[0],
             hair_x0=hair_at[1],
             hair_ds=hair_at[2],
             hair_dx=hair_at[3],
             spacing=float(spacing),
-            bundle=float(brush.width),
+            bundle=float(self.brush.width),
         )
 
     # ------------------------------------------------------------------
+    def steps(self):
+        """The steps of the stroke that reach the canvas, in order, each as
+        :meth:`step` gives it. Painting past the edge of the canvas uses up
+        paint all the same. (Each step is worked out once the one before it
+        has been painted: it starts from the brush as that left it.)"""
+        for i in range(1, len(self._pts)):
+            seg = self._segment(i)
+            if seg is None:
+                continue
+            win = self._window(seg)
+            if win.on_canvas:
+                yield self._step(seg, win)
+            else:
+                _use_paint_off_canvas(self.brush, seg.Wd, seg.ds, seg.p)
+
     def step(self, i: int):
         """Step ``i`` of the stroke, from point i-1 to point i: its scalars (an
         :class:`_engine.Step`) and the footprint's chord tables, or None if
-        the tool doesn't reach the canvas there."""
-        canvas, brush, bt = self.canvas, self.brush, self.bt
+        the tool doesn't move or doesn't reach the canvas there."""
+        seg = self._segment(i)
+        if seg is None:
+            return None
+        win = self._window(seg)
+        return self._step(seg, win) if win.on_canvas else None
+
+    def _segment(self, i: int) -> _Segment | None:
+        """How the tool moves over step ``i`` (None if it doesn't)."""
         # (plain floats: this runs at every step)
         pts, pressure, angles, radii = (
             self._pts,
@@ -621,7 +737,6 @@ class _Run:
             self._angles,
             self._radii,
         )
-        H, W = canvas.height, canvas.width
         (ax, ay), (cx, cy) = pts[i - 1], pts[i]
         ds = math.hypot(cx - ax, cy - ay)
         if ds < 1e-9:
@@ -630,42 +745,50 @@ class _Run:
         p = 0.5 * (pressure[i] + pressure[i - 1])
         r0, r1 = radii[i - 1], radii[i]
         r = 0.5 * (r0 + r1)
-        Wd = 2.0 * r
         # orientation of the brush's long side relative to the stroke's cross direction
         ang = 0.5 * (angles[i] + angles[i - 1])
         phi = ang if self.eff["follow_path"] else ang - math.atan2(tx, -ty)
         # a brush turned past 90 degrees has its sides swapped
         side = 1.0 if math.cos(phi) >= 0 else -1.0
         phi = (phi + math.pi / 2) % math.pi - math.pi / 2
+        return _Segment(i, ax, ay, cx, cy, tx, ty, ds, p, r0, r1, r, 2.0 * r, phi, side)
 
-        # the window around the swept segment, and its part on the canvas
-        R = max(r0, r1) * self.reach + (3.0 if bt.rigid else 0.0)
+    def _window(self, seg: _Segment) -> _Window:
+        """The window around the swept segment, and its part on the canvas."""
+        H, W = self.canvas.height, self.canvas.width
+        ax, ay, cx, cy = seg.ax, seg.ay, seg.cx, seg.cy
+        R = max(seg.r0, seg.r1) * self.reach + (3.0 if self.bt.rigid else 0.0)
         x0, x1 = math.floor(min(ax, cx) - R - 1), math.ceil(max(ax, cx) + R + 1) + 1
         y0, y1 = math.floor(min(ay, cy) - R - 1), math.ceil(max(ay, cy) + R + 1) + 1
-        cx0, cx1, cy0, cy1 = max(x0, 0), min(x1, W), max(y0, 0), min(y1, H)
-        if cx0 >= cx1 or cy0 >= cy1:
-            _use_paint_off_canvas(brush, Wd, ds, p)
-            return None
+        return _Window(x0, y0, x1, y1, max(x0, 0), max(y0, 0), min(x1, W), min(y1, H))
+
+    def _step(self, seg: _Segment, win: _Window):
+        """Step ``seg`` over the window ``win``, as :meth:`step` gives it."""
+        i, p, r, Wd, side = seg.i, seg.p, seg.r, seg.Wd, seg.side
+        x0, y0, cx0, cy0 = win.x0, win.y0, win.cx0, win.cy0
         if self.circle:
             tables, lmax, across, h_max, uscale = _NO_TABLES, 1.0, 1.0, 1.0, side
         else:
-            grid, c_tab, h_tab, lmax, h_max = _chord_table(bt.shape, self.aspect, phi)
+            grid, c_tab, h_tab, lmax, h_max = _chord_table(
+                self.bt.shape, self.aspect, seg.phi
+            )
             tables = (grid, c_tab, h_tab)
-            sf = _signed_floor(math.cos(phi), self.aspect)
+            sf = _signed_floor(math.cos(seg.phi), self.aspect)
             across, uscale = abs(sf), side / sf
         # On a thin brush one pixel spans several bristle columns: sample across
         # it so that every column reaches the canvas (else paint in the columns
         # between pixel centres would only come out by diffusion, and thin
         # strokes would run long).
         span = 1.0 / max(r * across, 1e-6)
-        span_cols = span * COLUMNS * (0.25 if brush.ring else 0.5)
-        n = len(pts)
+        span_cols = span * COLUMNS * (0.25 if self.brush.ring else 0.5)
+        n = len(self._pts)
         lift_len, lift_amp = (
-            self._lift(i, p, Wd, ds)
+            self._lift(i, p, Wd, seg.ds)
             if self.lift_reach > 0 and self._arc[i] >= self._lift_from
             else (0.0, 0.0)
         )
         overload = self._overload(i, p) if self.is_dab else 0.0
+        pressure, nominal = self._pressure, self._nominal
         st = eng.Step(
             i=i,
             first=i == 1,
@@ -673,40 +796,40 @@ class _Run:
             touchdown=i == 1 or self.is_dab,
             x0=x0,
             y0=y0,
-            hh=y1 - y0,
-            ww=x1 - x0,
+            hh=win.y1 - y0,
+            ww=win.x1 - x0,
             cy0=cy0,
             cx0=cx0,
-            ch=cy1 - cy0,
-            cw=cx1 - cx0,
+            ch=win.cy1 - cy0,
+            cw=win.cx1 - cx0,
             wy0=cy0 - y0,
             wx0=cx0 - x0,
-            cx=cx,
-            cy=cy,
-            tx=tx,
-            ty=ty,
-            ds=ds,
+            cx=seg.cx,
+            cy=seg.cy,
+            tx=seg.tx,
+            ty=seg.ty,
+            ds=seg.ds,
             p=p,
             p_now=pressure[i],
             p_before=pressure[i - 1],
-            r0=r0,
-            r1=r1,
+            r0=seg.r0,
+            r1=seg.r1,
             r=r,
             Wd=Wd,
             # how loaded the brush is is relative to its real size
-            Wn=self._nominal[i - 1] + self._nominal[i],
+            Wn=nominal[i - 1] + nominal[i],
             side=side,
             uscale=uscale,
             lmax=lmax,
             h_tab_max=h_max,
             arc_i=self._arc[i],
             lip=self._lip[i],
-            wet=float(brush.wet),
+            wet=float(self.brush.wet),
             dry=bool(self.dry),
             span=span,
             nsub=int(min(max(math.ceil(span_cols / 2.0 - 1e-9), 1), 8)),
             rho=0.5 * (self._rolls[i] + self._rolls[i - 1]),
-            splay=r / max(0.5 * (self._nominal[i - 1] + self._nominal[i]), 1e-9),
+            splay=r / max(0.5 * (nominal[i - 1] + nominal[i]), 1e-9),
             lift_len=lift_len,
             lift_amp=lift_amp,
             overload=overload,
@@ -788,34 +911,22 @@ class _Run:
             return none
         return float(L), float(amp)
 
-    def footprint(self, i: int) -> _Step | None:
-        """Where the tool touches the canvas while it moves along segment
-        ``i`` (from point i-1 to point i), or None if it touches nothing.
+    def footprint(self, st, tables) -> _Step | None:
+        """Where the tool touches the canvas while it moves along the step
+        ``st`` (with the chord tables ``tables``, see :meth:`step`), or None
+        if it touches nothing.
 
         For every pixel we compute its *exposure* (see :func:`apply_stroke`),
         its anti-aliased coverage, and where it sits under the brush (across
         the bristles, along the motion); see :func:`_engine.footprint`. And
         which bristle columns are above each pixel."""
-        got = self.step(i)
-        if got is None:
-            return None
-        st, tables = got
         F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables)
         if not hit:
             return None
         s = _Step(st, F, tables)
         u_px = s.ucoord[s.wsl]
         if self.bt.rigid:
-            # paint on a blade isn't held in lanes: its colour bands wander a little
-            along_stroke = _clip(
-                (self.arc[i] + s.along[s.wsl]) / self.band_period * 8.0,
-                0.0,
-                self.bands.shape[0] - 1.001,
-            )
-            u_band = _clip((u_px + 1.0) * 0.5 * 63.0, 0.0, 62.999)
-            u_px = u_px + _KNIFE_BAND_WANDER * (
-                2.0 * _bilinear(self.bands, along_stroke, u_band) - 1.0
-            )
+            u_px = _wandering_bands(self, s, u_px)
         s.taps = eng.bristle_taps(u_px, st.span, st.nsub, self.brush.ring, st.rho)
         return s
 

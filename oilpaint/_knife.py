@@ -14,7 +14,7 @@ from ._engine import COLUMNS, IB, IV, PACKED
 from ._geometry import _Step
 from ._hair import _NO_TEX2
 from .brush import _clip, _smoothstep
-from .noise import aniso_noise
+from .noise import aniso_noise, value_noise_2d
 
 if TYPE_CHECKING:
     from .stroke import _Run
@@ -54,6 +54,44 @@ _VISCOUS = 3
 # How deep a knife sinks into wet paint already on the canvas, as a share of
 # its thickness: pressure ** _KNIFE_SINK (light touch: skims; hard: nearly all).
 _KNIFE_SINK = 1.8
+
+
+def _before_the_blade(canvas, rng, pts, pad, w_typ, arc):
+    """What a knife stroke starts from: the wet paint lying on the canvas
+    before it, which the blade's ends push aside into lips (a pile it is
+    carrying mostly rides along), over the part of the canvas within ``pad``
+    px of its path, from (wet_y0, wet_x0); and the bands its colours wander
+    in (see :func:`_wandering_bands`) and their period along the stroke (px).
+    Returns (wet_y0, wet_x0, wet_before, bands, band_period)."""
+    H, W = canvas.height, canvas.width
+    wet_y0 = min(max(math.floor(float(pts[:, 1].min()) - pad - 1), 0), H)
+    wet_x0 = min(max(math.floor(float(pts[:, 0].min()) - pad - 1), 0), W)
+    wet_y1 = max(math.ceil(float(pts[:, 1].max()) + pad + 1) + 1, wet_y0)
+    wet_x1 = max(math.ceil(float(pts[:, 0].max()) + pad + 1) + 1, wet_x0)
+    box = (slice(wet_y0, wet_y1), slice(wet_x0, wet_x1))
+    wet_before = canvas.top_v[box] + canvas.und_v[box]
+    # Paint on a blade isn't held in lanes like paint in bristles: its
+    # colour bands wander a little from side to side along the stroke.
+    period = max(0.5 * w_typ, 4.0)
+    n_s = int(arc[-1] / period) + 3
+    bands = value_noise_2d(8 * n_s, 64, 8.0, rng)
+    return wet_y0, wet_x0, wet_before, bands, period
+
+
+def _wandering_bands(run: _Run, s: _Step, u_px):
+    """Where across the blade (``u_px``, -1..1 per pixel of the step's part
+    of the canvas) the paint a knife lays comes from: paint on a blade isn't
+    held in lanes, so its colour bands wander a little from side to side
+    along the stroke."""
+    along_stroke = _clip(
+        (run.arc[s.st.i] + s.along[s.wsl]) / run.band_period * 8.0,
+        0.0,
+        run.bands.shape[0] - 1.001,
+    )
+    u_band = _clip((u_px + 1.0) * 0.5 * 63.0, 0.0, 62.999)
+    return u_px + _KNIFE_BAND_WANDER * (
+        2.0 * _bilinear(run.bands, along_stroke, u_band) - 1.0
+    )
 
 
 def _knife_step(run: _Run, s: _Step) -> None:
