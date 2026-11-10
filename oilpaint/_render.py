@@ -456,19 +456,21 @@ def _cover(wt, pt, film0, film1, dry0, dry1):
 
 
 @njit(cache=True, error_model="numpy", nogil=True)
-def _gloss(h, x, y, gx, gy, nz, ndl, mx, my, wt, cover, p):
-    """The highlight of pixel (x, y), relative to flat white paint under the
-    lamp (before the share of the lamp it sees): see shade for ``p``."""
+def _smoothstep(e0, e1, v):
+    u = min(max((v - e0) / (e1 - e0), 0.0), 1.0)
+    return u * u * (3.0 - 2.0 * u)
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _mirror(gx, gy, hxx, hyy, hxy, nz, ndl, mx, my, wt, p):
+    """The oil's mirror image of the lamp at a pixel of slope (gx, gy) and
+    curvature (hxx, hyy, hxy), on its own, relative to flat white paint under
+    the lamp: how glossy its paint is when wet or dry (``wt`` its wet
+    thickness) times the lobe (_lobe). Before the share of the lamp it sees
+    and how far its film is thick enough to shine (``cover``)."""
     footprint, a2_wet, a2_dry, gloss_wet, gloss_dry, r0, r1 = p
-    H, W = h.shape
-    xm, xp = max(x - 1, 0), min(x + 1, W - 1)
-    ym, yp = max(y - 1, 0), min(y + 1, H - 1)
-    h0 = h[y, x]
     wetness = min(wt / WET_SURFACE, 1.0)
     # the slopes inside the pixel spread its highlight
-    hxx = h[y, xp] - 2.0 * h0 + h[y, xm]
-    hyy = h[yp, x] - 2.0 * h0 + h[ym, x]
-    hxy = 0.25 * (h[yp, xp] - h[yp, xm] - h[ym, xp] + h[ym, xm])
     cxx = footprint * (hxx * hxx + hxy * hxy)
     cyy = footprint * (hyy * hyy + hxy * hxy)
     cxy = footprint * hxy * (hxx + hyy)
@@ -480,7 +482,137 @@ def _gloss(h, x, y, gx, gy, nz, ndl, mx, my, wt, cover, p):
     k = 0.5 * math.sqrt(a2)
     g = _smith(nl, k) * _smith(nz, k) / nz
     strength = gloss_dry + (gloss_wet - gloss_dry) * wetness
-    return strength * cover * _lobe(dx, dy, mx, my, cxx, cxy, cyy, a2, g, r0, r1)
+    return strength * _lobe(dx, dy, mx, my, cxx, cxy, cyy, a2, g, r0, r1)
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _near_row(src, r, out):
+    """``out[x]`` = 1 if ``src`` (one row) is not 0 anywhere within ``r`` of
+    x, else 0: a running window, the same as a brute-force search."""
+    W = src.shape[0]
+    last = -(r + 1)  # the last column with a highlight, up to x + r
+    for x in range(min(r, W - 1) + 1):
+        if src[x] != 0.0:
+            last = x
+    for x in range(W):
+        ahead = x + r
+        if ahead < W and src[ahead] != 0.0:
+            last = ahead
+        out[x] = 1 if last >= x - r else 0
+
+
+#: Weights of the 5 x 5 pixels whose curvature tells a crest (_crest).
+BINOMIAL = (1 / 16, 4 / 16, 6 / 16, 4 / 16, 1 / 16)
+#: A gathering shorter than this (pixels) is no gathering: the pixel keeps
+#: its own highlight exactly.
+NO_REACH = 1e-3
+#: Pixels this near the border are not gathered: the curvature stencil (2 px)
+#: and its blur (2 px) would read beyond the canvas.
+EDGE = 4
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _blur_row(src, out):
+    """``src`` (3 x W: one row of H H^T) blurred along the row with BINOMIAL
+    weights (edges clamped), into ``out``: the first half of _crest's 5 x 5
+    blur, done once per row."""
+    W = src.shape[1]
+    for x in range(W):
+        for f in range(3):
+            acc = 0.0
+            for i in range(-2, 3):
+                acc += BINOMIAL[i + 2] * src[f, min(max(x + i, 0), W - 1)]
+            out[f, x] = acc
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _crest(sig, R, H, W, x, y, gate):
+    """Along which direction, and how far (0..1 of the span), the highlight
+    of pixel (x, y) is gathered: along a narrow crest, furrow or lip only.
+    From the curvature H of the 5 x 5 pixels around it, BINOMIAL-weighted:
+    ``sig`` holds H H^T of each pixel (second differences two pixels apart
+    in x and y, as the cross term's, so that a crest reads the same at any
+    slant), already blurred along the rows, its rows at the row number
+    masked with ``R``. Its larger principal curvature k1 runs across a
+    crest, the smaller k2 along it. The share is a smoothstep of the
+    anisotropy (|k1| - |k2|) / (|k1| + |k2|) times one of |k1| (``gate``:
+    anisotropy from, to; curvature from, to), so that domes and round dabs
+    (k1 ~ k2) and broad, gently curved slopes keep their own highlight. The
+    direction is that of least curvature.
+
+    Not within EDGE pixels of the canvas's border, where the stencils run
+    off the canvas (clamped, they read a slope as a curvature) and the
+    gathering would. And a crest only about one pixel wide at a shallow
+    slant reads too little anisotropy (sigma 0.4 at 22.5 degrees: 0.44) and
+    is not gathered: it still beads."""
+    if x < EDGE or y < EDGE or x >= W - EDGE or y >= H - EDGE:
+        return 1.0, 0.0, 0.0
+    a0, a1, k0, k1 = gate
+    sxx = sxy = syy = 0.0
+    for j in range(-2, 3):
+        row = min(max(y + j, 0), H - 1) & R
+        w = BINOMIAL[j + 2]
+        sxx += w * sig[row, 0, x]
+        sxy += w * sig[row, 1, x]
+        syy += w * sig[row, 2, x]
+    tr = sxx + syy
+    d = math.sqrt((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy)
+    l1 = 0.5 * (tr + d)
+    l2 = max(0.5 * (tr - d), 0.0)
+    c1, c2 = math.sqrt(l1), math.sqrt(l2)  # rms principal curvatures
+    if not c1 > 0.0:
+        return 1.0, 0.0, 0.0
+    share = _smoothstep(a0, a1, (c1 - c2) / (c1 + c2)) * _smoothstep(k0, k1, c1)
+    if not share > 0.0:
+        return 1.0, 0.0, 0.0
+    # the eigenvector of the smaller eigenvalue: along the crest
+    if sxx >= syy:
+        tx, ty = -sxy, l1 - syy
+    else:
+        tx, ty = -(l1 - sxx), sxy
+    n = math.sqrt(tx * tx + ty * ty)
+    if not n > 0.0:
+        return 1.0, 0.0, 0.0
+    return tx / n, ty / n, share
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _tap(lob, R, H, W, fx, fy, tx, ty):
+    """The own highlight (``lob``, row number masked with ``R``) at the point (fx, fy)
+    of a line along a crest (direction (tx, ty)): interpolated along the
+    row nearest the point if the line is closer to the rows, else along the
+    nearest column, never between rows (columns): what it reads lies at
+    most about one diagonal pixel step (0.7 px) across the line from the point,
+    where a bilinear
+    blend would reach a pixel away."""
+    if abs(tx) >= abs(ty):
+        r = min(int(fy + 0.5), H - 1) & R
+        i = int(fx)
+        a = fx - i
+        return (1.0 - a) * lob[r, i] + a * lob[r, min(i + 1, W - 1)]
+    i = min(int(fx + 0.5), W - 1)
+    j = int(fy)
+    a = fy - j
+    return (1.0 - a) * lob[j & R, i] + a * lob[min(j + 1, H - 1) & R, i]
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _gather(lob, R, H, W, x, y, tx, ty, reach, taps):
+    """The highlight of pixel (x, y) gathered along a crest: the own
+    highlights (_tap) at ``taps`` points each side along (tx, ty) up to
+    ``reach`` pixels away, tent-weighted, so that a glint on a crest that
+    runs slantwise across the pixels is a line rather than beads at each
+    step. The centre point is the pixel itself."""
+    total = 0.0
+    weights = 0.0
+    for k in range(-taps, taps + 1):
+        w = 1.0 - abs(k) / (taps + 1.0)
+        o = reach * k / taps
+        fx = min(max(x + o * tx, 0.0), W - 1.0)
+        fy = min(max(y + o * ty, 0.0), H - 1.0)
+        total += w * _tap(lob, R, H, W, fx, fy, tx, ty)
+        weights += w
+    return total / weights
 
 
 @njit(cache=True, error_model="numpy", nogil=True)
@@ -512,6 +644,9 @@ def shade(
     film1,
     dry0,
     dry1,
+    gloss_span,
+    gloss_taps,
+    crest_gate,
     out,
 ):
     """Light the height field ``h`` (pixels) and the linear colour ``lin``
@@ -525,7 +660,19 @@ def shade(
     holds ``h`` box-blurred at the ambient-occlusion radii (one map per row
     of ``ao``: radius, weight); ``paint`` and ``wet`` are the total and the
     wet paint thickness; ``matte`` the sunk-in mattness, or an empty (0, 0)
-    array for none."""
+    array for none.
+
+    Each pixel's own mirror image of the lamp (_mirror) is gathered along a
+    narrow crest (_crest, ``crest_gate``) over ``gloss_span`` pixels each
+    way (_gather, ``gloss_taps`` points each side); then the pixel's own
+    film (``cover``), the share of the lamp it sees and its mattness apply.
+    Rows are worked out a few ahead of the one being lit and kept in
+    buffers of a few rows (float64, and uint8 for whether an own highlight
+    lies near): no map the size of the canvas. Exact: with ``gloss_span``
+    0 or the gate shut, the highlight is each pixel's own; flat paint, paint
+    gently modelled (beyond the cut-off), ``gloss`` 0 and pixels with no own
+    highlight within ``ceil(gloss_span) + 1`` pixels are as they would be
+    without gathering."""
     H, W = h.shape
     # the half vector between the lamp and the viewer (straight in front)
     hx, hy, hz = lx3, ly3, lz3 + 1.0
@@ -548,37 +695,103 @@ def shade(
         gloss_cut,
     )
     has_matte = matte.shape[0] > 0
-    for y in range(H):
-        for x in range(W):
-            h0 = h[y, x]
-            gx, gy = _slope(h, x, y)
-            nz = 1.0 / math.sqrt(1.0 + gx * gx + gy * gy)
-            ndl = (lz3 - gx * lx3 - gy * ly3) * nz
-            v = vis[y, x]
-
-            # the lamp, less what paint between hides of it; the room, less
-            # what hollows and grooves hide of it
-            direct = max(ndl, 0.0) / lz3 * (1.0 - shadow_depth * (1.0 - v))
-            occ, cav = _occlusion(aos, ao, ao_eps, y, x, h0)
-            sky = (0.5 + 0.5 * nz) * max(1.0 - occ, 0.0)
-            shading = (ambient * sky + (1.0 - ambient) * direct) * (1.0 - cavity * cav)
-
-            # the oil mirrors the lamp
-            spec = 0.0
-            pt = paint[y, x]
-            wt = wet[y, x]
-            if (wt > film0 or pt > dry0) and direct > 0.0:
-                cover = _cover(wt, pt, film0, film1, dry0, dry1)
-                spec = (
-                    spec_k * v * _gloss(h, x, y, gx, gy, nz, ndl, mx, my, wt, cover, gp)
+    has_gloss = gloss_wet > 0.0 or gloss_dry > 0.0
+    gather = has_gloss and gloss_span > NO_REACH and gloss_taps > 0
+    # rows ahead of the one being lit that the gathering reads (a tap up to
+    # the span away, and the next pixel interpolated with it), and the rows
+    # kept: as many behind
+    lag = int(math.ceil(gloss_span)) + 1 if gather else 0
+    # rows are kept in buffers of a power of two rows, R + 1, indexed by the
+    # row number masked with R
+    R = 1
+    while 2 * lag > R:
+        R = 2 * R + 1
+    shading = np.empty((R + 1, W))
+    recv = np.empty((R + 1, W))  # what of its highlight a pixel shows
+    lob = np.zeros((R + 1, W))  # each pixel's own mirror image of the lamp
+    sig = np.zeros((3, W))  # H H^T of each pixel's curvature, this row
+    row_sig = np.zeros((R + 1, 3, W))  # the same blurred along the rows
+    near = np.zeros((R + 1, W), np.uint8)  # an own highlight within lag in the row
+    for yy in range(H + lag):
+        if yy < H:
+            y = yy
+            r = y & R
+            ym, yp = max(y - 1, 0), min(y + 1, H - 1)
+            for x in range(W):
+                h0 = h[y, x]
+                gx, gy = _slope(h, x, y)
+                nz = 1.0 / math.sqrt(1.0 + gx * gx + gy * gy)
+                ndl = (lz3 - gx * lx3 - gy * ly3) * nz
+                v = vis[y, x]
+                # the lamp, less what paint between hides of it; the room,
+                # less what hollows and grooves hide of it
+                direct = max(ndl, 0.0) / lz3 * (1.0 - shadow_depth * (1.0 - v))
+                occ, cav = _occlusion(aos, ao, ao_eps, y, x, h0)
+                sky = (0.5 + 0.5 * nz) * max(1.0 - occ, 0.0)
+                shading[r, x] = (ambient * sky + (1.0 - ambient) * direct) * (
+                    1.0 - cavity * cav
                 )
-                if has_matte:
-                    spec *= 1.0 - MATTE_GLOSS_LOSS * matte[y, x]
+                # the oil mirrors the lamp
+                lob[r, x] = 0.0
+                recv[r, x] = 0.0
+                if not has_gloss:
+                    continue
+                xm, xp = max(x - 1, 0), min(x + 1, W - 1)
+                hxx = h[y, xp] - 2.0 * h0 + h[y, xm]
+                hyy = h[yp, x] - 2.0 * h0 + h[ym, x]
+                hxy = 0.25 * (h[yp, xp] - h[yp, xm] - h[ym, xp] + h[ym, xm])
+                if gather:
+                    # the curvature for _crest: second differences two
+                    # pixels apart, the same span as hxy's, so that a crest
+                    # reads the same at any slant
+                    wxx = 0.25 * (
+                        h[y, min(x + 2, W - 1)] - 2.0 * h0 + h[y, max(x - 2, 0)]
+                    )
+                    wyy = 0.25 * (
+                        h[min(y + 2, H - 1), x] - 2.0 * h0 + h[max(y - 2, 0), x]
+                    )
+                    sig[0, x] = wxx * wxx + hxy * hxy
+                    sig[1, x] = hxy * (wxx + wyy)
+                    sig[2, x] = wyy * wyy + hxy * hxy
+                pt = paint[y, x]
+                wt = wet[y, x]
+                if (wt > film0 or pt > dry0) and direct > 0.0:
+                    lob[r, x] = _mirror(gx, gy, hxx, hyy, hxy, nz, ndl, mx, my, wt, gp)
+                    f = spec_k * v * _cover(wt, pt, film0, film1, dry0, dry1)
+                    if has_matte:
+                        f *= 1.0 - MATTE_GLOSS_LOSS * matte[y, x]
+                    recv[r, x] = f
+            if gather:
+                _near_row(lob[r], lag, near[r])
+                _blur_row(sig, row_sig[r])
+        y = yy - lag
+        if y < 0:
+            continue
+        r = y & R
+        for x in range(W):
+            spec = 0.0
+            f = recv[r, x]
+            if f > 0.0:
+                own = lob[r, x]
+                if gather:
+                    # any own highlight within reach (a lag-square)?
+                    found = False
+                    for j in range(max(y - lag, 0), min(y + lag, H - 1) + 1):
+                        if near[j & R, x]:
+                            found = True
+                            break
+                    if found:
+                        tx, ty, share = _crest(row_sig, R, H, W, x, y, crest_gate)
+                        reach = gloss_span * share
+                        if reach > NO_REACH:
+                            own = _gather(lob, R, H, W, x, y, tx, ty, reach, gloss_taps)
+                spec = f * own
 
             # colour: the lights roll off to white rather than clip
+            s = shading[r, x]
             for c in range(3):
                 base = lin[y, x, c]
-                val = base * shading + spec
+                val = base * s + spec
                 if val > base and base < 1.0:
                     room = 1.0 - base
                     u = (val - base) / room

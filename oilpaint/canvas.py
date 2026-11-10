@@ -620,11 +620,14 @@ class Canvas:
           slopes that face halfway between the lamp and the viewer: a sharp
           highlight (GGX, ROUGH_WET; weaker and a little broader once dry) on
           the crests and lips of thick paint, spread by the curvature inside
-          each pixel. Only facets near that mirror slope shine (GLOSS_CUT),
-          less what flat paint shows, so paint that does not mirror the lamp
-          keeps its colour: no veil of reflected light over it. Thin, lean
-          paint barely shines (GLOSS_FILM), paint sunk into an absorbent
-          ground less;
+          each pixel, and on narrow crests gathered a little way along them
+          (GLOSS_SPAN, CREST_GATE), so that a glint along a slanting crest is
+          a line, not beads at the steps of the pixels (domes, round dabs
+          and broad slopes keep their own). Only facets near that mirror
+          slope shine (GLOSS_CUT), less what flat paint shows, so paint that
+          does not mirror the lamp keeps its colour: no veil of reflected
+          light over it. Thin, lean paint barely shines (GLOSS_FILM), paint
+          sunk into an absorbent ground less;
         * brighter-than-paint values roll off towards white rather than clip.
         """
         h = np.ascontiguousarray(self.surface_height(relief), dtype=np.float32)
@@ -665,6 +668,9 @@ class Canvas:
             film1=GLOSS_FILM[1],
             dry0=GLOSS_DRY_FILM[0],
             dry1=GLOSS_DRY_FILM[1],
+            gloss_span=GLOSS_SPAN,
+            gloss_taps=GLOSS_TAPS,
+            crest_gate=CREST_GATE,
             out=out,
         )
         return out
@@ -726,6 +732,21 @@ GLOSS_DRY_FILM = (2.0, 6.0)
 #: curvature) widens its highlight: enough that a highlight on a steep ridge
 #: fades out over a pixel or two instead of stopping between neighbours.
 FOOTPRINT = 2.0
+#: How far each way along a narrow crest, furrow or lip (pixels) a pixel's
+#: highlight is gathered: a crest that crosses the pixels slantwise then
+#: glints in a line, as one along the rows does, rather than in beads at
+#: each step of the pixel staircase. The light moves along the crest, and
+#: across it by no more than about one diagonal pixel step (0.7 px).
+GLOSS_SPAN = 2.0
+#: How many points each side of the pixel the highlight is gathered from
+#: over GLOSS_SPAN (tent-weighted).
+GLOSS_TAPS = 2
+#: Where a highlight is gathered: on narrow crests, not on domes, round
+#: dabs or broad slopes. The share of GLOSS_SPAN rises (smoothstep) with
+#: the anisotropy of the curvature, (|k1| - |k2|) / (|k1| + |k2|), from the
+#: first to the second value, and with the curvature across the crest |k1|
+#: (per pixel) from the third to the fourth.
+CREST_GATE = (0.5, 0.75, 0.04, 0.12)
 
 #: Share of the fine relief kept on gently modelled paint, and the local
 #: relief (in units of paint thickness) from which all of it is kept.
