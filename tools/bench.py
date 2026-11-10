@@ -414,6 +414,26 @@ def glass(c):
     return 41, ()
 
 
+@scene("edges", "9 strokes and 60 dabs running off the canvas", setup=wet)
+def edges(c):
+    rng = np.random.default_rng(16)
+    tools = (brushes.FLAT_HOG, brushes.ROUND_SABLE, brushes.PALETTE_KNIFE)
+    kept = []
+    for i in range(9):
+        y = rng.uniform(-40, H + 40)
+        out = rng.uniform(40, 120)
+        path = [(60, y), (-out, y + rng.uniform(-60, 60)), (100, y + 30)]
+        if i % 2:  # across the top or bottom edge instead
+            x = rng.uniform(-40, W + 40)
+            path = [(x, H - 60), (x + rng.uniform(-60, 60), H + out), (x + 30, H - 100)]
+        brush = Brush(tools[i % 3]).load((P.CADMIUM_RED, P.TITANIUM_WHITE)[i % 2], 5)
+        c.stroke(path, brush=brush, pressure=(0.3, 0.6)[i % 2])
+        kept.append(brush)
+    pts = np.column_stack([rng.uniform(-30, W + 30, 60), rng.uniform(-30, 30, 60)])
+    kept.append(c.stipple(pts, P.VIRIDIAN, amount=20, width=24, pressure=0.4))
+    return 69, tuple(kept)
+
+
 @scene("stipple", "400 taps of a stippler, in four loads")
 def stipple(c):
     rng = np.random.default_rng(9)
