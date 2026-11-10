@@ -11,7 +11,7 @@ import numpy as np
 from . import _engine as eng
 from . import _render, brushes
 from . import spectral as sp
-from ._filters import _box_blur, _smooth121
+from ._filters import _box_blur, _smooth121, _smoothstep
 from .brush import (
     IB,
     PACKED,
@@ -323,7 +323,7 @@ class Canvas:
         rng = np.random.default_rng(
             seed if seed is not None else self._rng.integers(1 << 31)
         )
-        n = round(120 * amount)
+        n = round(_DROPS_PER_AMOUNT * amount)
         if n <= 0:  # nothing flicked
             return 0
         # distance along the path the brush sweeps (a single point: none)
@@ -337,28 +337,45 @@ class Canvas:
                 y0 = float(np.interp(s, arc, path[:, 1]))
             else:
                 x0, y0 = path[0]
-            a = heading + np.deg2rad(spread) * rng.normal(0.0, 0.6)
-            dist = reach * rng.gamma(2.0, 0.5)
-            d = float(np.clip(size * rng.lognormal(0.0, 0.6), 0.7, 8.0 * size))
-            ux, uy = np.cos(a), np.sin(a)
-            x, y = x0 + dist * ux, y0 + dist * uy
-            # flying further, a drop comes in at more of a slant and stretches
-            stretch = 1.0 + 1.6 * min(dist / reach, 2.5) * rng.uniform(0.2, 1.0)
-            drops += self._drop(x, y, d, stretch, ux, uy, paint, rng)
-            if d > 2.0 * size:  # a big drop throws off little satellites
-                for _ in range(int(rng.integers(1, 5))):
-                    t = rng.uniform(1.0, 3.5) * d
-                    side = rng.normal(0.0, 0.6) * d
-                    drops += self._drop(
-                        x + t * ux - side * uy,
-                        y + t * uy + side * ux,
-                        max(0.7, d * rng.uniform(0.15, 0.35)),
-                        1.0,
-                        ux,
-                        uy,
-                        paint,
-                        rng,
-                    )
+            drops += self._fly(x0, y0, heading, spread, reach, size, paint, rng)
+        return drops
+
+    def _fly(self, x0, y0, heading, spread, reach, size, paint, rng) -> int:
+        """One drop flicked from (x0, y0) (see :meth:`spatter`), and the
+        satellites it throws off if it is a big one: how many of them land
+        on or by the canvas."""
+        a = heading + np.deg2rad(spread) * rng.normal(0.0, _FAN)
+        dist = reach * rng.gamma(*_FLIGHT)
+        d = float(
+            np.clip(
+                size * rng.lognormal(0.0, _SIZE_SIGMA),
+                _DROP_MIN,
+                _DROP_MAX * size,
+            )
+        )
+        ux, uy = np.cos(a), np.sin(a)
+        x, y = x0 + dist * ux, y0 + dist * uy
+        # flying further, a drop comes in at more of a slant and stretches
+        stretch = 1.0 + _STRETCH * min(dist / reach, _STRETCH_REACH) * rng.uniform(
+            0.2, 1.0
+        )
+        drops = self._drop(x, y, d, stretch, ux, uy, paint, rng)
+        if d > _SATELLITES_FROM * size:
+            # 1 to 4 satellites, 1 to 3.5 diameters further on, scattered
+            # sideways by about 0.6 of one, each 0.15 to 0.35 of its size
+            for _ in range(int(rng.integers(1, 5))):
+                t = rng.uniform(1.0, 3.5) * d
+                side = rng.normal(0.0, 0.6) * d
+                drops += self._drop(
+                    x + t * ux - side * uy,
+                    y + t * uy + side * ux,
+                    max(_DROP_MIN, d * rng.uniform(0.15, 0.35)),
+                    1.0,
+                    ux,
+                    uy,
+                    paint,
+                    rng,
+                )
         return drops
 
     def _drop(self, x, y, d, stretch, ux, uy, paint, rng) -> int:
@@ -367,12 +384,13 @@ class Canvas:
         if not (-d < x < self.width + d and -d < y < self.height + d):
             return 0
         kw = {
+            # (a drop is a blob of paint: plenty for its size)
             "amount": 4.0 + 0.4 * d,
             "brush": _DROP.sized(d),
             "pressure": 0.6,
             "seed": int(rng.integers(1 << 31)),
         }
-        if stretch < 1.25 or d < 1.5:
+        if stretch < 1.25 or d < 1.5:  # (no stretch to show: a round dab)
             self.stroke([(x, y)], paint, width=d, **kw)
         else:
             tail = d * (stretch - 1.0) * 0.9
@@ -746,8 +764,9 @@ SINK_DEPTH = 2.0
 WEAVE_DEPTH = 0.7
 
 #: Paint thinner than this cannot form a continuous film; it is rendered as
-#: partial coverage of a film this thick (dry-brush specks, stroke edges).
-MIN_FILM = 0.15
+#: partial coverage of a film this thick (dry-brush specks, stroke edges). The
+#: engine lays paint by the same measure.
+MIN_FILM = eng.MIN_FILM
 
 
 def _size(name: str, value) -> int:
@@ -805,6 +824,23 @@ def _composite(kappa, sigma, volume, alpha, below):
     cov = cov[..., None]
     return cov * film + (1.0 - cov) * below
 
+
+#: Spatter (see Canvas.spatter): drops flicked per unit of ``amount``.
+_DROPS_PER_AMOUNT = 120
+#: How the drops fan out: the spread of their headings, in units of ``spread``.
+_FAN = 0.6
+#: How far they fly, in units of ``reach``: a gamma distribution (shape,
+#: scale) with mean 1, most falling short and a few far beyond.
+_FLIGHT = (2.0, 0.5)
+#: Their sizes: log-normal about ``size`` with this sigma, no smaller than
+#: _DROP_MIN px and no bigger than _DROP_MAX times ``size``.
+_SIZE_SIGMA = 0.6
+_DROP_MIN, _DROP_MAX = 0.7, 8.0
+#: How much a drop stretches into a teardrop: by up to this much for each
+#: ``reach`` it flies (as far as _STRETCH_REACH of them), coming in at a slant.
+_STRETCH, _STRETCH_REACH = 1.6, 2.5
+#: Drops bigger than this many times ``size`` throw off little satellites.
+_SATELLITES_FROM = 2.0
 
 #: A drop of paint landing (see Canvas.spatter): no bristles, it neither drags
 #: nor picks up the paint it lands on, and sits on top of it.
@@ -874,8 +910,3 @@ def _blur(a: np.ndarray, r: int) -> np.ndarray:
     out = np.empty_like(a)
     _render.box_blur(a, r, out)
     return out
-
-
-def _smoothstep(e0, e1, x):
-    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)

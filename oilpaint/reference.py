@@ -28,19 +28,7 @@ from collections import OrderedDict
 import numpy as np
 
 from . import spectral as sp
-
-
-def _box(a, r, axis):
-    """Box blur of radius r along an axis (edges repeat the border value)."""
-    if r <= 0:
-        return a
-    pad = [(0, 0)] * a.ndim
-    pad[axis] = (r + 1, r)
-    c = np.cumsum(np.pad(a, pad, mode="edge"), axis=axis, dtype=np.float64)
-    n = a.shape[axis]
-    hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
-    lo = np.take(c, np.arange(0, n), axis=axis)
-    return ((hi - lo) / (2 * r + 1)).astype(a.dtype)
+from ._filters import _bilinear, _box_blur
 
 
 def _blur(a, sigma):
@@ -50,22 +38,16 @@ def _blur(a, sigma):
     # box radii whose three passes add up to the Gaussian's variance
     r = max(int(round((np.sqrt(4.0 * sigma * sigma + 1.0) - 1.0) / 2.0)), 1)
     for _ in range(3):
-        a = _box(_box(a, r, 0), r, 1)
+        a = _box_blur(_box_blur(a, r, axis=0), r, axis=1)
     return a
 
 
 def _sample(img, x, y):
-    """Bilinear sample of img (H, W, ...) at points x, y."""
+    """Bilinear sample of img (H, W, ...) at points x, y (clamped to it)."""
     H, W = img.shape[:2]
     x = np.clip(np.asarray(x, np.float64), 0, W - 1)
     y = np.clip(np.asarray(y, np.float64), 0, H - 1)
-    x0, y0 = np.minimum(x.astype(int), W - 2), np.minimum(y.astype(int), H - 2)
-    fx, fy = x - x0, y - y0
-    if img.ndim == 3:
-        fx, fy = fx[..., None], fy[..., None]
-    return (img[y0, x0] * (1 - fx) + img[y0, x0 + 1] * fx) * (1 - fy) + (
-        img[y0 + 1, x0] * (1 - fx) + img[y0 + 1, x0 + 1] * fx
-    ) * fy
+    return _bilinear(img, y, x)
 
 
 class Reference:

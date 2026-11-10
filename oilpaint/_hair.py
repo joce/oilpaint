@@ -9,7 +9,6 @@ import numpy as np
 
 from . import _engine as eng
 from ._geometry import _frozen
-from .brush import _clip
 
 if TYPE_CHECKING:
     from .brush import BrushType
@@ -61,8 +60,10 @@ def _hair_field(
     a width or two. The field is fixed in stroke coordinates, so the steps
     of a stroke all comb the same lanes."""
     lo, hi = _CLUMP_PITCH
-    pitch = hi - (hi - lo) * float(_clip(bt.bristles, 0.0, 1.0))
-    wander *= _HAIR_WANDER * pitch * (0.5 + 0.5 * float(_clip(bt.stiffness, 0.0, 1.0)))
+    pitch = hi - (hi - lo) * float(np.clip(bt.bristles, 0.0, 1.0))
+    wander *= (
+        _HAIR_WANDER * pitch * (0.5 + 0.5 * float(np.clip(bt.stiffness, 0.0, 1.0)))
+    )
     w = max(width, 12.0)
     x_half = 1.35 * half + 1.0
     length = s1 - s0

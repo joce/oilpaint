@@ -39,6 +39,7 @@ import numpy as np
 from . import _engine as eng
 from . import spectral as sp
 from ._engine import COLUMNS, IB, IS, IV, PACKED
+from ._filters import _smoothstep
 from .noise import value_noise_1d
 from .paint import ColorLike, Paint, as_paint
 
@@ -70,6 +71,10 @@ _RING_A = 2.0 * np.pi * (np.arange(COLUMNS) + 0.5) / COLUMNS
 _RING_X = (1.0 - (2.0 / np.pi) * np.arcsin(np.sin(_RING_A))) / 2.0
 # Depth layers: tip [0, 0.12], belly [0.12, 0.6], heel [0.6, 1] of the bristle length.
 _LAYER_EDGES = (0.0, 0.12, 0.6, 1.0)
+# How much paint changes places between the tip and the belly, and between
+# the belly and the heel, for each width a brush is worked, at full blending
+# (the rates _engine.work_load uses as a brush works in a stroke).
+_TIP_SWAP, _HEEL_SWAP = 0.375, 0.1
 
 
 def _pack(paint: Paint, volume: float) -> np.ndarray:
@@ -443,7 +448,7 @@ def _across_weights(across: Any, ring: bool = False) -> np.ndarray:
             raise ValueError(
                 f"across: give (start, end) in 0..1 or {COLUMNS} column weights"
             )
-    w = _clip(w, 0.0, None)
+    w = np.clip(w, 0.0, None)
     if w.sum() <= 0:
         raise ValueError("that part of the brush is empty: no column gets any paint")
     return w / w.sum()
@@ -573,7 +578,7 @@ class Brush:
         identical loads.
         """
         amount = _number("amount", amount)
-        mixing = float(_clip(_number("mixing", mixing), 0.0, 1.0))
+        mixing = float(np.clip(_number("mixing", mixing), 0.0, 1.0))
         _check_seed("seed", seed)
         size = self.width if width is None else _width("width", width)
         if isinstance(parts, (str, Paint)) or not isinstance(parts, Sequence):
@@ -644,8 +649,12 @@ class Brush:
         for layer in self._layers():
             eng.diffuse(layer, k, self.ring)
         for _ in range(int(np.ceil(widths))):
-            eng.swap_layers(self.tip, self.reservoir, float(min(0.375 * blend, 0.5)))
-            eng.swap_layers(self.reservoir, self.heel, float(min(0.1 * blend, 0.5)))
+            eng.swap_layers(
+                self.tip, self.reservoir, float(min(_TIP_SWAP * blend, 0.5))
+            )
+            eng.swap_layers(
+                self.reservoir, self.heel, float(min(_HEEL_SWAP * blend, 0.5))
+            )
         return self
 
     def clean(self) -> Brush:
@@ -690,7 +699,7 @@ class Brush:
         return Paint.from_optics(
             total[:N] / total[IV],
             total[IS] / total[IV],
-            body=float(_clip(total[IB] / total[IV], 0.0, 1.0)),
+            body=float(np.clip(total[IB] / total[IV], 0.0, 1.0)),
         )
 
     def colors(self, depth: str = "all") -> list:
@@ -850,7 +859,7 @@ def _physics(bt: BrushType, stroke: Stroke | None = None) -> dict:
     # how a tool leaves the paint: stiff bristles flick off one clump after
     # another, soft hair closes up and slides off clean
     derived["lift"] = (
-        0.3 if bt.rigid else float(_clip((bt.stiffness - 0.5) / 0.3, 0.0, 1.0))
+        0.3 if bt.rigid else float(np.clip((bt.stiffness - 0.5) / 0.3, 0.0, 1.0))
     )
     out = {}
     for key, (lo, hi) in _PHYSICS.items():
@@ -860,16 +869,8 @@ def _physics(bt: BrushType, stroke: Stroke | None = None) -> dict:
             if given is not None:
                 value = _number(prefix + key, given)
                 break
-        out[key] = value if lo is None else float(_clip(value, lo, hi))
+        out[key] = value if lo is None else float(np.clip(value, lo, hi))
     return out
-
-
-_clip = np.clip
-
-
-def _smoothstep(e0, e1, x):
-    t = _clip((x - e0) / (e1 - e0), 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
 
 
 #: What a stroke paints with is defined here; the stroke and its simulation

@@ -11,9 +11,9 @@ import numpy as np
 
 from . import _engine as eng
 from ._engine import COLUMNS, IB, IV, PACKED
+from ._filters import _bilinear, _smoothstep
 from ._geometry import _Step
 from ._hair import _NO_TEX2
-from .brush import _clip, _smoothstep
 from .noise import aniso_noise, value_noise_2d
 
 if TYPE_CHECKING:
@@ -83,12 +83,12 @@ def _wandering_bands(run: _Run, st, along, u_px):
     canvas step ``st`` covers, ``along`` the motion there) the paint a knife
     lays comes from: paint on a blade isn't held in lanes, so its colour
     bands wander a little from side to side along the stroke."""
-    along_stroke = _clip(
+    along_stroke = np.clip(
         (run.arc[st.i] + along) / run.band_period * 8.0,
         0.0,
         run.bands.shape[0] - 1.001,
     )
-    u_band = _clip((u_px + 1.0) * 0.5 * 63.0, 0.0, 62.999)
+    u_band = np.clip((u_px + 1.0) * 0.5 * 63.0, 0.0, 62.999)
     return u_px + _KNIFE_BAND_WANDER * (
         2.0 * _bilinear(run.bands, along_stroke, u_band) - 1.0
     )
@@ -175,7 +175,7 @@ def _blade_rest(run: _Run, s: _Step):
         # touch skims, a firm one cuts in, pressing hard goes nearly down to
         # the canvas, however thick the paint. Stiff paint resists a little.
         depth = float(
-            _clip(p**_KNIFE_SINK * (1.15 - 0.3 * min(old_body, 1.0)), 0.0, 1.0)
+            np.clip(p**_KNIFE_SINK * (1.15 - 0.3 * min(old_body, 1.0)), 0.0, 1.0)
         )
         # narrow teeth concentrate the pressure: they cut right through
         if bt.clumps > 0:
@@ -183,9 +183,9 @@ def _blade_rest(run: _Run, s: _Step):
         # The blade is rigid along the direction it moves: its height varies only
         # along its length. It rests on the high points under it (not on the pile
         # it pushes ahead), bending to follow them over a span set by its stiffness.
-        under_blade = (s.aa * _clip(s.h - np.abs(s.rel) + 0.5, 0.0, 1.0))[wsl] > 0.5
+        under_blade = (s.aa * np.clip(s.h - np.abs(s.rel) + 0.5, 0.0, 1.0))[wsl] > 0.5
         if under_blade.any():
-            span = int(_clip(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2, 10))
+            span = int(np.clip(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2, 10))
             hi = eng.max_filter(floor + old_v, 1)
             high = _along_blade(s.lat_px[wsl], under_blade, hi, span)
             base = _along_blade(s.lat_px[wsl], under_blade, rest, span)
@@ -212,7 +212,7 @@ def _blade_level(run: _Run, s: _Step, gap: float, area: float):
         1.0
         + chat * run.chatter[st.i]
         + 0.12 * (hair - 0.5)
-        + run.blade_tilt * _clip(s.ucoord[wsl], -1.0, 1.0)
+        + run.blade_tilt * np.clip(s.ucoord[wsl], -1.0, 1.0)
     )
     return level, ride
 
@@ -233,7 +233,7 @@ def _push_aside(run: _Run, s: _Step, level):
     ridges = (np.zeros(PACKED), np.zeros(PACKED), np.zeros(PACKED))
     flowing = run.bt.clumps == 0
     tv = top[..., IV].astype(np.float64)
-    excess = _clip(floor + tv + und[..., IV] - level, 0.0, None)
+    excess = np.clip(floor + tv + und[..., IV] - level, 0.0, None)
     excess *= 1.0 - np.exp(-4.0 * expo_c * (0.15 + 1.7 * hair**2))
     if flowing:
         half = max(st.r * st.lmax, 1e-6)  # the mark's half-width, px
@@ -293,7 +293,7 @@ def _drag_film(run: _Run, s: _Step, level) -> None:
         st.ds,
         st.tx,
         st.ty,
-        _clip((0.5 + 0.45 * st.p) * (0.6 + 0.8 * hair), 0.0, 1.0),
+        np.clip((0.5 + 0.45 * st.p) * (0.6 + 0.8 * hair), 0.0, 1.0),
         _VISCOUS,
     )
 
@@ -341,7 +341,7 @@ def _slab(run: _Run, s: _Step, level, area: float):
     top, und, floor = canvas.top[sl], canvas.und[sl], canvas._floor[sl]
     hair, expo_c = s.hair[wsl], s.expo[wsl]
     surf = floor + top[..., IV] + und[..., IV]
-    gap_px = _clip(level - surf, 0.0, None)
+    gap_px = np.clip(level - surf, 0.0, None)
     film = _film(run, s, area)
     reach_f = _smoothstep(1.3, 0.7, gap_px / np.maximum(film, 1e-9))
     # Barely touching, the blade skims: it fills less of the gap under it.
@@ -368,7 +368,7 @@ def _slab(run: _Run, s: _Step, level, area: float):
     d = gap_px * reach_f * (1.0 - np.exp(-k_fill * expo_c))
     if skim > 0 and run.bt.clumps == 0:
         bead = np.minimum(film, 1.2)
-        touch = _clip((surf - (level - bead)) / np.maximum(bead, 1e-6), 0.0, 1.0)
+        touch = np.clip((surf - (level - bead)) / np.maximum(bead, 1e-6), 0.0, 1.0)
         # the bead is uneven and the paint below still follows the threads
         # of the canvas: barely touching, it catches in streaks along the
         # blade's nicks and on the thread tops, the fewer the lighter the touch
@@ -411,7 +411,7 @@ def _lift_blade(run: _Run, s: _Step, body: float) -> None:
     little peaks and torn ridges, the stiffer the paint on it (``body``)
     the more (see :func:`_lift_off`)."""
     st, wsl = s.st, s.wsl
-    under = (s.aa * _clip((s.h - np.abs(s.rel)) / 1.5, 0.0, 1.0))[wsl]
+    under = (s.aa * np.clip((s.h - np.abs(s.rel)) / 1.5, 0.0, 1.0))[wsl]
     # most along the trailing edge, the last of the blade to leave the paint
     under = under * (0.3 + 0.7 * _smoothstep(0.3, -0.5, (s.rel / s.h)[wsl]))
     _lift_off(
@@ -434,22 +434,13 @@ def _fold_layers(run: _Run, s: _Step, level, f_mix) -> None:
     hair, expo_c = s.hair[wsl], s.expo[wsl]
     und, floor = run.canvas.und[sl], run.canvas._floor[sl]
     m = 1.0 - np.exp(-run.eff["mixing"] * 3.0 * p * p * expo_c * s.streak[wsl] * f_mix)
-    into_under = _clip(floor + und[..., IV] + 0.5 - level, 0.0, 1.0)
-    m = _clip(m * (0.1 + 1.8 * hair) * into_under, 0.0, 1.0)
+    into_under = np.clip(floor + und[..., IV] + 0.5 - level, 0.0, 1.0)
+    m = np.clip(m * (0.1 + 1.8 * hair) * into_under, 0.0, 1.0)
     eng.stir(run.cv, st.cy0, st.cx0, m)
 
 
 # ----------------------------------------------------------------------------
 # helpers
-
-
-def _bilinear(grid, y, x):
-    """Sample ``grid`` at fractional indices (y, x) (inside its bounds)."""
-    y0, x0 = y.astype(int), x.astype(int)
-    fy, fx = y - y0, x - x0
-    return (grid[y0, x0] * (1 - fx) + grid[y0, x0 + 1] * fx) * (1 - fy) + (
-        grid[y0 + 1, x0] * (1 - fx) + grid[y0 + 1, x0 + 1] * fx
-    ) * fy
 
 
 def _along_blade(lat, under, values, span):
@@ -531,6 +522,6 @@ def _lift_off(canvas, sl, under, amp, cell, direction, rng):
     n = (n - n.min()) / max(np.ptp(n), 1e-9)
     crest = (1.0 - np.abs(2.0 * n - 1.0)) ** 2
     m = (wv * crest).sum() / wv.sum()
-    fac = _clip(1.0 + 2.0 * amp * under * (crest - m), 0.05, None)
+    fac = np.clip(1.0 + 2.0 * amp * under * (crest - m), 0.05, None)
     fac *= V.sum() / max((V * fac).sum(), 1e-12)
     top *= fac.astype(np.float32)[..., None]

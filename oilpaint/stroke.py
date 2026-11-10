@@ -31,6 +31,7 @@ import numpy as np
 from . import _engine as eng
 from ._dab import dab_pattern
 from ._engine import COLUMNS, IB, IV, PACKED
+from ._filters import _smoothstep
 from ._geometry import (
     _NO_TABLES,
     _chord_table,
@@ -52,12 +53,10 @@ from .brush import (
     _check_seed,
     _check_taper,
     _check_tool,
-    _clip,
     _is_number,
     _loads,
     _number,
     _physics,
-    _smoothstep,
     load_paint,
 )
 from .noise import value_noise_1d
@@ -69,6 +68,17 @@ from .spline import Path, Profile, as_path, evaluate_profile
 # thick paint up.
 _LIFT_LEN = 21.0
 _LIFT_CREST = 4.0
+
+# --- the paint settling after a stroke (see _Run.settle) ---------------------------
+# How long wet paint flows where it is steeper than it holds (passes over the
+# part of the canvas the stroke reached), and how long the crests of the
+# stroke's own thick paint round off.
+_LEVEL_PASSES = 12
+_SOFTEN_PASSES = 2
+# Roughly how much of a full layer a pass of a brush lays across its width
+# (its lateral profile): what a brush painting past the edge of the canvas
+# loses as if it had laid it.
+_LAID_ACROSS = 0.9
 
 
 def _check_profile(name: str, profile, size: bool = False) -> None:
@@ -401,7 +411,7 @@ def _sample_stroke(path: Path, stroke: Stroke, bt: BrushType, eff: dict) -> _Sam
         path.n_knots,
     )
     w_typ = max(float(np.mean(w_probe)), 1.0)
-    spacing = float(_clip(0.25 * w_typ, 0.5, 8.0))
+    spacing = float(np.clip(0.25 * w_typ, 0.5, 8.0))
     taper = eff["taper"]
     t0, t1 = (taper, taper) if isinstance(taper, (int, float, np.number)) else taper
 
@@ -413,7 +423,7 @@ def _sample_stroke(path: Path, stroke: Stroke, bt: BrushType, eff: dict) -> _Sam
         if t1 > 0:
             widths = widths * (0.25 + 0.75 * _smoothstep(1.0, 1.0 - t1, u))
         widths = np.maximum(widths, 1.0)
-        pressure = _clip(
+        pressure = np.clip(
             evaluate_profile(stroke.pressure, u, knot, path.n_knots), 0.0, 1.0
         )
         angles = np.radians(evaluate_profile(eff["angle"], u, knot, path.n_knots))
@@ -484,7 +494,7 @@ def _stroke_textures(rng, bt: BrushType, smp: _Samples, arc) -> _Textures:
     chatter = np.interp(arc / period, np.arange(len(ripple)), ripple) - 0.5
     swell = value_noise_1d(int(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
     lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
-    blade_tilt = float(_clip(rng.normal(0.0, 0.08), -0.2, 0.2))
+    blade_tilt = float(np.clip(rng.normal(0.0, 0.08), -0.2, 0.2))
     # the bristle tips a dab prints (see _dab)
     dab = _frozen(dab_pattern(bt, 0.5 * w_typ, rng)) if smp.is_dab else _NO_TEX2
     return _Textures(wobble, chatter, lip, blade_tilt, dab)
@@ -607,11 +617,11 @@ class _Run:
         self.reach = 1.0 if circle else float(np.hypot(1.0, aspect))
         # in half-widths squared
         self.area_unit = _footprint_area("round" if circle else bt.shape, aspect)
-        self.stiff_blade = float(_clip((bt.stiffness - 0.4) / 0.6, 0.0, 1.0))
+        self.stiff_blade = float(np.clip((bt.stiffness - 0.4) / 0.6, 0.0, 1.0))
         # where each column sits across the mark
         self.col_u = (_RING_X if brush.ring else _COL_X) * 2.0 - 1.0
         # squeezed-out ridges are at most this wide (px); they lie just outside the mark
-        self.margin = float(_clip(0.12 * w_typ * (1.0 + bt.spread), 0.6, 7.0)) + 1.0
+        self.margin = float(np.clip(0.12 * w_typ * (1.0 + bt.spread), 0.6, 7.0)) + 1.0
         nominal, radii = _radii(smp, tex.wobble, bt)
         self.radii = radii
         self.lift_reach, self._lift_from = _lift_reach(bt, eff, smp, arc, radii)
@@ -680,7 +690,7 @@ class _Run:
             margin=float(self.margin),
             # how much the surface texture (vs. the hair pattern) decides
             # where a dry brush catches
-            tooth_w=float(_clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85)),
+            tooth_w=float(np.clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85)),
             drag=float(eff["drag"]),
             pickup=float(eff["pickup"]),
             streaks=float(eff["streaks"]),
@@ -961,7 +971,16 @@ class _Run:
         canvas = self.canvas
         by0, by1, bx0, bx1 = self.bounds()
         if bx0 < bx1 and by0 < by1:
-            eng.level(canvas.top, canvas.und, canvas.dry_height, by0, by1, bx0, bx1, 12)
+            eng.level(
+                canvas.top,
+                canvas.und,
+                canvas.dry_height,
+                by0,
+                by1,
+                bx0,
+                bx1,
+                _LEVEL_PASSES,
+            )
         # (a brush with no paint of its own only moves the wet paint about)
         if bx0 < bx1 and by0 < by1 and not self.bt.rigid and self.lays_paint:
             eng.soften(
@@ -974,7 +993,7 @@ class _Run:
                 by1,
                 bx0,
                 bx1,
-                2,
+                _SOFTEN_PASSES,
             )
         if bx0 < bx1 and by0 < by1:
             eng.clear_negative(canvas.top, canvas.und, by0, by1, bx0, bx1)
@@ -1012,7 +1031,7 @@ def _use_paint_off_canvas(brush, Wd, ds, p):
     total = brush.volume
     if total <= 0:
         return
-    used = eng.deposit_thickness(total / (Wd * Wd)) * (0.5 + p) * ds * Wd * 0.9
+    used = eng.deposit_thickness(total / (Wd * Wd)) * (0.5 + p) * ds * Wd * _LAID_ACROSS
     g = max(1.0 - used / total, 0.0)
     brush.tip *= g
     brush.reservoir *= g
@@ -1058,7 +1077,7 @@ def _dab_lift(run: _Run) -> None:
         peak += weight * np.exp(-dist2 / (2.0 * size * size))
     peak /= max(float(peak.max()), 1e-9)
     m = (V * peak).sum() / V.sum()
-    fac = _clip(1.0 + 2.0 * amp * (peak - m), 0.05, None)
+    fac = np.clip(1.0 + 2.0 * amp * (peak - m), 0.05, None)
     fac *= V.sum() / max(float((V * fac).sum()), 1e-12)
     fac = np.where(own, fac, 1.0)
     top *= fac.astype(np.float32)[..., None]
