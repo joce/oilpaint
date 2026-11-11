@@ -9,6 +9,20 @@ Arrays: the canvas layers ``top``/``und`` are (H, W, PACKED) float32, their
 coverage ``top_a``/``und_a`` and the stroke ids ``top_id`` (H, W). Paint on a
 brush is (COLUMNS, PACKED) float64 per depth (tip, belly, heel). A step works
 on a window of the canvas; per-pixel inputs are window-sized.
+
+The kernels take these in named tuples, by the same names throughout: the
+canvas's Layers (``cv``), what lies Beneath the wet paint (``aux``), the Load
+on a tool (``br``), the Pending paint of a brushstroke (``pend``), a step's
+Taps and Ridges, a Step (``st``: its Window, Motion and Hold), and the
+stroke's StrokeConsts (``K``).
+
+brush_step is the exception: it takes the stroke's bundles once per stroke
+as plain tuples and names them on entry (see brush_kit). numba's dispatcher
+resolves a named tuple's type more slowly than a plain one's on every call,
+and a brush makes one such call per step. A knife's kernels take the named
+tuples as they are: handing them over plain would need a rename at the top
+of each of about a dozen entry kernels, and leaving them named costs a few
+percent at most on the knife scenes.
 """
 
 import math
@@ -189,47 +203,46 @@ StrokeConsts = namedtuple(
     ],
 )
 
-#: One step: where the tool is and how it is held, and the window it works on.
-#: (x0, y0, hh, ww): the window around the swept segment (may stick out of the
-#: canvas); (cy0, cx0, ch, cw): its part on the canvas, at (wy0, wx0) in it.
-Step = namedtuple(
-    "Step",
+#: The pixels a step works on: (x0, y0, hh, ww), the window around the swept
+#: segment (it may stick out of the canvas); (cy0, cx0, ch, cw), its part on
+#: the canvas, at (wy0, wx0) in the window. (The part of it a tool passes
+#: over, see touched, is a Window too.)
+Window = namedtuple(
+    "Window", ["x0", "y0", "hh", "ww", "cy0", "cx0", "ch", "cw", "wy0", "wx0"]
+)
+
+#: How the tool moves in a step: step ``i`` of the stroke (the ``first`` or
+#: ``last``, or one that sets it down, ``touchdown``), to (cx, cy) along
+#: (tx, ty) over ``ds`` px, ending ``arc_i`` px along the stroke, where the
+#: lips squeezed out along it swell by ``lip``.
+Motion = namedtuple(
+    "Motion",
+    ["i", "first", "last", "touchdown", "cx", "cy", "tx", "ty", "ds", "arc_i", "lip"],
+)
+
+#: How the tool is held in a step.
+Hold = namedtuple(
+    "Hold",
     [
-        "i",
-        "first",
-        "last",
-        "touchdown",
-        "x0",
-        "y0",
-        "hh",
-        "ww",
-        "cy0",
-        "cx0",
-        "ch",
-        "cw",
-        "wy0",
-        "wx0",
-        "cx",
-        "cy",
-        "tx",
-        "ty",
-        "ds",
+        # pressure: over the step, at its end and at its start
         "p",
         "p_now",
         "p_before",
+        # half-width (px) at the start, at the end and on average; the width,
+        # and the bundle's own width there (twice its nominal half-width)
         "r0",
         "r1",
         "r",
         "Wd",
         "Wn",
+        # the footprint turned: -1 for a brush turned past 90 degrees (its
+        # sides swapped); position across the bristles per half-width across
+        # the motion; its lateral half-extent and longest half-chord (in
+        # half-widths, see _geometry._chord_table)
         "side",
         "uscale",
         "lmax",
         "h_tab_max",
-        "arc_i",
-        "lip",
-        "wet",
-        "dry",
         # how the bristles are sampled across a pixel (see bristle_taps), and how far a
         # round is rolled
         "span",
@@ -247,6 +260,49 @@ Step = namedtuple(
         "overload",
     ],
 )
+
+#: One step: the window it works on, how the tool moves and how it is held.
+Step = namedtuple("Step", ["win", "motion", "hold"])
+
+#: The wet paint on the canvas (``cv``): the two layers, their coverage and
+#: the id of the stroke that laid the top layer (see the module docstring).
+Layers = namedtuple("Layers", ["top", "und", "top_a", "und_a", "top_id"])
+
+#: What the wet paint lies on (``aux``): the solid surface (the weave and
+#: dried paint, in units of paint thickness), what a nearly dry brush catches
+#: on (0..1), how far each point lies below the surface around it, and the
+#: height of the dried paint.
+Beneath = namedtuple("Beneath", ["floor", "tooth", "hollows", "dry_height"])
+
+#: The paint on a tool (``br``), (COLUMNS, PACKED) per depth.
+Load = namedtuple("Load", ["tip", "belly", "heel"])
+
+#: Paint a brushstroke holds back (``pend``, see stroke._pending): per pixel
+#: of its box, the paint, the cover and the reach it brought, and whether
+#: any is held; and ``where`` (int64), indexed by the PEND_* below.
+Pending = namedtuple("Pending", ["paint", "cover", "reach", "held", "where"])
+# whether anything is held at all (0: a knife's, which holds nothing); the
+# box on the canvas (y0, x0, h, w); the rows and columns of it where any is
+# held (row0..row1, col0..col1)
+(
+    PEND_ON,
+    PEND_Y0,
+    PEND_X0,
+    PEND_H,
+    PEND_W,
+    PEND_ROW0,
+    PEND_ROW1,
+    PEND_COL0,
+    PEND_COL1,
+) = range(9)
+
+#: Which bristle columns are above each pixel (see bristle_taps): for pixel q
+#: (row-major), ``ntap[q]`` columns ``cols[q, :]`` with weights ``wts[q, :]``.
+Taps = namedtuple("Taps", ["cols", "wts", "ntap"])
+
+#: Paint pushed out of a footprint (packed): all round it, to its left and to
+#: its right (see squeeze_out, lay_ridges_off).
+Ridges = namedtuple("Ridges", ["ring", "left", "right"])
 
 
 # ----------------------------------------------------------------------------
@@ -499,18 +555,22 @@ def work_load(br, K, st, capacity):
     """Refill each column's tip from its belly; squeeze the heel when the tool
     is pressed down or harder; the paints on the tool blend tip with belly and
     side to side as it works."""
-    tip, belly, heel = br
-    p = st.p
+    tip, belly, heel = br.tip, br.belly, br.heel
+    p = st.hold.p
     refill(tip, belly, capacity)
     # pressing the brush down squeezes some paint from the heel towards the tip
-    if st.first:
+    if st.motion.first:
         seep(heel, belly, min(HEEL_SQUEEZE * (0.3 + 2.8 * p * p), 1.0))
-    elif st.p_now > st.p_before:  # ... and so does bearing down harder
-        seep(heel, belly, min(HEEL_SQUEEZE * 5.0 * (st.p_now - st.p_before), 1.0))
+    elif st.hold.p_now > st.hold.p_before:  # ... and so does bearing down harder
+        seep(
+            heel,
+            belly,
+            min(HEEL_SQUEEZE * 5.0 * (st.hold.p_now - st.hold.p_before), 1.0),
+        )
     blend = K.blending
-    swap_layers(tip, belly, TIP_SWAP * blend * st.ds / st.Wd)
-    swap_layers(belly, heel, HEEL_SWAP * blend * st.ds / st.Wd)
-    k = BLEND_RATE * blend * (0.2 + p) ** 2 * st.ds / st.Wd
+    swap_layers(tip, belly, TIP_SWAP * blend * st.motion.ds / st.hold.Wd)
+    swap_layers(belly, heel, HEEL_SWAP * blend * st.motion.ds / st.hold.Wd)
+    k = BLEND_RATE * blend * (0.2 + p) ** 2 * st.motion.ds / st.hold.Wd
     for layer in (tip, belly, heel):
         for b in range(COLUMNS):
             # (an empty layer, often the heel, has nothing to spread)
@@ -730,12 +790,13 @@ def may_touch(st, K, c_tab):
     anti-aliasing, and none further along it than its chords reach, at the
     step's start and end, plus the anti-aliasing of the solid ends (a margin
     of 0.01 px for rounding)."""
+    win = st.win
     half_aa, m = 0.5 * EDGE_PX, 0.01
-    rs = (st.r0, st.r1, st.r)
+    rs = (st.hold.r0, st.hold.r1, st.hold.r)
     rmax = max(rs[0], rs[1], rs[2])
     # across: |lat| (1 + rough (hair - 0.5)) / lmax is at least lr there
     f_lo = 1.0 - 0.5 * abs(K.rough)
-    lat_max = (rmax * st.lmax + half_aa + m) / f_lo if f_lo > 0 else np.inf
+    lat_max = (rmax * st.hold.lmax + half_aa + m) / f_lo if f_lo > 0 else np.inf
     # along: the chord's centre and half-length at most as far as at either end
     if K.circle:
         c_lo, c_hi, h_hi = 0.0, 0.0, max(rmax, 0.5)
@@ -743,16 +804,16 @@ def may_touch(st, K, c_tab):
         lo, hi = c_tab.min(), c_tab.max()
         c_lo = min(lo * rs[0], lo * rs[1], lo * rs[2])
         c_hi = max(hi * rs[0], hi * rs[1], hi * rs[2])
-        h_hi = max(st.h_tab_max * rmax, 0.5)
-    a_lo = c_lo - h_hi - half_aa - st.ds - m
+        h_hi = max(st.hold.h_tab_max * rmax, 0.5)
+    a_lo = c_lo - h_hi - half_aa - st.motion.ds - m
     a_hi = c_hi + h_hi + half_aa + m
-    y0, y1, x0, x1 = st.hh, 0, st.ww, 0
-    for yy in range(st.hh):
-        gy = (st.y0 + yy) + 0.5 - st.cy
-        for xx in range(st.ww):
-            gx = (st.x0 + xx) + 0.5 - st.cx
-            along = gx * st.tx + gy * st.ty
-            lat_px = -gx * st.ty + gy * st.tx
+    y0, y1, x0, x1 = win.hh, 0, win.ww, 0
+    for yy in range(win.hh):
+        gy = (win.y0 + yy) + 0.5 - st.motion.cy
+        for xx in range(win.ww):
+            gx = (win.x0 + xx) + 0.5 - st.motion.cx
+            along = gx * st.motion.tx + gy * st.motion.ty
+            lat_px = -gx * st.motion.ty + gy * st.motion.tx
             if abs(lat_px) < lat_max and a_lo < along < a_hi:
                 y0, y1 = min(y0, yy), max(y1, yy + 1)
                 x0, x1 = min(x0, xx), max(x1, xx + 1)
@@ -780,28 +841,35 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
     elsewhere all planes are 0, as is a pixel's cover, coverage or sweep
     there (everything the step reads of a pixel it doesn't touch: see
     :func:`touched`). A knife's reads all of its window."""
+    win = st.win
     if not K.rigid:
-        F = np.zeros((_NF, st.hh, st.ww))
+        F = np.zeros((_NF, win.hh, win.ww))
         by0, by1, bx0, bx1 = may_touch(st, K, c_tab)
     else:
-        F = np.empty((_NF, st.hh, st.ww))
-        by0, by1, bx0, bx1 = 0, st.hh, 0, st.ww
-    cx, cy, tx, ty, ds = st.cx, st.cy, st.tx, st.ty, st.ds
-    r0, r1, r, p, lmax = st.r0, st.r1, st.r, st.p, st.lmax
+        F = np.empty((_NF, win.hh, win.ww))
+        by0, by1, bx0, bx1 = 0, win.hh, 0, win.ww
+    cx, cy, tx, ty, ds = (
+        st.motion.cx,
+        st.motion.cy,
+        st.motion.tx,
+        st.motion.ty,
+        st.motion.ds,
+    )
+    r0, r1, r, p, lmax = st.hold.r0, st.hold.r1, st.hold.r, st.hold.p, st.hold.lmax
     n2 = tex2.shape[0] - 1
     half_aa = 0.5 * EDGE_PX
     soft_pow = 1.0 + 4.0 * K.softness
     span = max(K.feather * 2.0 * r, 1.0)
     hit = False
     for yy in range(by0, by1):
-        gy = (st.y0 + yy) + 0.5 - cy
+        gy = (win.y0 + yy) + 0.5 - cy
         for xx in range(bx0, bx1):
-            gx = (st.x0 + xx) + 0.5 - cx
+            gx = (win.x0 + xx) + 0.5 - cx
             along = gx * tx + gy * ty  # <= 0 behind the brush centre
             lat_px = -gx * ty + gy * tx
             r_px = radius_at(along, ds, r0, r1, r)
             lat = lat_px / r_px  # signed, in brush half-widths
-            u = lat * st.uscale  # position across the bristles
+            u = lat * st.hold.uscale  # position across the bristles
             if K.is_dab:
                 iy, ix = dab_cell(u, along, r, n2)
                 hair = tex2[iy, ix]
@@ -824,7 +892,7 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
             overlap, swept = _swept(st, K, rel, h, ds, half_aa)
             expo = profile * swept
             if K.feather > 0 and not K.is_dab:
-                expo *= _feathered(K, st.arc_i + along, r, span)
+                expo *= _feathered(K, st.motion.arc_i + along, r, span)
             F[F_ALONG, yy, xx] = along
             F[F_LAT, yy, xx] = lat_px
             F[F_U, yy, xx] = u
@@ -846,8 +914,8 @@ def footprint(st, K, tex, tex2, grid, c_tab, h_tab):
             F[F_EDGE, yy, xx] = edge_px
             if (
                 expo != 0
-                and st.wy0 <= yy < st.wy0 + st.ch
-                and st.wx0 <= xx < st.wx0 + st.cw
+                and win.wy0 <= yy < win.wy0 + win.ch
+                and win.wx0 <= xx < win.wx0 + win.cw
             ):
                 hit = True
     return F, hit
@@ -879,8 +947,8 @@ def hair_coords(st, K, along, lat_px):
     the stroke, across the bundle. (Fixed in stroke coordinates: every step
     sees the same lanes at a pixel.)"""
     return (
-        (st.arc_i + along - K.hair_s0) / K.hair_ds,
-        (lat_px * st.uscale / st.splay - K.hair_x0) / K.hair_dx,
+        (st.motion.arc_i + along - K.hair_s0) / K.hair_ds,
+        (lat_px * st.hold.uscale / st.hold.splay - K.hair_x0) / K.hair_dx,
     )
 
 
@@ -911,10 +979,10 @@ def _lifting_off(st, K, tex2, along, lat_px, hair):
     the footprint), each pulling the paint up into a crest where it leaves.
     Returns (the factor on the profile, how much of the pixel the brush still
     covers, how far the paint is pulled up: 1 none), all 1 elsewhere."""
-    if st.lift_len > 0:
-        s_left = K.arc_end - (st.arc_i + along)
-        if s_left < st.lift_len:
-            t = 1.0 - max(s_left, 0.0) / st.lift_len
+    if st.hold.lift_len > 0:
+        s_left = K.arc_end - (st.motion.arc_i + along)
+        if s_left < st.hold.lift_len:
+            t = 1.0 - max(s_left, 0.0) / st.hold.lift_len
             # (a clump a few px wide leaves together: the hair pattern
             # smoothed across, its spread restored; a clump thins out over
             # the last part of its way, and a fine single hair doesn't
@@ -929,7 +997,11 @@ def _lifting_off(st, K, tex2, along, lat_px, hair):
             clump = 0.5 + 1.6 * (clump - 0.5)
             g = smoothstep(t - 0.3, t + 0.3, 0.1 + 0.75 * clump)
             # (thinning to its tip, and pulled up just behind it)
-            return g * math.sqrt(g), g, 1.0 + st.lift_amp * 6.75 * g * g * (1.0 - g)
+            return (
+                g * math.sqrt(g),
+                g,
+                1.0 + st.hold.lift_amp * 6.75 * g * g * (1.0 - g),
+            )
     return 1.0, 1.0, 1.0
 
 
@@ -991,7 +1063,7 @@ def _pressed_down(profile, st, K, p, lr, rel_h, hair, soft_pow):
         profile *= smoothstep(1.0, 1.0 - K.softness, rr) ** soft_pow
     # tapped lightly, only the tips of the bristles touch: a stippled, broken
     # mark (a glob of paint on it touches all over even then)
-    tip_thr = 0.75 - 1.5 * p - 0.4 * min(st.overload, 1.5)
+    tip_thr = 0.75 - 1.5 * p - 0.4 * min(st.hold.overload, 1.5)
     if tip_thr > 0:
         profile *= smoothstep(tip_thr - 0.12, tip_thr + 0.12, hair)
     return profile
@@ -1004,14 +1076,14 @@ def _swept(st, K, rel, h, ds, half_aa):
     px, topped up to a full pass where the tool touches down or lifts off
     (solid ends); and that as a fraction of a full pass."""
     overlap = max(min(0.0, rel + h) - max(-ds, rel - h), 0.0)
-    if st.first and K.end_k > 0:
+    if st.motion.first and K.end_k > 0:
         a0 = rel + ds
         overlap += (
             K.end_k
             * smoothstep(-h - half_aa, -h + half_aa, a0)
             * clip(h - a0, 0.0, 2.0 * h)
         )
-    if st.last and K.end_k > 0:
+    if st.motion.last and K.end_k > 0:
         overlap += (
             K.end_k
             * smoothstep(h + half_aa, h - half_aa, rel)
@@ -1039,7 +1111,7 @@ def _feathered(K, s_pix, r, span):
 def bristle_taps(u_px, span, nsub, ring, rho):
     """Which bristle columns are above each pixel of the (ch, cw) window:
     up to COLUMNS (column, weight) taps per pixel, blending linearly between
-    the nearest columns, sampled ``nsub`` times across the pixel."""
+    the nearest columns, sampled ``nsub`` times across the pixel (Taps)."""
     ch, cw = u_px.shape
     npx = ch * cw
     # (each sample touches two columns, two on each side of a ring: no pixel
@@ -1093,14 +1165,14 @@ def bristle_taps(u_px, span, nsub, ring, rho):
                     n += 1
                 acc[b] = 0.0
             ntap[q] = n
-    return cols, wts, ntap
+    return Taps(cols, wts, ntap)
 
 
 @njit(cache=True, error_model="numpy")
 def crop_taps(taps, ww, wy0, wx0, ch, cw):
     """The taps (see :func:`bristle_taps`) of the (ch, cw) part at (wy0, wx0)
     of a window ``ww`` px wide, from the taps of all of it."""
-    cols, wts, ntap = taps
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
     n = ch * cw
     out_cols = np.empty((n, cols.shape[1]), np.int32)
     out_wts = np.empty((n, cols.shape[1]))
@@ -1112,7 +1184,7 @@ def crop_taps(taps, ww, wy0, wx0, ch, cw):
             for t in range(ntap[q]):
                 out_cols[r, t] = cols[q, t]
                 out_wts[r, t] = wts[q, t]
-    return out_cols, out_wts, out_n
+    return Taps(out_cols, out_wts, out_n)
 
 
 @njit(cache=True, error_model="numpy")
@@ -1144,7 +1216,7 @@ def wandering_bands(F, wy0, wx0, ch, cw, s0, period, bands, wander):
 @njit(cache=True, error_model="numpy")
 def at_pixels(taps, per_column, ch, cw):
     """A per-column quantity, as seen at each pixel under the brush."""
-    cols, wts, ntap = taps
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
     out = np.empty((ch, cw))
     for y in range(ch):
         for x in range(cw):
@@ -1157,13 +1229,14 @@ def at_pixels(taps, per_column, ch, cw):
 
 
 @njit(cache=True, error_model="numpy")
-def surface_factors(cv, aux, st, K):
+def surface_factors(cv, aux, win, K):
     """How the bare surface changes pickup, deposit and mixing (per pixel) and
-    drag: where the brush works directly on the priming (little paint below),
-    the surface itself decides how paint grips and slides."""
-    top, und = cv[0], cv[1]
-    dry_h = aux[3]
-    ch, cw = st.ch, st.cw
+    drag, over the part on the canvas of a step's window ``win``: where the
+    brush works directly on the priming (little paint below), the surface
+    itself decides how paint grips and slides."""
+    top, und = cv.top, cv.und
+    dry_h = aux.dry_height
+    ch, cw = win.ch, win.cw
     f_pick = np.ones((ch, cw))
     f_dep = np.ones((ch, cw))
     f_mix = np.ones((ch, cw))
@@ -1173,7 +1246,7 @@ def surface_factors(cv, aux, st, K):
     sum_bare = 0.0
     for y in range(ch):
         for x in range(cw):
-            Y, X = st.cy0 + y, st.cx0 + x
+            Y, X = win.cy0 + y, win.cx0 + x
             wet = top[Y, X, IV] + und[Y, X, IV]
             dh = dry_h[Y, X]
             bare = math.exp(-(wet + dh) / 0.4)
@@ -1193,8 +1266,9 @@ def surface_factors(cv, aux, st, K):
 def surface_factors_on(cv, aux, st, part, K):
     """:func:`surface_factors` over the part ``part`` of the step's window
     (see :func:`touched`); drag still from the bare surface over all of it."""
-    top, und = cv[0], cv[1]
-    dry_h = aux[3]
+    win = st.win
+    top, und = cv.top, cv.und
+    dry_h = aux.dry_height
     ch, cw = part.ch, part.cw
     f_pick = np.ones((ch, cw))
     f_dep = np.ones((ch, cw))
@@ -1203,9 +1277,9 @@ def surface_factors_on(cv, aux, st, part, K):
         return f_pick, f_dep, f_mix, 1.0
     sl, ab, to = K.slickness, K.absorbency, K.surface_tooth
     sum_bare = 0.0
-    for y in range(st.ch):
-        for x in range(st.cw):
-            Y, X = st.cy0 + y, st.cx0 + x
+    for y in range(win.ch):
+        for x in range(win.cw):
+            Y, X = win.cy0 + y, win.cx0 + x
             wet = top[Y, X, IV] + und[Y, X, IV]
             dh = dry_h[Y, X]
             bare = math.exp(-(wet + dh) / 0.4)
@@ -1220,7 +1294,7 @@ def surface_factors_on(cv, aux, st, part, K):
             )
             f_mix[py, px] = 1.0 - 0.6 * ab * bare
     # (off the canvas, the surface goes on as it is at its edge: see off_canvas)
-    n_px = max(st.ch * st.cw, 1)
+    n_px = max(win.ch * win.cw, 1)
     return f_pick, f_dep, f_mix, 1.0 + (sl - 0.5) * sum_bare / n_px
 
 
@@ -1229,7 +1303,7 @@ def surface_at(cv, aux, Y, X, K):
     """:func:`surface_factors` (pickup, deposit) at the one pixel (Y, X)."""
     if not K.surface_acts:
         return 1.0, 1.0
-    top, und, dry_h = cv[0], cv[1], aux[3]
+    top, und, dry_h = cv.top, cv.und, aux.dry_height
     sl, ab, to = K.slickness, K.absorbency, K.surface_tooth
     wet = top[Y, X, IV] + und[Y, X, IV]
     dh = dry_h[Y, X]
@@ -1244,7 +1318,7 @@ def surface_at(cv, aux, Y, X, K):
 def _passes_off(st, F, H, W, y, x):
     """Whether window pixel (y, x) lies off the canvas and the tool passes
     over it in this step."""
-    Y, X = st.y0 + y, st.x0 + x
+    Y, X = st.win.y0 + y, st.win.x0 + x
     on = 0 <= Y < H and 0 <= X < W
     return not on and F[F_AA, y, x] != 0 and F[F_OVERLAP, y, x] != 0
 
@@ -1256,21 +1330,22 @@ def off_canvas(st, F, H, W):
     the nearest canvas pixel's Y, X). There the tool goes on as if the canvas
     went on as it is at its edge: it uses up the paint it would lay there,
     from the bristles that would lay it."""
-    if st.ch == st.hh and st.cw == st.ww:
+    win = st.win
+    if win.ch == win.hh and win.cw == win.ww:
         return np.empty((0, 4), np.int64)
     n = 0
-    for y in range(st.hh):
-        for x in range(st.ww):
+    for y in range(win.hh):
+        for x in range(win.ww):
             if _passes_off(st, F, H, W, y, x):
                 n += 1
     out = np.empty((n, 4), np.int64)
     i = 0
-    for y in range(st.hh):
-        for x in range(st.ww):
+    for y in range(win.hh):
+        for x in range(win.ww):
             if _passes_off(st, F, H, W, y, x):
                 out[i, 0], out[i, 1] = y, x
-                out[i, 2] = min(max(st.y0 + y, 0), H - 1)
-                out[i, 3] = min(max(st.x0 + x, 0), W - 1)
+                out[i, 2] = min(max(win.y0 + y, 0), H - 1)
+                out[i, 3] = min(max(win.x0 + x, 0), W - 1)
                 i += 1
     return out
 
@@ -1278,7 +1353,7 @@ def off_canvas(st, F, H, W):
 @njit(cache=True, error_model="numpy")
 def column_demand(taps, d):
     """What the volume ``d`` per pixel asks of each bristle column."""
-    cols, wts, ntap = taps
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
     hh, ww = d.shape
     demand = np.zeros(COLUMNS)
     for y in range(hh):
@@ -1293,61 +1368,30 @@ def column_demand(taps, d):
 def touched(st, F):
     """The part of the step's window on the canvas that the tool passes over
     in this step (where its footprint ``F`` covers a pixel and sweeps over
-    it), as a Step whose canvas part (cy0, cx0, ch, cw at wy0, wx0) is that
+    it), as a Window whose canvas part (cy0, cx0, ch, cw at wy0, wx0) is that
     part. Everywhere else in the window its exposure and coverage are 0: the
     step adds nothing there, moves nothing and lifts nothing."""
-    y_lo, y_hi, x_lo, x_hi = st.ch, -1, st.cw, -1
-    for y in range(st.ch):
-        for x in range(st.cw):
-            wy, wx = st.wy0 + y, st.wx0 + x
+    win = st.win
+    y_lo, y_hi, x_lo, x_hi = win.ch, -1, win.cw, -1
+    for y in range(win.ch):
+        for x in range(win.cw):
+            wy, wx = win.wy0 + y, win.wx0 + x
             if F[F_AA, wy, wx] != 0 and F[F_OVERLAP, wy, wx] != 0:
                 y_lo, y_hi = min(y_lo, y), max(y_hi, y)
                 x_lo, x_hi = min(x_lo, x), max(x_hi, x)
     if y_hi < 0:  # (not reached: there is no step without exposure)
         y_lo, y_hi, x_lo, x_hi = 0, -1, 0, -1
-    return Step(
-        st.i,
-        st.first,
-        st.last,
-        st.touchdown,
-        st.x0,
-        st.y0,
-        st.hh,
-        st.ww,
-        st.cy0 + y_lo,
-        st.cx0 + x_lo,
-        y_hi - y_lo + 1,
-        x_hi - x_lo + 1,
-        st.wy0 + y_lo,
-        st.wx0 + x_lo,
-        st.cx,
-        st.cy,
-        st.tx,
-        st.ty,
-        st.ds,
-        st.p,
-        st.p_now,
-        st.p_before,
-        st.r0,
-        st.r1,
-        st.r,
-        st.Wd,
-        st.Wn,
-        st.side,
-        st.uscale,
-        st.lmax,
-        st.h_tab_max,
-        st.arc_i,
-        st.lip,
-        st.wet,
-        st.dry,
-        st.span,
-        st.nsub,
-        st.rho,
-        st.splay,
-        st.lift_len,
-        st.lift_amp,
-        st.overload,
+    return Window(
+        x0=win.x0,
+        y0=win.y0,
+        hh=win.hh,
+        ww=win.ww,
+        cy0=win.cy0 + y_lo,
+        cx0=win.cx0 + x_lo,
+        ch=y_hi - y_lo + 1,
+        cw=x_hi - x_lo + 1,
+        wy0=win.wy0 + y_lo,
+        wx0=win.wx0 + x_lo,
     )
 
 
@@ -1377,11 +1421,10 @@ def deposit(
     at full strength), even a thin film goes on top: a light touch lays paint
     over wet paint. (Where the two old layers are much the same paint it goes
     under anyway.) During a brushstroke this waits until the stroke has passed
-    (``pend``, see brush._pending): a pixel first grazed by the edge of a
+    (``pend``, see Pending): a pixel first grazed by the edge of a
     looping stroke may later get its body."""
-    top, und, top_a, und_a, ids = cv
-    pinfo = pend[4]
-    holding = pinfo[0] != 0 and by_film and not moved
+    top, und, top_a, und_a, ids = cv.top, cv.und, cv.top_a, cv.und_a, cv.top_id
+    holding = pend.where[PEND_ON] != 0 and by_film and not moved
     hh, ww = d.shape
     for y in range(hh):
         Y = sy0 + y
@@ -1397,7 +1440,12 @@ def deposit(
             # an earlier top layer worth keeping out of the layer below: hold the new
             # paint back until we know how well the stroke covers it
             known_harmless = False  # (as worked out here: it is the same below)
-            if holding and old and _pending_at(pinfo, Y, X) and top[Y, X, IV] > 1e-4:
+            if (
+                holding
+                and old
+                and _pending_at(pend.where, Y, X)
+                and top[Y, X, IV] > 1e-4
+            ):
                 known_harmless = harmless(top[Y, X], und[Y, X])
                 if not known_harmless:
                     _hold_back(
@@ -1444,10 +1492,11 @@ def _join_top_if_alike(top, und, pk, Y, X):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _pending_at(pinfo, Y, X):
-    """Whether canvas pixel (Y, X) lies in the window of pending paint (see
-    brush._pending)."""
-    return pinfo[1] <= Y < pinfo[1] + pinfo[3] and pinfo[2] <= X < pinfo[2] + pinfo[4]
+def _pending_at(where, Y, X):
+    """Whether canvas pixel (Y, X) lies in the box of pending paint (``where``,
+    see Pending)."""
+    y0, x0 = where[PEND_Y0], where[PEND_X0]
+    return y0 <= Y < y0 + where[PEND_H] and x0 <= X < x0 + where[PEND_W]
 
 
 @njit(cache=True, error_model="numpy", inline="always")
@@ -1456,19 +1505,21 @@ def _hold_back(cv, pend, dep, cover, reach, has_reach, y, x, Y, X, stroke_id):
     back in the pending paint (see deposit), with the ``cover`` and ``reach``
     it brought. Once the body of the brush has been over it, or it laid a
     covering film, it goes on top of the old top, which it buries."""
-    top, und, top_a, und_a, ids = cv
-    paint, pcov, prch, pon, pinfo = pend
-    py, px = Y - pinfo[1], X - pinfo[2]
+    top, und, top_a, und_a, ids = cv.top, cv.und, cv.top_a, cv.und_a, cv.top_id
+    paint, pcov, prch, pon = pend.paint, pend.cover, pend.reach, pend.held
+    where = pend.where
+    py, px = Y - where[PEND_Y0], X - where[PEND_X0]
     for c in range(PACKED):
         paint[py, px, c] += np.float32(dep[y, x, c])
     pcov[py, px] += cover[y, x]
     if has_reach:
         prch[py, px] += reach[y, x]
     pon[py, px] = True
-    # (where paint is held: rows pinfo[5]..pinfo[6], columns
-    # pinfo[7]..pinfo[8])
-    pinfo[5], pinfo[6] = min(pinfo[5], py), max(pinfo[6], py + 1)
-    pinfo[7], pinfo[8] = min(pinfo[7], px), max(pinfo[8], px + 1)
+    # (where paint is held)
+    where[PEND_ROW0] = min(where[PEND_ROW0], py)
+    where[PEND_ROW1] = max(where[PEND_ROW1], py + 1)
+    where[PEND_COL0] = min(where[PEND_COL0], px)
+    where[PEND_COL1] = max(where[PEND_COL1], px + 1)
     if buried(paint[py, px, IV], prch[py, px]) >= BURIED:
         if top[Y, X, IV] > EMPTY:
             und_a[Y, X] = max(und_a[Y, X], top_a[Y, X])
@@ -1530,17 +1581,18 @@ def _bury_share(top, und, top_a, und_a, Y, X, k32):
 @njit(cache=True, error_model="numpy")
 def settle_pending(cv, pend, stroke_id):
     """The stroke has passed: settle the pixels its edge only grazed (see
-    brush._pending). The old top keeps its place, the share the faint new
+    Pending). The old top keeps its place, the share the faint new
     film would bury goes under, and the new paint stirs into the rest."""
-    top, und, top_a, und_a, ids = cv
-    paint, pcov, prch, pon, pinfo = pend
-    if pinfo[0] == 0:
+    top, und, top_a, und_a, ids = cv.top, cv.und, cv.top_a, cv.und_a, cv.top_id
+    paint, pcov, prch, pon = pend.paint, pend.cover, pend.reach, pend.held
+    where = pend.where
+    if where[PEND_ON] == 0:
         return
-    for py in range(pinfo[5], pinfo[6]):
-        for px in range(pinfo[7], pinfo[8]):
+    for py in range(where[PEND_ROW0], where[PEND_ROW1]):
+        for px in range(where[PEND_COL0], where[PEND_COL1]):
             if not pon[py, px]:
                 continue
-            Y, X = pinfo[1] + py, pinfo[2] + px
+            Y, X = where[PEND_Y0] + py, where[PEND_X0] + px
             k = buried(paint[py, px, IV], prch[py, px])
             if k < 1.0 and harmless(top[Y, X], und[Y, X]):
                 k = 1.0
@@ -1729,7 +1781,7 @@ def press_glob(d, F, st, part, col_vol, col_over, hold, pattern, off, d_off):
             glob += col_vol[b] * (col_over[b] - hold) / col_over[b]
     if glob <= 0:
         return
-    p = st.p
+    p = st.hold.p
     vol = DAB_GLOB * (0.6 + 0.8 * p) * glob
     a = 1.6 - 1.2 * p  # how domed
     ch, cw = d.shape
@@ -1762,10 +1814,10 @@ def _mound(F, st, wy, wx, a, pattern):
     if aa <= 0 or F[F_OVERLAP, wy, wx] <= 0:
         return 0.0
     n2 = pattern.shape[0] - 1
-    lr = min(abs(F[F_LAT, wy, wx]) / max(st.r * st.lmax, 1e-9), 1.0)
+    lr = min(abs(F[F_LAT, wy, wx]) / max(st.hold.r * st.hold.lmax, 1e-9), 1.0)
     rel = clip(F[F_REL, wy, wx] / max(F[F_H, wy, wx], 1e-9), -1.0, 1.0)
     rr = min(math.sqrt(lr * lr + rel * rel * (1.0 - lr * lr)), 1.0)
-    iy, ix = dab_cell(F[F_U, wy, wx], F[F_ALONG, wy, wx], st.r, n2)
+    iy, ix = dab_cell(F[F_U, wy, wx], F[F_ALONG, wy, wx], st.hold.r, n2)
     return aa * (1.0 - rr * rr) ** a * (0.6 + 0.8 * pattern[iy, ix])
 
 
@@ -1813,7 +1865,7 @@ def lay_off(
     it holds. The columns are also asked for ``extra`` volume each (empty:
     nothing) that they lay off the canvas: they give their share of it as
     of the rest, and it is gone."""
-    tip = br[0]
+    tip = br.tip
     give, comp = _give(tip, demand_with(taps, d, extra))
     used = np.zeros(COLUMNS)
     dep, d_px, total = _from_columns(taps, d, give, comp, used)
@@ -1866,7 +1918,7 @@ def _from_columns(taps, d, give, comp, used):
     ``d`` per pixel and giving their share ``give`` of it, of paint ``comp``
     (see _give); adds what each gives to ``used``. Returns the paint
     (packed, per pixel), its volume per pixel, and the volume in all."""
-    cols, wts, ntap = taps
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
     hh, ww = d.shape
     dep = np.zeros((hh, ww, PACKED))
     d_px = np.empty((hh, ww))
@@ -1892,7 +1944,7 @@ def _from_columns(taps, d, give, comp, used):
 def take_tips(tip, taps, d):
     """Take paint off the tips of the columns above each pixel, ``d`` per
     pixel (each column giving what it holds at most), and return it packed."""
-    cols, wts, ntap = taps
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
     hh, ww = d.shape
     demand = np.zeros(COLUMNS)
     for y in range(hh):
@@ -1978,7 +2030,7 @@ def spread_part(cv, pend, br, sy0, sx0, w, pk, cover, stroke_id, by_film, w_off)
         return
     tot = w.sum() + w_off
     if tot <= 1e-9:
-        tip = br[0]
+        tip = br.tip
         for b in range(COLUMNS):
             for c in range(PACKED):
                 tip[b, c] += pk[c] / COLUMNS
@@ -2101,7 +2153,7 @@ def take(top, und, sy0, sx0, excess, tv):
 def place(cv, pend, pk, x0, y0, sx, sy, stroke_id):
     """Put the packed paint ``pk`` (a window whose top-left pixel is (x0, y0))
     back on the canvas, moved by (sx, sy) pixels: paint pushed ahead of the tool."""
-    H, W = cv[0].shape[0], cv[0].shape[1]
+    H, W = cv.top.shape[0], cv.top.shape[1]
     m = int(math.ceil(max(abs(sx), abs(sy)))) + 1
     h, w = pk.shape[0], pk.shape[1]
     rx0, ry0 = max(x0 - m, 0), max(y0 - m, 0)
@@ -2204,7 +2256,7 @@ def stir(cv, sy0, sx0, m):
     """Homogenise the two wet sublayers of the window at (sy0, sx0) by a
     fraction ``m`` (0 = untouched, 1 = both become the same mixture). Each
     sublayer keeps its volume."""
-    top, und, top_a, und_a = cv[0], cv[1], cv[2], cv[3]
+    top, und, top_a, und_a = cv.top, cv.und, cv.top_a, cv.und_a
     hh, ww = m.shape
     for y in range(hh):
         for x in range(ww):
@@ -2230,7 +2282,7 @@ def stir(cv, sy0, sx0, m):
 def merge_same(cv, sy0, sx0, own, thr):
     """Where both wet layers of the window are much the same paint (not the
     stroke's own), merge them into the lower one."""
-    top, und, top_a, und_a = cv[0], cv[1], cv[2], cv[3]
+    top, und, top_a, und_a = cv.top, cv.und, cv.top_a, cv.und_a
     hh, ww = own.shape
     for y in range(hh):
         for x in range(ww):
@@ -2250,7 +2302,7 @@ def merge_same(cv, sy0, sx0, own, thr):
 @njit(cache=True, error_model="numpy")
 def add_sides(ridges, moved, lat, scale):
     """Paint pushed out to the left and right edges of the footprint."""
-    left, right = ridges[1], ridges[2]
+    left, right = ridges.left, ridges.right
     hh, ww = lat.shape
     for y in range(hh):
         for x in range(ww):
@@ -2264,8 +2316,8 @@ def squeeze_out(br, K, st, col_vol, col_load, hold, ridges, col_u):
     """An overloaded tool pressed down squeezes paint out at its edges,
     unevenly: the lips along a stroke swell and break. Only the paint under a
     knife's blade gets squeezed, not the whole glob riding on it."""
-    tip, belly = br[0], br[1]
-    ring, left, right = ridges
+    tip, belly = br.tip, br.belly
+    ring, left, right = ridges.ring, ridges.left, ridges.right
     over = np.empty(COLUMNS)
     anything = False
     for b in range(COLUMNS):
@@ -2275,29 +2327,29 @@ def squeeze_out(br, K, st, col_vol, col_load, hold, ridges, col_u):
         anything = anything or over[b] > 0
     if not (K.deposits and anything):
         return
-    p = st.p
+    p = st.hold.p
     rate = (
         (SQUEEZE_KNIFE if K.rigid else SQUEEZE_BRUSH)
         * (0.2 + p * p)
         * (0.5 + K.stiffness)
-        * st.ds
-        / st.Wd
-        * (0.2 + 1.6 * st.lip)
+        * st.motion.ds
+        / st.hold.Wd
+        * (0.2 + 1.6 * st.motion.lip)
     )
-    if st.lift_len > 0:
+    if st.hold.lift_len > 0:
         # (lifting off, the clumps press less and less out at the edges)
-        rate *= clip((K.arc_end - st.arc_i) / st.lift_len, 0.0, 1.0)
-    if st.touchdown:
+        rate *= clip((K.arc_end - st.motion.arc_i) / st.hold.lift_len, 0.0, 1.0)
+    if st.motion.touchdown:
         rate += 0.03 * (0.3 + p)
     for b in range(COLUMNS):
-        tk = min(over[b] * (st.Wn * st.Wn / COLUMNS) * rate, col_vol[b])
+        tk = min(over[b] * (st.hold.Wn * st.hold.Wn / COLUMNS) * rate, col_vol[b])
         frac = tk / max(col_vol[b], 1e-30) if col_vol[b] > 0 else 0.0
-        w_right = smoothstep(-0.3, 0.3, col_u[b] * st.side)
+        w_right = smoothstep(-0.3, 0.3, col_u[b] * st.hold.side)
         for c in range(PACKED):
             out = (tip[b, c] + belly[b, c]) * frac
             tip[b, c] -= tip[b, c] * frac
             belly[b, c] -= belly[b, c] * frac
-            if st.touchdown:
+            if st.motion.touchdown:
                 ring[c] += out
             else:
                 right[c] += out * w_right
@@ -2361,10 +2413,10 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
     it), lumpy where the bristle clumps pressed it out (``hair``, see
     hair_field). A dab, pressed straight down and lifted, leaves a rim all
     round."""
-    ring, left, right = ridges
+    ring, left, right = ridges.ring, ridges.left, ridges.right
     if not (ring[IV] > 0 or left[IV] > 0 or right[IV] > 0):
         return
-    H, W = cv[0].shape[0], cv[0].shape[1]
+    H, W = cv.top.shape[0], cv.top.shape[1]
     win, box = _ridge_window(st, K.margin, H, W, lose_off)
     oy0, ox0, oy1, ox1 = box
     if oy0 >= oy1 or ox0 >= ox1:
@@ -2373,7 +2425,7 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
     e_along, e_lat, e_r = geo
     # a soft tool's paint fades out before its outline: the squeezed-out paint
     # lies against where the mark fades, not out at the outline
-    inset = 0.6 * K.softness * st.r
+    inset = 0.6 * K.softness * st.hold.r
     weights = (np.empty(e_along.shape), np.empty(e_along.shape))
     w_t, w_g = weights
     if ring[IV] > 0:
@@ -2381,9 +2433,9 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
         _spread_ridge(cv, pend, br, K, ring, weights, win, box, lose_off)
     if left[IV] > 0 or right[IV] > 0:
         # scales with the mark's width
-        w = clip(0.24 * st.r * st.lmax, 0.6, K.margin - 1.0)
+        w = clip(0.24 * st.hold.r * st.hold.lmax, 0.6, K.margin - 1.0)
         # soft-ended, so that the ridges laid at successive steps run together smoothly
-        ramp = 0.5 * st.ds + 0.7
+        ramp = 0.5 * st.motion.ds + 0.7
         for k in range(2):
             pk = left if k == 0 else right
             if pk[IV] <= 0:
@@ -2392,7 +2444,11 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
                 # a brush's ridge is as wide as the paint in it makes it (about as
                 # high as it is wide: 1 unit of paint ~ 0.6 px), from the paint
                 # pushed out per px of travel
-                w = clip(1.2 * math.sqrt(pk[IV] / max(st.ds, 0.5)), 0.8, K.margin - 1.0)
+                w = clip(
+                    1.2 * math.sqrt(pk[IV] / max(st.motion.ds, 0.5)),
+                    0.8,
+                    K.margin - 1.0,
+                )
             for y in range(e_lat.shape[0]):
                 for x in range(e_lat.shape[1]):
                     lat = e_lat[y, x]
@@ -2423,16 +2479,17 @@ def _ridge_window(st, margin, H, W, lose_off):
     window (ey0, ex0, ey1, ex1: rows and columns in canvas coordinates; with
     ``lose_off`` it may reach past the canvas), and the block of it on the
     canvas (oy0, ox0, oy1, ox1, in the window; empty: none)."""
+    win = st.win
     m_px = int(math.ceil(margin))
-    ey0, ex0 = max(st.y0 - m_px, 0), max(st.x0 - m_px, 0)
-    ey1, ex1 = min(st.y0 + st.hh + m_px, H), min(st.x0 + st.ww + m_px, W)
+    ey0, ex0 = max(win.y0 - m_px, 0), max(win.x0 - m_px, 0)
+    ey1, ex1 = min(win.y0 + win.hh + m_px, H), min(win.x0 + win.ww + m_px, W)
     oy0, ox0, oy1, ox1 = 0, 0, ey1 - ey0, ex1 - ex0
     if lose_off:
         # (the whole window, off the canvas too)
-        fy0, fx0 = st.y0 - m_px, st.x0 - m_px
+        fy0, fx0 = win.y0 - m_px, win.x0 - m_px
         oy0, ox0, oy1, ox1 = ey0 - fy0, ex0 - fx0, ey1 - fy0, ex1 - fx0
         ey0, ex0 = fy0, fx0
-        ey1, ex1 = st.y0 + st.hh + m_px, st.x0 + st.ww + m_px
+        ey1, ex1 = win.y0 + win.hh + m_px, win.x0 + win.ww + m_px
     return (ey0, ex0, ey1, ex1), (oy0, ox0, oy1, ox1)
 
 
@@ -2447,13 +2504,13 @@ def _window_geometry(st, win):
     e_lat = np.empty((eh, ew))
     e_r = np.empty((eh, ew))
     for y in range(eh):
-        gy = (ey0 + y) + 0.5 - st.cy
+        gy = (ey0 + y) + 0.5 - st.motion.cy
         for x in range(ew):
-            gx = (ex0 + x) + 0.5 - st.cx
-            a = gx * st.tx + gy * st.ty
+            gx = (ex0 + x) + 0.5 - st.motion.cx
+            a = gx * st.motion.tx + gy * st.motion.ty
             e_along[y, x] = a
-            e_lat[y, x] = -gx * st.ty + gy * st.tx
-            e_r[y, x] = radius_at(a, st.ds, st.r0, st.r1, st.r)
+            e_lat[y, x] = -gx * st.motion.ty + gy * st.motion.tx
+            e_r[y, x] = radius_at(a, st.motion.ds, st.hold.r0, st.hold.r1, st.hold.r)
     return e_along, e_lat, e_r
 
 
@@ -2470,25 +2527,25 @@ def _ring_weights(K, st, vol, geo, tables, hair, inset, weights):
     e_along, e_lat, e_r = geo
     grid, c_tab, h_tab = tables
     w_t, w_g = weights
-    lmax, margin = st.lmax, K.margin
+    lmax, margin = st.hold.lmax, K.margin
     bead = not (K.is_dab or K.rigid)
     w = clip(
-        0.24 * st.r * min(lmax, 1.0 if K.circle else st.h_tab_max),
+        0.24 * st.hold.r * min(lmax, 1.0 if K.circle else st.hold.h_tab_max),
         0.6,
         margin - 1.0,
     )
     set_down, hb = 0.0, 1.0
     if bead:
         # around where the brush landed, at the start of this first step
-        set_down = st.ds
+        set_down = st.motion.ds
         # the length of the back and the sides of the footprint
         if K.circle:
-            rim_len = 2.0 * math.pi * st.r * 0.75
+            rim_len = 2.0 * math.pi * st.hold.r * 0.75
         else:
-            rim_len = 2.0 * st.r * (lmax + 2.0 * st.h_tab_max)
+            rim_len = 2.0 * st.hold.r * (lmax + 2.0 * st.hold.h_tab_max)
         # about as high (1 unit of paint ~ 0.6 px) as it is wide
         w = clip(1.4 * math.sqrt(vol / max(rim_len, 1e-6)), 1.5, margin - 1.0)
-        hb = max(0.5 * st.r * (1.0 if K.circle else st.h_tab_max), 1.0)
+        hb = max(0.5 * st.hold.r * (1.0 if K.circle else st.hold.h_tab_max), 1.0)
     eh, ew = e_along.shape
     for y in range(eh):
         for x in range(ew):
@@ -2518,7 +2575,7 @@ def _outside_by(K, st, lat, ea, r, grid, c_tab, h_tab):
     el = lat / r
     e_c = interp(el, g0, g1, c_tab, c_tab[0], c_tab[c_tab.shape[0] - 1]) * r
     e_h = interp(el, g0, g1, h_tab, 0.0, 0.0) * r
-    a = abs(lat) - r * st.lmax
+    a = abs(lat) - r * st.hold.lmax
     b = abs(ea - e_c) - e_h
     return math.sqrt(max(a, 0.0) ** 2 + max(b, 0.0) ** 2) + min(max(a, b), 0.0)
 
@@ -2532,16 +2589,18 @@ def _side_weight(K, st, lat, along, r, w, ramp, inset, c_tab, hair):
     nt = c_tab.shape[0]
     ce = 0.0 if K.circle else (c_tab[nt - 1] if lat > 0 else c_tab[0]) * r
     rel_e = along - ce
-    box = smoothstep(-st.ds - ramp, -st.ds + ramp, rel_e) * smoothstep(
+    box = smoothstep(-st.motion.ds - ramp, -st.motion.ds + ramp, rel_e) * smoothstep(
         ramp, -ramp, rel_e
     )
-    e_side = abs(lat) - r * st.lmax + inset
+    e_side = abs(lat) - r * st.hold.lmax + inset
     if not K.rigid:
         # steep against the stroke, a longer slope outside; it swells and
         # breaks where the clumps at the edge of the brush pushed it out, and
         # skips under a light touch
         hv = hair_at(hair, st, K, along, lat)
-        lump = (0.3 + 1.4 * hv) * smoothstep(0.55 - st.p, 0.75 - st.p, hv + 0.3)
+        lump = (0.3 + 1.4 * hv) * smoothstep(
+            0.55 - st.hold.p, 0.75 - st.hold.p, hv + 0.3
+        )
         return _ridge(e_side, w) * box * lump, _geo(e_side, w) * box
     return _tent(e_side, w) * box, _geo(e_side, w) * box
 
@@ -2614,27 +2673,27 @@ def own_lift(g, n):
 
 
 @njit(cache=True, error_model="numpy")
-def pick_up(cv, br, taps, F, st, K, f_pick):
+def pick_up(cv, br, taps, F, part, p, K, f_pick):
     """The tool lifts wet paint. Bristles plough through it: they lift paint
     along the hair lines and leave it between them (brush marks). Thick fresh
     paint shields the older layer below. What is lifted goes into the columns
     that touched it: into their tips, and from deep wet paint partly further up
-    (see past_tips)."""
-    top, und, ids = cv[0], cv[1], cv[4]
-    tip, belly = br[0], br[1]
-    cols, wts, ntap = taps
-    p = st.p
+    (see past_tips). Over the ``part`` of the step's window it passes over
+    (see :func:`touched`), pressed ``p``."""
+    top, und, ids = cv.top, cv.und, cv.top_id
+    tip, belly = br.tip, br.belly
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
     gain = K.pickup * 1.2 * (0.25 + 1.5 * min(p, 1.0))
     if gain <= 0:
         return
     lifted = np.empty(PACKED)
     lifted_und = np.empty(PACKED)
-    for y in range(st.ch):
-        for x in range(st.cw):
-            Y, X = st.cy0 + y, st.cx0 + x
-            q = y * st.cw + x
-            plough = F[F_EXPO, st.wy0 + y, st.wx0 + x] * max(
-                2.0 - F[F_STREAK, st.wy0 + y, st.wx0 + x], 0.0
+    for y in range(part.ch):
+        for x in range(part.cw):
+            Y, X = part.cy0 + y, part.cx0 + x
+            q = y * part.cw + x
+            plough = F[F_EXPO, part.wy0 + y, part.wx0 + x] * max(
+                2.0 - F[F_STREAK, part.wy0 + y, part.wx0 + x], 0.0
             )
             k = gain * plough * f_pick[y, x]
             if k == 0:
@@ -2705,27 +2764,32 @@ def lay_amount(F, wy, wx, K, lift_gain, tp, glob, q, f_dep, f_pick, hollow):
 
 
 @njit(cache=True, error_model="numpy")
-def _touches_off(st, F):
-    """Whether the tool passes over any pixel of the step's window off the
-    canvas (where it uses up paint as over a canvas going on there)."""
-    if st.ch == st.hh and st.cw == st.ww:
+def _touches_off(win, F):
+    """Whether the tool passes over any pixel of the step's window ``win``
+    off the canvas (where it uses up paint as over a canvas going on there)."""
+    if win.ch == win.hh and win.cw == win.ww:
         return False
-    for y in range(st.hh):
-        for x in range(st.ww):
-            on = st.wy0 <= y < st.wy0 + st.ch and st.wx0 <= x < st.wx0 + st.cw
+    for y in range(win.hh):
+        for x in range(win.ww):
+            on = win.wy0 <= y < win.wy0 + win.ch and win.wx0 <= x < win.wx0 + win.cw
             if not on and F[F_EXPO, y, x] != 0:
                 return True
     return False
 
 
 @njit(cache=True, error_model="numpy")
-def brush_step(st, K, tex, tex2, tables, cv, aux, pend, br, col_u):
-    """One step of a brush along its stroke: where it touches the canvas, and
-    what it does there. Returns (how coated the bristles are with wet paint,
-    whether the brush has run dry)."""
-    F, hit = footprint(st, K, tex, tex2, tables[0], tables[1], tables[2])
-    if not hit and not _touches_off(st, F):
-        return st.wet, st.dry
+def brush_step(st, wet, dry, tables, kit):
+    """One step ``st`` of a brush along its stroke, with the footprint's chord
+    tables ``tables`` (grid, c_tab, h_tab): where it touches the canvas, and
+    what it does there. The brush comes to it this coated with wet paint
+    (``wet``), and run dry or not (``dry``); ``kit`` is what stays the same
+    along the stroke (see brush_kit). Returns (how coated the bristles are
+    with wet paint, whether the brush has run dry) after it."""
+    K, tex, tex2, cv, aux, pend, br, col_u = _unpack_kit(kit)
+    grid, c_tab, h_tab = tables
+    F, hit = footprint(st, K, tex, tex2, grid, c_tab, h_tab)
+    if not hit and not _touches_off(st.win, F):
+        return wet, dry
     # most of the work is only where the tool passes over in this step
     part = touched(st, F)
     # (the planes it reads, as arrays of their own: one compiled bristle_taps
@@ -2734,23 +2798,70 @@ def brush_step(st, K, tex, tex2, tables, cv, aux, pend, br, col_u):
         np.ascontiguousarray(
             F[F_U, part.wy0 : part.wy0 + part.ch, part.wx0 : part.wx0 + part.cw]
         ),
-        st.span,
-        st.nsub,
+        st.hold.span,
+        st.hold.nsub,
         K.ring,
-        st.rho,
+        st.hold.rho,
     )
-    return brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, tex2)
+    return brush_step_on(
+        st, part, wet, dry, K, F, taps, cv, aux, pend, br, tables, col_u, tex2
+    )
+
+
+def brush_kit(K, tex, tex2, cv, aux, pend, br, col_u):
+    """What :func:`brush_step` takes of a stroke, the same at every step:
+    the stroke's settings ``K`` (a StrokeConsts), its textures, the canvas's
+    Layers ``cv`` and Beneath ``aux``, the Pending paint ``pend``, the Load
+    on the brush ``br``, and where its columns sit across the mark
+    ``col_u``. Made once per stroke.
+
+    They go to the kernel as plain tuples, and it names them again on entry
+    (see _unpack_kit): numba's dispatcher types a named tuple by its class
+    and its field names at every call, a few times slower than a plain one,
+    which would cost several percent of the time a small brush takes."""
+    named = (
+        (K, StrokeConsts),
+        (cv, Layers),
+        (aux, Beneath),
+        (pend, Pending),
+        (br, Load),
+    )
+    for value, cls in named:
+        if not isinstance(value, cls):
+            raise TypeError(f"expected a {cls.__name__}, got {type(value).__name__}")
+    # (in the order _unpack_kit reads them)
+    return (tuple(K), tex, tex2, tuple(cv), tuple(aux), tuple(pend), tuple(br), col_u)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _unpack_kit(kit):
+    """The bundles of :func:`brush_kit`, named again: (K, tex, tex2, cv,
+    aux, pend, br, col_u)."""
+    k_t, tex, tex2, cv_t, aux_t, pend_t, br_t, col_u = kit
+    return (
+        StrokeConsts(*k_t),
+        tex,
+        tex2,
+        Layers(*cv_t),
+        Beneath(*aux_t),
+        Pending(*pend_t),
+        Load(*br_t),
+        col_u,
+    )
 
 
 @njit(cache=True, error_model="numpy")
-def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
+def brush_step_on(
+    st, part, wet, dry, K, F, taps, cv, aux, pend, br, tables, col_u, hair
+):
     """One step of a brush, over its footprint ``F`` (see brush_step), on the
     ``part`` of its window it passes over (see :func:`touched`; ``taps`` are
     for that part)."""
-    top, und = cv[0], cv[1]
-    tip, belly = br[0], br[1]
+    win = st.win
+    top, und = cv.top, cv.und
+    tip, belly = br.tip, br.belly
     grid, c_tab, h_tab = tables
-    p = st.p
+    p = st.hold.p
     # (true and false as run-time values, not constants: one compiled kernel
     # for these calls and a knife's)
     brush, knife = not K.rigid, K.rigid
@@ -2759,26 +2870,26 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
     # 0) drag: wet paint under the brush is pushed along with it
     if K.drag > 0:
         f = _drag_fraction(cv, br, F, st, part, K, f_drag)
-        ds = st.ds
+        ds = st.motion.ds
         drag(
             top,
             und,
             f,
             part.cx0,
             part.cy0,
-            st.tx * ds,
-            st.ty * ds,
+            st.motion.tx * ds,
+            st.motion.ty * ds,
             p,
-            st.x0,
-            st.y0,
-            st.hh,
-            st.ww,
+            win.x0,
+            win.y0,
+            win.hh,
+            win.ww,
         )
 
     # 1) refill the tips, work the paints on the brush, pick up wet paint
-    capacity = max(K.smear, 0.05) * 0.8 * st.Wd * st.Wd
+    capacity = max(K.smear, 0.05) * 0.8 * st.hold.Wd * st.hold.Wd
     work_load(br, K, st, capacity)
-    pick_up(cv, br, taps, F, part, K, f_pick)
+    pick_up(cv, br, taps, F, part, p, K, f_pick)
 
     # 2) how much paint the brush carries, per column. Paint beyond what the hair
     #    holds is a glob on the outside: it goes on thick, the more so the stiffer the
@@ -2791,8 +2902,7 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
     #    laid), deeper along the hair lines and under pressure: what stands above them
     #    is shifted, partly onto the brush, partly out to the sides (ridges), the rest
     #    pushed ahead (left as a ridge where the brush lifts)
-    # ring, left, right
-    ridges = (np.zeros(PACKED), np.zeros(PACKED), np.zeros(PACKED))
+    ridges = Ridges(np.zeros(PACKED), np.zeros(PACKED), np.zeros(PACKED))
     _plough(cv, aux, pend, br, F, st, K, thick, ridges)
     squeeze_out(br, K, st, col_vol, col_over, hold, ridges, col_u)
     lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, brush)
@@ -2802,7 +2912,7 @@ def brush_step_on(st, part, K, F, taps, cv, aux, pend, br, tables, col_u, hair):
     #    coated and keep laying a continuous smear for a short distance.
     #    (Only where it passes over: elsewhere its contact is 0.)
     contact, off, o_taps, q, o_q, wet, dry = _contact_catch_wet_dry(
-        st, part, K, F, taps, cv, aux, col_fill, load
+        st, part, wet, dry, K, F, taps, cv, aux, col_fill, load
     )
     if not dry and _tip_volume(tip) > 0 and K.deposits:
         lift_gain = OWN_LIFT * K.pickup * 1.2 * (0.05 + 1.9 * min(p, 1.0))
@@ -2853,14 +2963,14 @@ def _drag_fraction(cv, br, F, st, part, K, f_drag):
     it drag ``f_drag``. A loaded brush glides on the paint it has just laid;
     one running dry has nothing to glide on and smears it on ahead (a
     dry-brush tail)."""
-    ids = cv[4]
-    tip, belly = br[0], br[1]
+    ids = cv.top_id
+    tip, belly = br.tip, br.belly
     f = np.empty((part.ch, part.cw))
-    coef = K.drag * f_drag * (0.5 + st.p)
+    coef = K.drag * f_drag * (0.5 + st.hold.p)
     on_brush = 0.0
     for b in range(COLUMNS):
         on_brush += tip[b, IV] + belly[b, IV]
-    own_drag = smoothstep(0.8, 0.15, on_brush / (st.Wn * st.Wn))
+    own_drag = smoothstep(0.8, 0.15, on_brush / (st.hold.Wn * st.hold.Wn))
     for y in range(part.ch):
         for x in range(part.cw):
             wy, wx = part.wy0 + y, part.wx0 + x
@@ -2870,7 +2980,7 @@ def _drag_fraction(cv, br, F, st, part, K, f_drag):
             f[y, x] = min(
                 coef
                 * F[F_PROFILE, wy, wx]
-                * clip(F[F_OVERLAP, wy, wx] / st.ds, 0.0, 1.0),
+                * clip(F[F_OVERLAP, wy, wx] / st.motion.ds, 0.0, 1.0),
                 1.0,
             )
             if ids[part.cy0 + y, part.cx0 + x] == K.stroke_id:
@@ -2888,10 +2998,10 @@ def _column_loads(br, st, K):
     lays). What the hair holds is a matter of the size of the bundle, not of
     how wide the mark is: touching lightly with a pointed brush, or lowering
     it at a tapered end, doesn't put the paint in it beyond what it holds."""
-    p = st.p
-    col_vol, load, col_load, col_body, body = load_stats(br[0], br[1], st.Wn)
-    wg = max(st.Wn, 0.6 * K.bundle)
-    k_g = (st.Wn / wg) ** 2
+    p = st.hold.p
+    col_vol, load, col_load, col_body, body = load_stats(br.tip, br.belly, st.hold.Wn)
+    wg = max(st.hold.Wn, 0.6 * K.bundle)
+    k_g = (st.hold.Wn / wg) ** 2
     # small brushes have long hair for their width: they hold far more for their size
     hold = HOLD * K.capacity * (1.3 - 0.6 * p) * max(1.0, 20.0 / wg) ** 1.5
     glob_gain = IMPASTO * (1.2 - 0.5 * p)
@@ -2917,40 +3027,50 @@ def _plough(cv, aux, pend, br, F, st, K, thick, ridges):
     what stands above them is shifted, partly onto the brush, partly out to
     the sides (into ``ridges``), the rest pushed ahead. A point (``K.dig``)
     cuts a groove through a share of all of it."""
-    top, und = cv[0], cv[1]
-    p = st.p
+    win = st.win
+    top, und = cv.top, cv.und
+    p = st.hold.p
     hb = max(1.25 * thick, 3.5 * (1.15 - p) * (1.3 - 0.8 * K.stiffness))
     digging = K.dig > 0
     vmax = 0.0
-    for y in range(st.ch):
-        for x in range(st.cw):
-            Y, X = st.cy0 + y, st.cx0 + x
+    for y in range(win.ch):
+        for x in range(win.cw):
+            Y, X = win.cy0 + y, win.cx0 + x
             vmax = max(vmax, top[Y, X, IV] + und[Y, X, IV])
     if not (digging or vmax > (1.0 - 0.4 * K.streaks) * hb):
         return
     tv, wet_h, excess, emax = _excess(cv, aux, F, st, K, hb, digging)
     if not emax > 1e-3:
         return
-    moved = take(top, und, st.cy0, st.cx0, excess, tv)
+    moved = take(top, und, win.cy0, win.cx0, excess, tv)
     share_pick = 0.5 * min(K.pickup, 1.0)
     _onto_brush(br, moved, wet_h, F, st, K, share_pick)
     moved *= 1.0 - share_pick
-    if st.touchdown:
-        ring = ridges[0]
-        for y in range(st.ch):
-            for x in range(st.cw):
+    if st.motion.touchdown:
+        ring = ridges.ring
+        for y in range(win.ch):
+            for x in range(win.cw):
                 for c in range(PACKED):
                     ring[c] += moved[y, x, c]
         return
     # a point pushes it all aside
     to_side = 1.0 if digging else 0.35 / (1.0 - share_pick)
-    wy0, wx0 = st.wy0, st.wx0
-    lat = np.ascontiguousarray(F[F_LAT, wy0 : wy0 + st.ch, wx0 : wx0 + st.cw])
+    wy0, wx0 = win.wy0, win.wx0
+    lat = np.ascontiguousarray(F[F_LAT, wy0 : wy0 + win.ch, wx0 : wx0 + win.cw])
     add_sides(ridges, moved, lat, to_side)
     if to_side < 1.0:
         moved *= 1.0 - to_side
-        ds = st.ds
-        place(cv, pend, moved, st.cx0, st.cy0, st.tx * ds, st.ty * ds, K.stroke_id)
+        ds = st.motion.ds
+        place(
+            cv,
+            pend,
+            moved,
+            win.cx0,
+            win.cy0,
+            st.motion.tx * ds,
+            st.motion.ty * ds,
+            K.stroke_id,
+        )
 
 
 @njit(cache=True, error_model="numpy", inline="always")
@@ -2961,14 +3081,22 @@ def _excess(cv, aux, F, st, K, hb, digging):
     ``digging``, the share of it a point cuts through. Returns (the volume
     of the top layer there, of all the wet paint, the excess, the most of
     it)."""
-    top, und, ids = cv[0], cv[1], cv[4]
-    floor = aux[0]
-    ch, cw, cy0, cx0, wy0, wx0 = st.ch, st.cw, st.cy0, st.cx0, st.wy0, st.wx0
+    win = st.win
+    top, und, ids = cv.top, cv.und, cv.top_id
+    floor = aux.floor
+    ch, cw, cy0, cx0, wy0, wx0 = (
+        win.ch,
+        win.cw,
+        win.cy0,
+        win.cx0,
+        win.wy0,
+        win.wx0,
+    )
     tv = np.empty((ch, cw))
     wet_h = np.empty((ch, cw))
     excess = np.empty((ch, cw))
     emax = 0.0
-    depth = K.dig * smoothstep(0.05, 0.6, st.p)
+    depth = K.dig * smoothstep(0.05, 0.6, st.hold.p)
     for y in range(ch):
         for x in range(cw):
             Y, X = cy0 + y, cx0 + x
@@ -2989,7 +3117,7 @@ def _excess(cv, aux, F, st, K, hb, digging):
                 ex *= 1.0 - math.exp(-0.8 * K.stiffness**2 * e)
                 # a light tap only touches with the bristle tips: it doesn't plough
                 if K.is_dab:
-                    ex *= smoothstep(0.4, 0.8, st.p)
+                    ex *= smoothstep(0.4, 0.8, st.hold.p)
             excess[y, x] = ex
             emax = max(emax, ex)
     return tv, wet_h, excess, emax
@@ -3001,14 +3129,16 @@ def _onto_brush(br, moved, wet_h, F, st, K, share_pick):
     packed per pixel of the step's window on the canvas) goes onto the
     columns above it: into their tips, and from deep wet paint (``wet_h``)
     partly further up (see past_tips)."""
-    tip, belly = br[0], br[1]
-    ch, cw, wy0, wx0 = st.ch, st.cw, st.wy0, st.wx0
+    win = st.win
+    tip, belly = br.tip, br.belly
+    ch, cw, wy0, wx0 = win.ch, win.cw, win.wy0, win.wx0
     u = np.ascontiguousarray(F[F_U, wy0 : wy0 + ch, wx0 : wx0 + cw])
-    cols, wts, ntap = bristle_taps(u, st.span, st.nsub, K.ring, st.rho)
+    taps = bristle_taps(u, st.hold.span, st.hold.nsub, K.ring, st.hold.rho)
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
     for y in range(ch):
         for x in range(cw):
             q = y * cw + x
-            deep = past_tips(wet_h[y, x], st.p, K)
+            deep = past_tips(wet_h[y, x], st.hold.p, K)
             for t in range(ntap[q]):
                 b, wt = cols[q, t], wts[q, t] * share_pick
                 for c in range(PACKED):
@@ -3018,16 +3148,16 @@ def _onto_brush(br, moved, wet_h, F, st, K, share_pick):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _contact_catch_wet_dry(st, part, K, F, taps, cv, aux, col_fill, load):
+def _contact_catch_wet_dry(st, part, wet, dry, K, F, taps, cv, aux, col_fill, load):
     """How the brush touches the paint in a step (it lays nothing): its
     contact at each pixel it passes over (see _contact); the pixels off the
     canvas it passes over and the bristle taps there; how much of what its
     tips offer catches at each pixel, on and off the canvas (see _catch),
     given how full each column is (``col_fill``) and the brush's ``load``;
-    how coated the bristles are with wet paint; and whether the brush has
-    run dry (see _runs_dry). Returns (contact, off, o_taps, q, o_q, wet,
-    dry)."""
-    top = cv[0]
+    how coated the bristles are with wet paint after it (``wet`` before);
+    and whether the brush has run dry (see _runs_dry; ``dry`` before).
+    Returns (contact, off, o_taps, q, o_q, wet, dry)."""
+    top = cv.top
     contact, wet_contact, sums = _contact(cv, F, part)
     # Where the brush sticks out past the edge of the canvas, it goes on as if
     # the canvas went on as it is at its edge (see off_canvas): those bristles
@@ -3037,16 +3167,16 @@ def _contact_catch_wet_dry(st, part, K, F, taps, cv, aux, col_fill, load):
     off = off_canvas(st, F, top.shape[0], top.shape[1])
     o_contact, o_wet, o_u, sums = _contact_off(cv, F, off, sums)
     sum_contact, sum_wet = sums
-    o_taps = bristle_taps(o_u, st.span, st.nsub, K.ring, st.rho)
+    o_taps = bristle_taps(o_u, st.hold.span, st.hold.nsub, K.ring, st.hold.rho)
     norm = max(sum_contact, 1e-12)
-    wet = max(sum_wet / norm, st.wet * math.exp(-st.ds / st.Wd))
+    wet = max(sum_wet / norm, wet * math.exp(-st.motion.ds / st.hold.Wd))
     fill = at_pixels(taps, col_fill, part.ch, part.cw)
     o_fill = at_pixels(o_taps, col_fill, 1, off.shape[0])
     fill_all = max(clip((load - RESIDUAL) / 0.6, 0.0, 1.0), 0.9 * wet)
     # dry brush: only the canvas tooth (and hair lines) catch paint; a toothy surface
     # breaks up a lightly pressed stroke even when the brush is loaded (scumbling)
     rough_t = K.surface_tooth - 0.5
-    rough_thr = (3.2 if rough_t > 0 else 0.6) * rough_t * (1.0 - st.p) ** 1.2
+    rough_thr = (3.2 if rough_t > 0 else 0.6) * rough_t * (1.0 - st.hold.p) ** 1.2
     brush_state = (wet, fill_all, rough_thr)
     q, sums = _catch_on(aux, F, part, K, fill, wet_contact, contact, brush_state)
     o_q, sums = _catch_off(aux, F, off, K, o_fill, o_wet, o_contact, brush_state, sums)
@@ -3055,7 +3185,7 @@ def _contact_catch_wet_dry(st, part, K, F, taps, cv, aux, col_fill, load):
     q_norm = max(sum_q / norm, 0.2)
     q /= q_norm
     o_q /= q_norm
-    dry = _runs_dry(cv, part, K, off, contact, o_contact, norm, sum_all, st.dry)
+    dry = _runs_dry(cv, part, K, off, contact, o_contact, norm, sum_all, dry)
     return contact, off, o_taps, q, o_q, wet, dry
 
 
@@ -3065,7 +3195,7 @@ def _contact(cv, F, part):
     passes over: its contact (exposure along the streaks), and how wet the
     paint there is, 0 to 1; and (the sum of the contact, of contact times
     wetness)."""
-    top, und = cv[0], cv[1]
+    top, und = cv.top, cv.und
     ch, cw, cy0, cx0, wy0, wx0 = (
         part.ch,
         part.cw,
@@ -3095,7 +3225,7 @@ def _contact_off(cv, F, off, sums):
     added to its ``sums``; and the brush's position across its bristles there
     (as a row of pixels). (The sums carry on from the canvas's, in the same
     order of additions: not to be summed apart and added.)"""
-    top, und = cv[0], cv[1]
+    top, und = cv.top, cv.und
     sum_contact, sum_wet = sums
     no = off.shape[0]
     o_contact = np.empty(no)
@@ -3121,7 +3251,7 @@ def _catch_on(aux, F, part, K, fill, wet_contact, contact, brush_state):
     contact; and (the sum of that, of the contact times what would catch
     with the brush's fill as a whole). Dry brush: only the canvas tooth (and
     hair lines) catch paint."""
-    tooth_map = aux[1]
+    tooth_map = aux.tooth
     wet, fill_all, rough_thr = brush_state
     ch, cw, cy0, cx0, wy0, wx0 = (
         part.ch,
@@ -3155,7 +3285,7 @@ def _catch_off(aux, F, off, K, o_fill, o_wet, o_contact, brush_state, sums):
     """:func:`_catch_on` at the pixels ``off`` the canvas, added to its
     ``sums``. (The sums carry on from the canvas's, in the same order of
     additions: not to be summed apart and added.)"""
-    tooth_map = aux[1]
+    tooth_map = aux.tooth
     wet, fill_all, rough_thr = brush_state
     sum_q, sum_all = sums
     no = off.shape[0]
@@ -3193,7 +3323,7 @@ def _runs_dry(cv, part, K, off, contact, o_contact, norm, sum_all, was_dry):
 def _earlier_wet(cv, Y, X, stroke_id):
     """The volume of wet paint at pixel (Y, X) from strokes before
     ``stroke_id``."""
-    top, und, ids = cv[0], cv[1], cv[4]
+    top, und, ids = cv.top, cv.und, cv.top_id
     return und[Y, X, IV] + (top[Y, X, IV] if ids[Y, X] != stroke_id else 0.0)
 
 
@@ -3212,7 +3342,7 @@ def _lay_on(aux, F, part, K, taps, col_thick, col_glob, q, f_dep, f_pick, lift_g
     lay_amount): the columns above it laying ``col_thick`` (``col_glob`` of
     it from a glob), caught ``q``, on a surface taking ``f_dep`` and lifting
     ``f_pick``, its own bristles lifting with ``lift_gain`` (see own_lift)."""
-    hollows = aux[2]
+    hollows = aux.hollows
     ch, cw, cy0, cx0, wy0, wx0 = (
         part.ch,
         part.cw,
@@ -3246,7 +3376,7 @@ def _lay_on(aux, F, part, K, taps, col_thick, col_glob, q, f_dep, f_pick, lift_g
 def _lay_beyond(cv, aux, F, off, K, o_taps, col_thick, col_glob, o_q, lift_gain):
     """:func:`_lay_on` at each of the pixels ``off`` the canvas the brush
     passes over, as on the canvas at its edge."""
-    hollows = aux[2]
+    hollows = aux.hollows
     no = off.shape[0]
     d_off = np.zeros(no)
     if no == 0:
@@ -4351,7 +4481,7 @@ def flow_under_blade(
 
     The per-pixel arrays (``floor``, ``level``, ``aa``, ``along``,
     ``c``, ``chord_half``, ``slip``) all cover the window: they have one shape."""
-    top, und = cv[0], cv[1]
+    top, und = cv.top, cv.und
     # (the helpers below take that shape from whichever of them they are given)
     hh, ww = level.shape
     own, gap = _blade_gap(cv, level, floor, sy0, sx0, stroke_id)
@@ -4412,7 +4542,7 @@ def _blade_gap(cv, level, floor, sy0, sx0, stroke_id):
     on top, and how high the blade rides over the solid surface there (px,
     at least 0.2), blurred: under paint, the blade doesn't feel the
     individual threads of the canvas."""
-    ids = cv[4]
+    ids = cv.top_id
     hh, ww = level.shape
     own = np.empty((hh, ww), np.bool_)
     g = np.empty((hh, ww))
@@ -4428,7 +4558,7 @@ def _paint_reaches(cv, own, gap, aa, sy0, sx0):
     """Whether the earlier strokes' wet paint reaches up to within a px of
     the blade (``gap`` above the surface) anywhere the blade covers any of
     the pixel (``aa`` > 0) in the window at (sy0, sx0)."""
-    top, und = cv[0], cv[1]
+    top, und = cv.top, cv.und
     hh, ww = gap.shape
     for y in range(hh):
         for x in range(ww):
@@ -4467,7 +4597,7 @@ def _smoothed_heights(cv, own, sy0, sx0, in_rows, src, heights):
     paint on top (t) at the pixels the blade is over (``in_rows``: in_lo..in_hi
     of each row), lightly smoothed, into ``heights`` (u, t); from ``src``
     (u_src, t_src), filled in here a pixel further out."""
-    top, und = cv[0], cv[1]
+    top, und = cv.top, cv.und
     in_lo, in_hi = in_rows
     u_src, t_src = src
     u, t = heights
@@ -4488,7 +4618,7 @@ def _contact_speeds(cv, own, inside, gap, slip, sy0, sx0, in_rows, heights, c_ro
     _smoothed_heights; see layer_speed), as a fraction of its own speed:
     (below, on top, whether it moves any). Sets in ``c_rows`` the columns of
     each row where it does, c_lo..c_hi."""
-    top = cv[0]
+    top = cv.top
     in_lo, in_hi = in_rows
     u, t = heights
     c_lo, c_hi = c_rows

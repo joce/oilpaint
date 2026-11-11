@@ -397,29 +397,34 @@ def _pending(y0, y1, x0, x1):
     paint becomes the new top. Pixels only ever grazed by the brush's
     feathered edge are settled when the stroke ends: the old top keeps its
     place, the share the faint new film would bury goes under, and the new
-    paint stirs into the rest. Returns (paint, cover, reach, held, (on, y0,
-    x0, h, w, and the rows y0..y1 and columns x0..x1 of it where any is held)),
-    as :func:`_engine.deposit` takes it."""
+    paint stirs into the rest. Returns an :class:`_engine.Pending`, as
+    :func:`_engine.deposit` takes it."""
     h, w = y1 - y0, x1 - x0
-    return (
-        np.zeros((h, w, PACKED), np.float32),
-        np.zeros((h, w), np.float32),
-        np.zeros((h, w), np.float32),
-        np.zeros((h, w), bool),
-        # (and where any is held: none yet)
-        np.array([1, y0, x0, h, w, h, 0, w, 0], np.int64),
+    where = [0] * 9
+    where[eng.PEND_ON] = 1
+    where[eng.PEND_Y0], where[eng.PEND_X0] = y0, x0
+    where[eng.PEND_H], where[eng.PEND_W] = h, w
+    # (the rows and columns where any is held: none yet)
+    where[eng.PEND_ROW0], where[eng.PEND_ROW1] = h, 0
+    where[eng.PEND_COL0], where[eng.PEND_COL1] = w, 0
+    return eng.Pending(
+        paint=np.zeros((h, w, PACKED), np.float32),
+        cover=np.zeros((h, w), np.float32),
+        reach=np.zeros((h, w), np.float32),
+        held=np.zeros((h, w), bool),
+        where=np.array(where, np.int64),
     )
 
 
 # (no paint held: knives lay theirs at once. Nothing is written to it, but it
 # stays writable: the kernels that take it write to the paint held, and numba
 # does not compile a write to a read-only array.)
-_NO_PENDING = (
-    np.zeros((1, 1, PACKED), np.float32),
-    np.zeros((1, 1), np.float32),
-    np.zeros((1, 1), np.float32),
-    np.zeros((1, 1), bool),
-    np.zeros(9, np.int64),
+_NO_PENDING = eng.Pending(
+    paint=np.zeros((1, 1, PACKED), np.float32),
+    cover=np.zeros((1, 1), np.float32),
+    reach=np.zeros((1, 1), np.float32),
+    held=np.zeros((1, 1), bool),
+    where=np.zeros(9, np.int64),
 )
 
 
@@ -749,6 +754,12 @@ class _Run:
     # (knives only) the slab laid past the edge of the canvas, in tiles (see
     # _knife._laid_off)
     knife_off: dict[tuple[int, int], np.ndarray] | None = None
+    # (brushes only) what stays the same along the stroke, as the engine's
+    # brush_step takes it (see _engine.brush_kit and brush_kit below). It
+    # holds K, tex, tex2, cv, aux, br and col_u, all fixed once __init__
+    # returns, and pend, the one of them that may be rebound: its setter
+    # clears the kit, which is made again at the next step.
+    _kit: tuple | None = None
 
     @classmethod
     def begin(cls, canvas: _Canvas, stroke: Stroke) -> _Run:
@@ -827,10 +838,21 @@ class _Run:
         self._arc, self._lip = arc.tolist(), tex.lip.tolist()
 
         # what the compiled engine works on
-        self.cv = (canvas.top, canvas.und, canvas.top_a, canvas.und_a, canvas.top_id)
+        self.cv = eng.Layers(
+            top=canvas.top,
+            und=canvas.und,
+            top_a=canvas.top_a,
+            und_a=canvas.und_a,
+            top_id=canvas.top_id,
+        )
         relief = self.relief = canvas._relief()
-        self.aux = (relief.floor, relief.tooth, relief.hollows, canvas.dry_height)
-        self.br = (brush.tip, brush.reservoir, brush.heel)
+        self.aux = eng.Beneath(
+            floor=relief.floor,
+            tooth=relief.tooth,
+            hollows=relief.hollows,
+            dry_height=canvas.dry_height,
+        )
+        self.br = eng.Load(tip=brush.tip, belly=brush.reservoir, heel=brush.heel)
         self.pend = _NO_PENDING
         self.K = _stroke_consts(
             bt,
@@ -845,6 +867,33 @@ class _Run:
             hair_at=hair_at,
             spacing=smp.spacing,
         )
+
+    @property
+    def pend(self) -> eng.Pending:
+        """The paint the stroke holds back (see :func:`_pending`; a knife's
+        holds none)."""
+        return self._pend
+
+    @pend.setter
+    def pend(self, pend: eng.Pending) -> None:
+        self._pend = pend
+        self._kit = None
+
+    def brush_kit(self) -> tuple:
+        """What stays the same along the stroke, as the engine's brush_step
+        takes it (see _engine.brush_kit): made at the first step."""
+        if self._kit is None:
+            self._kit = eng.brush_kit(
+                self.K,
+                self.tex,
+                self.tex2,
+                self.cv,
+                self.aux,
+                self.pend,
+                self.br,
+                self.col_u,
+            )
+        return self._kit
 
     # ------------------------------------------------------------------
     def steps(self):
@@ -937,50 +986,54 @@ class _Run:
         overload = self._overload(i, p) if self.is_dab else 0.0
         pressure, nominal = self._pressure, self._nominal
         st = eng.Step(
-            i=i,
-            first=i == 1,
-            last=i == n - 1,
-            touchdown=i == 1 or self.is_dab,
-            x0=x0,
-            y0=y0,
-            hh=win.y1 - y0,
-            ww=win.x1 - x0,
-            cy0=cy0,
-            cx0=cx0,
-            # (none of it, for a step wholly off the canvas)
-            ch=max(win.cy1 - cy0, 0),
-            cw=max(win.cx1 - cx0, 0),
-            wy0=cy0 - y0,
-            wx0=cx0 - x0,
-            cx=seg.cx,
-            cy=seg.cy,
-            tx=seg.tx,
-            ty=seg.ty,
-            ds=seg.ds,
-            p=p,
-            p_now=pressure[i],
-            p_before=pressure[i - 1],
-            r0=seg.r0,
-            r1=seg.r1,
-            r=r,
-            Wd=Wd,
-            # how loaded the brush is is relative to its real size
-            Wn=nominal[i - 1] + nominal[i],
-            side=side,
-            uscale=uscale,
-            lmax=lmax,
-            h_tab_max=h_max,
-            arc_i=self._arc[i],
-            lip=self._lip[i],
-            wet=float(self.brush.wet),
-            dry=bool(self.dry),
-            span=span,
-            nsub=int(min(max(math.ceil(span_cols / 2.0 - 1e-9), 1), 8)),
-            rho=0.5 * (self._rolls[i] + self._rolls[i - 1]),
-            splay=r / max(0.5 * (nominal[i - 1] + nominal[i]), 1e-9),
-            lift_len=lift_len,
-            lift_amp=lift_amp,
-            overload=overload,
+            win=eng.Window(
+                x0=x0,
+                y0=y0,
+                hh=win.y1 - y0,
+                ww=win.x1 - x0,
+                cy0=cy0,
+                cx0=cx0,
+                # (none of it, for a step wholly off the canvas)
+                ch=max(win.cy1 - cy0, 0),
+                cw=max(win.cx1 - cx0, 0),
+                wy0=cy0 - y0,
+                wx0=cx0 - x0,
+            ),
+            motion=eng.Motion(
+                i=i,
+                first=i == 1,
+                last=i == n - 1,
+                touchdown=i == 1 or self.is_dab,
+                cx=seg.cx,
+                cy=seg.cy,
+                tx=seg.tx,
+                ty=seg.ty,
+                ds=seg.ds,
+                arc_i=self._arc[i],
+                lip=self._lip[i],
+            ),
+            hold=eng.Hold(
+                p=p,
+                p_now=pressure[i],
+                p_before=pressure[i - 1],
+                r0=seg.r0,
+                r1=seg.r1,
+                r=r,
+                Wd=Wd,
+                # how loaded the brush is is relative to its real size
+                Wn=nominal[i - 1] + nominal[i],
+                side=side,
+                uscale=uscale,
+                lmax=lmax,
+                h_tab_max=h_max,
+                span=span,
+                nsub=int(min(max(math.ceil(span_cols / 2.0 - 1e-9), 1), 8)),
+                rho=0.5 * (self._rolls[i] + self._rolls[i - 1]),
+                splay=r / max(0.5 * (nominal[i - 1] + nominal[i]), 1e-9),
+                lift_len=lift_len,
+                lift_amp=lift_amp,
+                overload=overload,
+            ),
         )
         return st, tables
 
@@ -1069,13 +1122,15 @@ class _Run:
         the bristles, along the motion); see :func:`_engine.footprint`. And
         which bristle columns are above each pixel."""
         F, hit = eng.footprint(st, self.K, self.tex, self.tex2, *tables)
-        if not hit and not (off and eng._touches_off(st, F)):
+        if not hit and not (off and eng._touches_off(st.win, F)):
             return None
         if self.bt.rigid:
             taps, taps_all = _knife_taps(self, st, F)
             return _Step(st, F, tables, taps, taps_all)
         u_px = F[eng.F_U][_step_slices(st)[1]]
-        taps = eng.bristle_taps(u_px, st.span, st.nsub, self.brush.ring, st.rho)
+        taps = eng.bristle_taps(
+            u_px, st.hold.span, st.hold.nsub, self.brush.ring, st.hold.rho
+        )
         return _Step(st, F, tables, taps)
 
     def bounds(self):
@@ -1141,16 +1196,7 @@ def _brush_step(run: _Run, st, tables) -> None:
     tips (a dry brush only on the tooth of the canvas); and stirs the fresh
     paint into the wet paint below."""
     run.brush.wet, run.dry = eng.brush_step(
-        st,
-        run.K,
-        run.tex,
-        run.tex2,
-        tables,
-        run.cv,
-        run.aux,
-        run.pend,
-        run.br,
-        run.col_u,
+        st, float(run.brush.wet), bool(run.dry), tables, run.brush_kit()
     )
 
 

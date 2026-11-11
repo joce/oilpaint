@@ -124,9 +124,10 @@ def _plane(k: int, what: str) -> property:
 
 def _step_slices(st):
     """The step's part of the canvas, and where that lies in its window."""
+    win = st.win
     return (
-        (slice(st.cy0, st.cy0 + st.ch), slice(st.cx0, st.cx0 + st.cw)),
-        (slice(st.wy0, st.wy0 + st.ch), slice(st.wx0, st.wx0 + st.cw)),
+        (slice(win.cy0, win.cy0 + win.ch), slice(win.cx0, win.cx0 + win.cw)),
+        (slice(win.wy0, win.wy0 + win.ch), slice(win.wx0, win.wx0 + win.cw)),
     )
 
 
@@ -163,6 +164,6 @@ class _Step:
 
     def __init__(self, st, F, tables, taps, taps_all=None, gathered=False):
         self.st, self.F, self.tables, self.taps = st, F, tables, taps
-        self.taps_all: tuple[np.ndarray, np.ndarray, np.ndarray] | None = taps_all
+        self.taps_all: eng.Taps | None = taps_all
         sl, self.wsl = _step_slices(st)
         self.sl = None if gathered else sl

@@ -276,7 +276,7 @@ def _blade_rest_ref(run, s, at=None):
     from oilpaint._knife import _KNIFE_SINK
 
     canvas, bt, st = run.canvas, run.bt, s.st
-    p, sl, wsl = st.p, s.sl if at is None else at, s.wsl
+    p, sl, wsl = st.hold.p, s.sl if at is None else at, s.wsl
     top, und, floor = canvas.top[sl], canvas.und[sl], run.relief.floor[sl]
     fine, wide = run.relief.peaks_fine[sl], run.relief.peaks_wide[sl]
     rest = fine + run.stiff_blade * (wide - fine)
@@ -310,10 +310,10 @@ def _blade_level_ref(run, s, gap, film, at=None):
     rest = _blade_rest_ref(run, s, at)
     hair = s.hair[wsl]
     ride = np.minimum(gap, _KNIFE_FILM * film) if run.bt.clumps == 0 else gap
-    chat = 0.25 * (1.0 - float(_smoothstep(_KNIFE_SKIM, 0.05, st.p)))
+    chat = 0.25 * (1.0 - float(_smoothstep(_KNIFE_SKIM, 0.05, st.hold.p)))
     level = rest + ride * (
         1.0
-        + chat * run.chatter[st.i]
+        + chat * run.chatter[st.motion.i]
         + 0.12 * (hair - 0.5)
         + run.blade_tilt * np.clip(s.F[eng.F_U][wsl], -1.0, 1.0)
     )
@@ -343,21 +343,21 @@ def test_a_knife_rests_and_rides_as_it_did(monkeypatch):
 
     def check(run, s):
         st = s.st
-        area = max(run.area_unit * st.r * st.r, 1e-9)
-        gap, _ = kn._blade_gap(run, st.p)
-        if st.ch and st.cw:
+        area = max(run.area_unit * st.hold.r * st.hold.r, 1e-9)
+        gap, _ = kn._blade_gap(run, st.hold.p)
+        if st.win.ch and st.win.cw:
             film = kn._film(run, s, area)
             level, ride = kn._blade_level(run, s, gap, film)
             want_l, want_r = _blade_level_ref(run, s, gap, film)
             assert same(level, want_l) and same(ride, want_r)
             checked["on"] += 1
-            checked["wide"] += st.cw > 128
-        if st.ch < st.hh or st.cw < st.ww:
+            checked["wide"] += st.win.cw > 128
+        if st.win.ch < st.win.hh or st.win.cw < st.win.ww:
             whole = kn._whole_window(run, s)
             sw = whole.s
             H, W = run.canvas.height, run.canvas.width
-            ys = np.clip(np.arange(st.y0, st.y0 + st.hh), 0, H - 1)
-            xs = np.clip(np.arange(st.x0, st.x0 + st.ww), 0, W - 1)
+            ys = np.clip(np.arange(st.win.y0, st.win.y0 + st.win.hh), 0, H - 1)
+            xs = np.clip(np.arange(st.win.x0, st.win.x0 + st.win.ww), 0, W - 1)
             at = np.ix_(ys, xs)
             film = kn._film(run, sw, area)
             level, ride = kn._blade_level(run, sw, gap, film)
@@ -367,9 +367,9 @@ def test_a_knife_rests_and_rides_as_it_did(monkeypatch):
             own = np.where(
                 canvas.top_id[at] == run.stroke_id, canvas.top[at][..., IV], 0.0
             )
-            on = np.zeros((st.hh, st.ww), bool)
+            on = np.zeros((st.win.hh, st.win.ww), bool)
             on[s.wsl] = True
-            want = np.where(on, 0.0, kn._laid_off(run, st) - own)
+            want = np.where(on, 0.0, kn._laid_off(run, st.win) - own)
             assert whole.surf_add.tobytes() == want.tobytes()
             checked["whole"] += 1
         original(run, s)
