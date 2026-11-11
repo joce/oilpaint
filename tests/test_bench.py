@@ -2,6 +2,8 @@
 
 import importlib.util
 import os
+import sys
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -9,11 +11,31 @@ import pytest
 from oilpaint import Canvas, brushes, surfaces
 from oilpaint import palette as P
 
-_PATH = os.path.join(os.path.dirname(__file__), "..", "tools", "bench.py")
-_spec = importlib.util.spec_from_file_location("bench", _PATH)
-assert _spec is not None and _spec.loader is not None
-bench = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(bench)
+
+def _load_tool(name: str, path: str) -> ModuleType:
+    """Import the script at ``path`` as the module ``name``, as an import
+    statement would: registered in ``sys.modules`` before it runs (its
+    dataclasses look their module up there), and taken out again if it
+    fails. The entries it puts on ``sys.path`` are taken off again."""
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    saved_path = list(sys.path)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[name]
+        raise
+    finally:
+        sys.path[:] = saved_path
+    return module
+
+
+bench = _load_tool(
+    "oilpaint_tools_bench",
+    os.path.join(os.path.dirname(__file__), "..", "tools", "bench.py"),
+)
 
 
 def tiny() -> Canvas:
