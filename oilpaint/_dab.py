@@ -21,6 +21,11 @@ import zlib
 import numpy as np
 from numba import njit
 
+# The pattern spans -SPAN..SPAN half-widths, as the engine reads it
+# (_engine.DAB_SPAN, see _engine.dab_cell). Written out in both modules, not
+# imported: numba compiles a global into a cached kernel as a constant and
+# remakes the cache only when the kernel's own file changes, so a value
+# imported from the other file could go stale here. A test checks they agree.
 SPAN = 1.3
 
 

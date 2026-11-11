@@ -571,7 +571,7 @@ def test_on_a_round_paint_moves_between_bristles_the_short_way_round():
     d = np.full((1, n), 2.0)
     d[0, 0] = 7.0
     before = tip.copy()
-    eng.share_by_reach(tip, (cols, wts, ntap), d, np.empty(0), True)
+    eng.share_by_reach(tip, eng.Taps(cols, wts, ntap), d, np.empty(0), True)
     np.testing.assert_allclose(tip.sum(axis=0), before.sum(axis=0), rtol=1e-12)
     np.testing.assert_allclose(tip[:, IV], d[0], rtol=1e-12)
     # the columns between are untouched; the first now holds the last one's
@@ -638,7 +638,7 @@ def test_on_a_round_the_paint_shared_by_reach_meets_every_column_s_share():
         if d[0, vols > 0].sum() == 0:
             continue
         before = tip.copy()
-        eng.share_by_reach(tip, (cols, wts, ntap), d, np.empty(0), True)
+        eng.share_by_reach(tip, eng.Taps(cols, wts, ntap), d, np.empty(0), True)
         held = vols.sum()
         want = np.where(vols > 0, held * d[0] / d[0, vols > 0].sum(), 0.0)
         np.testing.assert_allclose(tip[:, IV], want, rtol=0, atol=1e-12 * held)

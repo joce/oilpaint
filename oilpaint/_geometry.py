@@ -124,9 +124,10 @@ def _plane(k: int, what: str) -> property:
 
 def _step_slices(st):
     """The step's part of the canvas, and where that lies in its window."""
+    win = st.win
     return (
-        (slice(st.cy0, st.cy0 + st.ch), slice(st.cx0, st.cx0 + st.cw)),
-        (slice(st.wy0, st.wy0 + st.ch), slice(st.wx0, st.wx0 + st.cw)),
+        (slice(win.cy0, win.cy0 + win.ch), slice(win.cx0, win.cx0 + win.cw)),
+        (slice(win.wy0, win.wy0 + win.ch), slice(win.wx0, win.wx0 + win.cw)),
     )
 
 
@@ -138,13 +139,13 @@ class _Step:
     of the canvas (its planes are attributes, ``along`` to ``edge``; see
     :func:`_engine.footprint`). ``wsl`` crops them to the canvas part ``sl``.
     ``taps`` maps bristle columns to the pixels of that part, ``tables`` are
-    the footprint's chord tables. (A knife's step not wholly on the canvas
-    also has ``taps_all``, over all of its window: see _knife._knife_taps;
-    and a knife's step over all of its window has no ``sl``: see
-    _knife._whole_window.)"""
+    the footprint's chord tables. A knife's step not wholly on the canvas
+    also has ``taps_all``, over all of its window (see _knife._knife_taps);
+    a knife's step taken over all of its window, past the edge of the canvas
+    too (``gathered``), has no ``sl`` (see _knife._whole_window)."""
 
     sl: tuple[slice, slice] | None
-    taps_all: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+    wsl: tuple[slice, slice]
 
     along = _plane(eng.F_ALONG, "position along the motion (px)")
     lat_px = _plane(eng.F_LAT, "position across the motion (px)")
@@ -161,6 +162,8 @@ class _Step:
     between = _plane(eng.F_BETWEEN, "the gaps between clumps or teeth")
     edge = _plane(eng.F_EDGE, "how far in from the edge of the mark (px)")
 
-    def __init__(self, st, F, tables, taps):
+    def __init__(self, st, F, tables, taps, taps_all=None, gathered=False):
         self.st, self.F, self.tables, self.taps = st, F, tables, taps
-        self.sl, self.wsl = _step_slices(st)
+        self.taps_all: eng.Taps | None = taps_all
+        sl, self.wsl = _step_slices(st)
+        self.sl = None if gathered else sl

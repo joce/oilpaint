@@ -26,7 +26,7 @@ def _layer(c, paint, volume, wet=True):
         c.top_a[:] = 1.0
     else:
         c.dry_height[:] = volume
-        c._update_tooth()
+        c._update_relief()
     return c
 
 

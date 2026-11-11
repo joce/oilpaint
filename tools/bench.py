@@ -38,7 +38,9 @@ from oilpaint import palette as P
 
 W, H = 800, 600
 
-#: The arrays that make up what is on a canvas (see ``Canvas.__getstate__``).
+#: The arrays that make up what is on a canvas (its attributes), besides the
+#: maps of the surface under the paint (``Canvas._relief()``, kept as
+#: ``_floor``, ``_tooth``, ...).
 STATE = (
     "top",
     "und",
@@ -47,11 +49,6 @@ STATE = (
     "top_id",
     "dry_height",
     "ground",
-    "_tooth",
-    "_floor",
-    "_hollows",
-    "_peaks_fine",
-    "_peaks_wide",
     "glass_r",
     "glass_rb",
     "glass_t2",
@@ -62,6 +59,8 @@ def canvas_state(canvas, tools=()) -> dict[str, np.ndarray]:
     """Everything painting leaves behind: the canvas's arrays, and the paint
     on the brushes used."""
     state = {n: getattr(canvas, n) for n in STATE if hasattr(canvas, n)}
+    for name, a in canvas._relief()._asdict().items():
+        state["_" + name] = a
     # how many strokes it has seen, and where its random numbers have got to
     rng = canvas._rng.bit_generator.state["state"]
     state["counters"] = np.array(

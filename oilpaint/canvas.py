@@ -14,6 +14,8 @@ from . import spectral as sp
 from ._filters import _box_blur, _smooth121, _smoothstep
 from .brush import (
     IB,
+    IS,
+    IV,
     PACKED,
     Brush,
     BrushType,
@@ -129,11 +131,10 @@ class Canvas:
             self.glass_rb = np.zeros((H, W, N), f32)
             self.glass_t2 = np.ones((H, W, N), f32)
         # Wet sublayers, packed per pixel as [K (N bands), S, volume, body x
-        # volume], all extensive (summed over the paint present). The
-        # *_k/_s/_v names are views.
+        # volume], all extensive (summed over the paint present); top_k,
+        # top_s, top_v and the same of und are views of their parts.
         self.top = np.zeros((H, W, PACKED), f32)
         self.und = np.zeros((H, W, PACKED), f32)
-        self._make_views()
         # Fraction of each pixel the wet paint covers (anti-aliased edges).
         self.top_a = np.zeros((H, W), f32)
         self.und_a = np.zeros((H, W), f32)
@@ -142,20 +143,38 @@ class Canvas:
         self.texture = float(self.surface.relief)
         self.grain = self.surface.height_map(H, W, self._rng).astype(f32)
         self._stroke_counter = 0
-        self._update_tooth()
+        self._update_relief()
 
-    def _make_views(self):
-        N = sp.N_BANDS
-        self.top_k, self.top_s, self.top_v = (
-            self.top[..., :N],
-            self.top[..., N],
-            self.top[..., N + 1],
-        )
-        self.und_k, self.und_s, self.und_v = (
-            self.und[..., :N],
-            self.und[..., N],
-            self.und[..., N + 1],
-        )
+    # the parts of the packed wet paint (views: writing to them changes it)
+    @property
+    def top_k(self) -> np.ndarray:
+        """Absorption of the top wet sublayer, per band (H, W, N_BANDS)."""
+        return self.top[..., :IS]
+
+    @property
+    def top_s(self) -> np.ndarray:
+        """Scattering of the top wet sublayer (H, W)."""
+        return self.top[..., IS]
+
+    @property
+    def top_v(self) -> np.ndarray:
+        """Volume (thickness) of the top wet sublayer (H, W)."""
+        return self.top[..., IV]
+
+    @property
+    def und_k(self) -> np.ndarray:
+        """Absorption of the wet sublayer below, per band (H, W, N_BANDS)."""
+        return self.und[..., :IS]
+
+    @property
+    def und_s(self) -> np.ndarray:
+        """Scattering of the wet sublayer below (H, W)."""
+        return self.und[..., IS]
+
+    @property
+    def und_v(self) -> np.ndarray:
+        """Volume (thickness) of the wet sublayer below (H, W)."""
+        return self.und[..., IV]
 
     def copy(self) -> Canvas:
         """An independent copy of the canvas: its paint, wet and dry, its
@@ -169,9 +188,13 @@ class Canvas:
     __copy__ = copy
 
     def __getstate__(self):
+        """What pickle keeps of a canvas: a copy of its attributes, with the
+        maps of the relief as attributes of their own (``_floor``,
+        ``_tooth``, ...), as every version has pickled them, so that a pickle
+        holds no class private to oilpaint and loads in other versions."""
         state = self.__dict__.copy()
-        for name in ("top_k", "top_s", "top_v", "und_k", "und_s", "und_v"):
-            state.pop(name, None)
+        for name, a in state.pop("_relief_maps")._asdict().items():
+            state["_" + name] = a
         return state
 
     def __setstate__(self, state):
@@ -191,13 +214,15 @@ class Canvas:
                 self.__dict__[name] = np.concatenate(
                     [layer, body.astype(layer.dtype)], axis=-1
                 )
-        self._make_views()
-        if not all(
-            hasattr(self, n)
-            for n in ("_floor", "_hollows", "_peaks_fine", "_peaks_wide")
-        ):
-            # maps derived from the surface, added in later versions
-            self._update_tooth()
+        # the maps of the relief, pickled as attributes of their own (see
+        # __getstate__; on canvases saved before some of them existed, all
+        # are made again)
+        maps = [self.__dict__.pop("_" + name, None) for name in _Relief._fields]
+        if "_relief_maps" not in self.__dict__:
+            if any(m is None for m in maps):
+                self._update_relief()
+            else:
+                self._relief_maps = _Relief(*maps)
 
     # ------------------------------------------------------------------
     # painting
@@ -425,10 +450,12 @@ class Canvas:
         self.top_a.fill(0)
         self.und_a.fill(0)
         self.top_id.fill(0)
-        self._update_tooth()
+        self._update_relief()
 
     # ------------------------------------------------------------------
-    # what a stroke works with (see oilpaint.stroke)
+    # What a stroke works with (see oilpaint.stroke and its _Canvas, which
+    # lists all of it): the public arrays of the paint (top, und, top_a,
+    # und_a, top_id, dry_height), its size and surface, and these three.
     # ------------------------------------------------------------------
     def _stroke_rng(self, seed) -> np.random.Generator:
         """The random numbers of a stroke (or a flick of spatter): from its
@@ -444,36 +471,38 @@ class Canvas:
 
     def _relief(self) -> _Relief:
         """The surface under the wet paint, as a stroke meets it (see
-        :meth:`_update_tooth`)."""
-        return _Relief(
-            self._floor, self._tooth, self._hollows, self._peaks_fine, self._peaks_wide
-        )
+        :meth:`_update_relief`). The same maps until the paint dries."""
+        return self._relief_maps
 
-    def _update_tooth(self):
+    def _update_relief(self) -> None:
+        """Work out the maps of the surface under the wet paint (a
+        :class:`oilpaint.stroke._Relief`) from the weave and the dried paint:
+        on a new canvas, and whenever paint dries."""
         # What a nearly-dry brush catches on: the weave, plus ridges of dry paint.
         relief = self.dry_height - _box_blur(self.dry_height, 6)
         tooth = self.texture * self.grain + 1.5 * relief
         tooth = tooth - _box_blur(tooth, 12) + 0.5 * self.texture
         lo, hi = np.percentile(tooth, [1, 99])
-        self._tooth = np.clip((tooth - lo) / max(hi - lo, 1e-6), 0, 1).astype(
-            np.float32
-        )
+        tooth = np.clip((tooth - lo) / max(hi - lo, 1e-6), 0, 1).astype(np.float32)
         # The solid surface under the wet paint, in units of paint thickness:
         # the weave plus dried paint. A rigid blade pressed on it rests on its
         # high points: the tops of the threads (a flexible blade) or the
         # highest ridges around (a stiff one).
-        self._floor = (
-            WEAVE_DEPTH * self.texture * self.grain + self.dry_height
-        ).astype(np.float32)
+        floor = (WEAVE_DEPTH * self.texture * self.grain + self.dry_height).astype(
+            np.float32
+        )
         # How far each point lies below the local average surface (the hollows
         # of the weave and of dried paint): thick wet paint fills these first.
         r_mean = max(2, int(round(self.surface.scale)))
-        self._hollows = (_box_blur(self._floor, r_mean) - self._floor).astype(
-            np.float32
-        )
+        hollows = (_box_blur(floor, r_mean) - floor).astype(np.float32)
         r_fine = max(1, int(round(0.5 * self.surface.scale)))
-        self._peaks_fine = _box_blur(eng.max_filter(self._floor, r_fine), 1)
-        self._peaks_wide = _box_blur(eng.max_filter(self._floor, 3 * r_fine + 3), 2)
+        self._relief_maps = _Relief(
+            floor=floor,
+            tooth=tooth,
+            hollows=hollows,
+            peaks_fine=_box_blur(eng.max_filter(floor, r_fine), 1),
+            peaks_wide=_box_blur(eng.max_filter(floor, 3 * r_fine + 3), 2),
+        )
 
     # ------------------------------------------------------------------
     # inspection
@@ -632,7 +661,7 @@ class Canvas:
         paint and wet paint). ``relief`` scales it, as in :meth:`render`."""
         wet = self.top_v + self.und_v
         paint = wet + self.dry_height
-        surface = self._floor + wet
+        surface = self._relief_maps.floor + wet
         # Thin strokes thin out towards their edges (soft shoulders, low
         # relief); impasto keeps every ridge, groove and sharp edge, and bare
         # canvas its weave.
@@ -854,6 +883,18 @@ def _points(name: str, points, empty: bool = False) -> np.ndarray:
     return pts
 
 
+def _coverage(volume, alpha):
+    """The share of each pixel a wet sublayer's film covers (see
+    :func:`_composite`): ``alpha``, where the tool covered any of the pixel,
+    but no more than its ``volume`` makes a film of MIN_FILM cover; in
+    float32, at least 1e-6."""
+    volume = np.asarray(volume, dtype=np.float32)
+    alpha = np.asarray(alpha, dtype=np.float32)
+    by_volume = volume / MIN_FILM
+    cov = np.where(alpha > 0, np.minimum(alpha, by_volume), by_volume)
+    return np.clip(cov, 1e-6, 1.0)
+
+
 def _composite(kappa, sigma, volume, alpha, below):
     """Reflectance of a wet sublayer over ``below``.
 
@@ -861,11 +902,7 @@ def _composite(kappa, sigma, volume, alpha, below):
     stroke edges): the paint forms a film of thickness volume / alpha over
     that fraction. Paint too thin to form a continuous film (dry-brush
     specks, smears) is also treated as partial coverage."""
-    volume = np.asarray(volume, dtype=np.float32)
-    alpha = np.asarray(alpha, dtype=np.float32)
-    by_volume = volume / MIN_FILM
-    cov = np.where(alpha > 0, np.minimum(alpha, by_volume), by_volume)
-    cov = np.clip(cov, 1e-6, 1.0)
+    cov = _coverage(volume, alpha)
     film = sp.km_layer(kappa / cov[..., None], sigma / cov, below)
     cov = cov[..., None]
     return cov * film + (1.0 - cov) * below
@@ -915,11 +952,7 @@ def _film(kappa, sigma, volume, alpha):
     the clear part reflected too; the light through the clear part is cut by
     as much, so a pixel never reflects more than comes in. Exact for a full
     film, and for an opaque one over black or white."""
-    volume = np.asarray(volume, dtype=np.float32)
-    alpha = np.asarray(alpha, dtype=np.float32)
-    by_volume = volume / MIN_FILM
-    cov = np.where(alpha > 0, np.minimum(alpha, by_volume), by_volume)
-    cov = np.clip(cov, 1e-6, 1.0)
+    cov = _coverage(volume, alpha)
     r, t = sp.km_film(kappa / cov[..., None], sigma / cov)
     cov = cov[..., None]
     r_avg = cov * r

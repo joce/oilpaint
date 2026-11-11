@@ -203,7 +203,7 @@ def _deposit_rate(path):
         got = run.step(i)
         assert got is not None
         bm._brush_step(run, *got)
-        arc += got[0].ds
+        arc += got[0].motion.ds
         i += 1
     return (float(c.thickness.sum()) - v0) / ((arc - a0) * 36)
 
@@ -389,9 +389,11 @@ def test_a_brush_s_edge_ridge_is_as_wide_as_the_paint_in_it():
         side = np.zeros(eng.PACKED)
         side[eng.IV] = volume
         side[eng.IS] = volume
-        ridges = (np.zeros(eng.PACKED), side, np.zeros(eng.PACKED))
+        ridges = eng.Ridges(np.zeros(eng.PACKED), side, np.zeros(eng.PACKED))
         eng.lay_ridges(run.cv, run.pend, run.br, run.K, st, ridges, *tables, run.tex2)
-        prof = c.thickness.astype(np.float64)[:, int(st.cx) - 6 : int(st.cx)].mean(1)
+        prof = c.thickness.astype(np.float64)[
+            :, int(st.motion.cx) - 6 : int(st.motion.cx)
+        ].mean(1)
         return int((prof > 0.2 * prof.max()).sum()), float(prof.max())
 
     w1, h1 = ridge(20.0)
@@ -431,7 +433,7 @@ def _lift_length(w, seed):
     for i in range(1, len(run.pts)):
         got = run.step(i)
         assert got is not None
-        last = got[0].lift_len or last
+        last = got[0].hold.lift_len or last
         bm._brush_step(run, *got)
     return last / run.lift_var
 
