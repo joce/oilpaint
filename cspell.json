@@ -46,6 +46,7 @@
     "Dyck",
     "elementwise",
     "emax",
+    "embeddeddolt",
     "errstate",
     "fastmath",
     "finfo",
