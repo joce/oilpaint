@@ -27,6 +27,7 @@ _b = np.arange(_TAU_STEPS + 2) * (_TAU_MAX / _TAU_STEPS)
 _b[0] = 1.0
 TAU_TABLE = np.tanh(_b) / _b
 TAU_TABLE[0] = 1.0
+TAU_TABLE.flags.writeable = False
 del _b
 
 

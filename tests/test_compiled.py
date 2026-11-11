@@ -33,6 +33,13 @@ def test_box_blur_of_some_rows_is_the_box_blur_there():
             assert (out[y, : lo[y]] == -1.0).all() and (out[y, hi[y] :] == -1.0).all()
 
 
+def test_the_dab_pattern_spans_what_the_engine_reads():
+    from oilpaint import _dab
+    from oilpaint import _engine as eng
+
+    assert _dab.SPAN == eng.DAB_SPAN
+
+
 def test_dab_patterns_are_laid_out_and_turned_as_before():
     from oilpaint import _dab
 

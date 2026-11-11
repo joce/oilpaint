@@ -331,6 +331,22 @@ def _build_basis() -> np.ndarray:
 #: (7, N_BANDS) reflectance spectra of white, cyan, magenta, yellow, red, green, blue.
 _BASIS = _build_basis()
 
+# (the tables above are shared by everything that works with colour: read-only)
+for _table in (
+    WAVELENGTHS,
+    _CIE_WL,
+    _CIE_1931,
+    _D65_SPD,
+    _XYZ_TO_LINEAR_SRGB,
+    SPECTRUM_TO_RGB,
+    LUMINANCE,
+    _RGB_TO_XYZ,
+    _D65_WHITE_XYZ,
+    _BASIS,
+):
+    _table.flags.writeable = False
+del _table
+
 #: Darkest reflectance any color is mapped to. Real "black" paint reflects a
 #: few percent; this keeps Kubelka-Munk absorption finite.
 MIN_REFLECTANCE = 1e-3
@@ -375,6 +391,23 @@ def reflectance_to_srgb(R) -> np.ndarray:
 # --------------------------------------------------------------------------
 
 
+def _km_terms(kappa, sigma):
+    """The terms of the Kubelka-Munk solution for a layer of optical
+    thicknesses ``kappa`` (per band) and ``sigma`` (see :func:`km_layer`):
+    those two, clamped at 0 (tiny negatives are left by float rounding in the
+    paint bookkeeping) and ``sigma`` with a band axis where it had none;
+    ``B = sqrt(kappa^2 + 2 kappa sigma)``; and ``tau = tanh(B) / B`` (its
+    series where B is tiny)."""
+    kappa = np.maximum(np.asarray(kappa), 0.0)
+    sigma = np.maximum(np.asarray(sigma), 0.0)
+    if sigma.ndim == kappa.ndim - 1:
+        sigma = sigma[..., None]
+    B = np.sqrt(kappa * kappa + 2.0 * kappa * sigma)
+    small = B < 1e-4
+    tau = np.where(small, 1.0 - B * B / 3.0, np.tanh(B) / np.where(small, 1.0, B))
+    return kappa, sigma, B, tau
+
+
 def km_layer(kappa, sigma, ground):
     """Reflectance of a paint layer lying on a ground of reflectance ``ground``.
 
@@ -384,14 +417,7 @@ def km_layer(kappa, sigma, ground):
     for empty layers (returns the ground) and for pure dyes (sigma = 0 gives
     Beer-Lambert: ground * exp(-2 kappa)).
     """
-    # Clamp tiny negatives left by float rounding in the paint bookkeeping.
-    kappa = np.maximum(np.asarray(kappa), 0.0)
-    sigma = np.maximum(np.asarray(sigma), 0.0)
-    if sigma.ndim == kappa.ndim - 1:
-        sigma = sigma[..., None]
-    B = np.sqrt(kappa * kappa + 2.0 * kappa * sigma)
-    small = B < 1e-4
-    tau = np.where(small, 1.0 - B * B / 3.0, np.tanh(B) / np.where(small, 1.0, B))
+    kappa, sigma, _, tau = _km_terms(kappa, sigma)
     num = sigma * tau - ground * ((sigma + kappa) * tau - 1.0)
     den = (sigma + kappa - ground * sigma) * tau + 1.0
     return num / den
@@ -473,13 +499,7 @@ def km_film(kappa, sigma):
     ``R + T**2 * g / (1 - R * g)``, which is :func:`km_layer`. Inputs are
     optical thicknesses, as for :func:`km_layer`.
     """
-    kappa = np.maximum(np.asarray(kappa), 0.0)
-    sigma = np.maximum(np.asarray(sigma), 0.0)
-    if sigma.ndim == kappa.ndim - 1:
-        sigma = sigma[..., None]
-    B = np.sqrt(kappa * kappa + 2.0 * kappa * sigma)
-    small = B < 1e-4
-    tau = np.where(small, 1.0 - B * B / 3.0, np.tanh(B) / np.where(small, 1.0, B))
+    kappa, sigma, B, tau = _km_terms(kappa, sigma)
     den = (sigma + kappa) * tau + 1.0
     # 1 / cosh(B), without overflow for thick, dark films
     e = np.exp(-B)

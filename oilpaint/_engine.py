@@ -60,6 +60,10 @@ HEEL_SQUEEZE = 0.15
 # Diffusion between neighbouring columns per brush width of travel, at blending 1 and
 # full pressure.
 BLEND_RATE = 2.3
+# How much paint changes places between the tip and the belly, and between
+# the belly and the heel, per brush width of travel at blending 1 (see
+# work_load; Brush.work uses the same rates on the palette).
+TIP_SWAP, HEEL_SWAP = 0.375, 0.1
 # Paint (in load units: brush-width squares) the hair holds inside at medium
 # pressure, per unit of capacity, for a brush 20 px wide or more (smaller
 # brushes hold more for their size). Paint loaded beyond that sits on the
@@ -79,8 +83,12 @@ IMPASTO = 0.12
 TIP_DEPTH = 6.0
 # Share of an overload squeezed out at the edges per width of travel (knife, brush).
 SQUEEZE_KNIFE, SQUEEZE_BRUSH = 0.03, 0.04
-# Paint thinner than this can't form a continuous film (as canvas.MIN_FILM).
+# Paint thinner than this can't form a continuous film (the renderer, see
+# canvas.MIN_FILM, counts it by the same measure).
 MIN_FILM = 0.15
+# A dab's pattern of bristle tips spans this many brush half-widths each way
+# from the centre (see dab_cell; _dab.SPAN is the same, written out there).
+DAB_SPAN = 1.3
 # A layer of a pixel holding no more paint than this holds none: what is
 # there is rounding dust (single-precision paint moved about leaves specks of
 # 1e-8 either side of zero), far below any film you could see (under 1e-5 of
@@ -500,8 +508,8 @@ def work_load(br, K, st, capacity):
     elif st.p_now > st.p_before:  # ... and so does bearing down harder
         seep(heel, belly, min(HEEL_SQUEEZE * 5.0 * (st.p_now - st.p_before), 1.0))
     blend = K.blending
-    swap_layers(tip, belly, 0.375 * blend * st.ds / st.Wd)
-    swap_layers(belly, heel, 0.1 * blend * st.ds / st.Wd)
+    swap_layers(tip, belly, TIP_SWAP * blend * st.ds / st.Wd)
+    swap_layers(belly, heel, HEEL_SWAP * blend * st.ds / st.Wd)
     k = BLEND_RATE * blend * (0.2 + p) ** 2 * st.ds / st.Wd
     for layer in (tip, belly, heel):
         for b in range(COLUMNS):
@@ -857,10 +865,10 @@ def radius_at(along, ds, r0, r1, r):
 @njit(cache=True, error_model="numpy", inline="always")
 def dab_cell(u, along, r, n2):
     """The cell (iy, ix) of a dab's tip pattern (``n2`` + 1 cells a side, over
-    1.3 half-widths each way) at ``u`` across the bristles and ``along`` px
-    (``r``: the brush's half-width)."""
-    ix = min(max(int((u + 1.3) / 2.6 * n2), 0), n2)
-    iy = min(max(int((along / r + 1.3) / 2.6 * n2), 0), n2)
+    DAB_SPAN half-widths each way) at ``u`` across the bristles and ``along``
+    px (``r``: the brush's half-width)."""
+    ix = min(max(int((u + DAB_SPAN) / (2.0 * DAB_SPAN) * n2), 0), n2)
+    iy = min(max(int((along / r + DAB_SPAN) / (2.0 * DAB_SPAN) * n2), 0), n2)
     return iy, ix
 
 
@@ -1784,30 +1792,6 @@ def feed_glob(tip, belly, taps, d, col_glob, extra):
 
 
 @njit(cache=True, error_model="numpy")
-def lay(
-    cv, pend, br, taps, sy0, sx0, d, cover, stroke_id, moved, by_film, reach, has_reach
-):
-    """Lay volume ``d`` per pixel from the tips of the columns above it; each
-    column can only give what it holds."""
-    lay_off(
-        cv,
-        pend,
-        br,
-        taps,
-        sy0,
-        sx0,
-        d,
-        cover,
-        stroke_id,
-        moved,
-        by_film,
-        reach,
-        has_reach,
-        np.empty(0),
-    )
-
-
-@njit(cache=True, error_model="numpy")
 def lay_off(
     cv,
     pend,
@@ -1824,9 +1808,11 @@ def lay_off(
     has_reach,
     extra,
 ):
-    """:func:`lay`, where the columns are also asked for ``extra`` volume each
-    (empty: nothing) that they lay off the canvas: they give their share of it
-    as of the rest, and it is gone."""
+    """Lay volume ``d`` per pixel from the tips of the columns above it (see
+    deposit for ``cover`` to ``has_reach``); each column can only give what
+    it holds. The columns are also asked for ``extra`` volume each (empty:
+    nothing) that they lay off the canvas: they give their share of it as
+    of the rest, and it is gone."""
     tip = br[0]
     give, comp = _give(tip, demand_with(taps, d, extra))
     used = np.zeros(COLUMNS)
@@ -4342,10 +4328,10 @@ def flow_under_blade(
     stroke_id,
     floor,
     level,
-    lateral,
+    aa,
     along,
     c,
-    half,
+    chord_half,
     ds,
     tx,
     ty,
@@ -4356,19 +4342,21 @@ def flow_under_blade(
     in the window at (sy0, sx0) (thin-film shear and bulldozing, see
     ``layer_speed``).
 
-    The blade's footprint at each sub-step is where ``lateral`` > 0 and the
-    pixel's position ``along`` the motion lies within ``half`` of the chord
-    centre ``c`` (relative to the blade's position at the end of the step).
-    Conservative upwind fluxes, in sub-steps short enough to be stable.
+    The blade's footprint at each sub-step is where its anti-aliased
+    coverage ``aa`` (the footprint's F_AA) is above 0 and the pixel's
+    position ``along`` the motion lies within ``chord_half`` (the chord's
+    half-length, F_H) of the chord centre ``c`` (relative to the blade's
+    position at the end of the step). Conservative upwind fluxes, in
+    sub-steps short enough to be stable.
 
-    The per-pixel arrays (``floor``, ``level``, ``lateral``, ``along``,
-    ``c``, ``half``, ``slip``) all cover the window: they have one shape."""
+    The per-pixel arrays (``floor``, ``level``, ``aa``, ``along``,
+    ``c``, ``chord_half``, ``slip``) all cover the window: they have one shape."""
     top, und = cv[0], cv[1]
     # (the helpers below take that shape from whichever of them they are given)
     hh, ww = level.shape
     own, gap = _blade_gap(cv, level, floor, sy0, sx0, stroke_id)
     # the paint under the blade must reach it somewhere for anything to happen
-    if not _paint_reaches(cv, own, gap, lateral, sy0, sx0):
+    if not _paint_reaches(cv, own, gap, aa, sy0, sx0):
         return
     # two wet layers of the same paint can merge without any visible change:
     # do so, so that paint dragged in from elsewhere lands on top of them
@@ -4390,7 +4378,7 @@ def flow_under_blade(
     for k in range(1, n_sub + 1):
         # the blade's position along the motion
         pos = -ds + k * step
-        if not _under_blade(lateral, half, along, c, pos, inside, in_rows):
+        if not _under_blade(aa, chord_half, along, c, pos, inside, in_rows):
             continue
         # the flow is smooth over a pixel or two: speeds from lightly smoothed heights
         _smoothed_heights(cv, own, sy0, sx0, in_rows, (u_src, t_src), (u, t))
@@ -4436,35 +4424,35 @@ def _blade_gap(cv, level, floor, sy0, sx0, stroke_id):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _paint_reaches(cv, own, gap, lateral, sy0, sx0):
+def _paint_reaches(cv, own, gap, aa, sy0, sx0):
     """Whether the earlier strokes' wet paint reaches up to within a px of
-    the blade (``gap`` above the surface) anywhere it passes (``lateral`` >
-    0) in the window at (sy0, sx0)."""
+    the blade (``gap`` above the surface) anywhere the blade covers any of
+    the pixel (``aa`` > 0) in the window at (sy0, sx0)."""
     top, und = cv[0], cv[1]
     hh, ww = gap.shape
     for y in range(hh):
         for x in range(ww):
             Y, X = sy0 + y, sx0 + x
             reach = und[Y, X, IV] + (0.0 if own[y, x] else top[Y, X, IV])
-            if reach > gap[y, x] - 1.0 and lateral[y, x] > 0:
+            if reach > gap[y, x] - 1.0 and aa[y, x] > 0:
                 return True
     return False
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _under_blade(lateral, half, along, c, pos, inside, in_rows):
+def _under_blade(aa, chord_half, along, c, pos, inside, in_rows):
     """How much of each pixel the blade is over at ``pos`` px along the
     motion (see flow_under_blade), into ``inside``; into ``in_rows``, the
     columns of each row where it is over any, in_lo..in_hi; and whether it
     is over any pixel."""
     in_lo, in_hi = in_rows
-    hh, ww = lateral.shape
+    hh, ww = aa.shape
     any_in = False
     for y in range(hh):
         in_lo[y], in_hi[y] = ww, 0
         for x in range(ww):
-            v = lateral[y, x] * clip(
-                half[y, x] - abs(along[y, x] - pos - c[y, x]) + 0.5, 0.0, 1.0
+            v = aa[y, x] * clip(
+                chord_half[y, x] - abs(along[y, x] - pos - c[y, x]) + 0.5, 0.0, 1.0
             )
             inside[y, x] = v
             if v != 0:

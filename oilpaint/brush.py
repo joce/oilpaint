@@ -69,12 +69,11 @@ _COL_X = (np.arange(COLUMNS) + 0.5) / COLUMNS
 _RING_A = 2.0 * np.pi * (np.arange(COLUMNS) + 0.5) / COLUMNS
 # where across the mark each one lands
 _RING_X = (1.0 - (2.0 / np.pi) * np.arcsin(np.sin(_RING_A))) / 2.0
+for _table in (_COL_X, _RING_A, _RING_X):
+    _table.flags.writeable = False
+del _table
 # Depth layers: tip [0, 0.12], belly [0.12, 0.6], heel [0.6, 1] of the bristle length.
 _LAYER_EDGES = (0.0, 0.12, 0.6, 1.0)
-# How much paint changes places between the tip and the belly, and between
-# the belly and the heel, for each width a brush is worked, at full blending
-# (the rates _engine.work_load uses as a brush works in a stroke).
-_TIP_SWAP, _HEEL_SWAP = 0.375, 0.1
 
 
 def _pack(paint: Paint, volume: float) -> np.ndarray:
@@ -655,10 +654,10 @@ class Brush:
             eng.diffuse(layer, k, self.ring)
         for _ in range(int(np.ceil(widths))):
             eng.swap_layers(
-                self.tip, self.reservoir, float(min(_TIP_SWAP * blend, 0.5))
+                self.tip, self.reservoir, float(min(eng.TIP_SWAP * blend, 0.5))
             )
             eng.swap_layers(
-                self.reservoir, self.heel, float(min(_HEEL_SWAP * blend, 0.5))
+                self.reservoir, self.heel, float(min(eng.HEEL_SWAP * blend, 0.5))
             )
         return self
 
@@ -903,9 +902,30 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | set(_OF_THE_STROKE))
 
 
-# (``import *`` gives every public name here, as it would with no __all__,
-# and the stroke's public names, as it did when they were defined here)
-__all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
-    *(n for n in globals() if not n.startswith("_")),
-    *(n for n in _OF_THE_STROKE if not n.startswith("_")),
+# What ``import *`` gives: the tools and the paint on them, the engine's
+# sizes and indices of packed paint, and the stroke's public names (found
+# here too: see __getattr__). The modules np, sp and eng are kept for
+# compatibility: scripts may have relied on ``import *`` giving them.
+__all__ = [
+    "COLUMNS",
+    "DEFAULT_BRUSH",
+    "IB",
+    "IS",
+    "IV",
+    "KNIFE_SHAPES",
+    "PACKED",
+    "SHAPES",
+    "Brush",
+    "BrushType",
+    "ColorLike",
+    "N",
+    "Paint",
+    "Stroke",
+    "StrokePaint",
+    "apply_stroke",
+    "as_paint",
+    "eng",
+    "load_paint",
+    "np",
+    "sp",
 ]

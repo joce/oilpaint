@@ -164,6 +164,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   further up the hairs, more so under pressure and with soft hair, and part
   of it goes into the body of the brush, where it lasts into the next
   strokes. A thin film still only dirties the tips.
+- The tables shared by every colour computation (`spectral.WAVELENGTHS`,
+  `SPECTRUM_TO_RGB`, `LUMINANCE`, ...) are read-only, and so are
+  `Canvas.top_k`, `top_s`, `top_v` and the same of `und`: views of the wet
+  paint, which can be written through but not replaced.
+  `from oilpaint.brush import *` gives the names `oilpaint.brush.__all__`
+  lists: no longer the standard-library and typing names the module imports
+  (`math`, `hashlib`, `dataclass`, `Any`, ...), `annotations`, or
+  `value_noise_1d` (import it from `oilpaint.noise`). The painted result is
+  the same to the last bit.
 
 ### Fixed
 

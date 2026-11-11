@@ -266,10 +266,37 @@ BRUSH_HANDLE = BrushType(
     name="Brush handle",
 )
 
+#: Every preset above, by name.
 ALL = {
-    name: value
-    for name, value in list(globals().items())
-    if isinstance(value, BrushType)
+    "ROUND": ROUND,
+    "ROUND_HOG": ROUND_HOG,
+    "ROUND_SABLE": ROUND_SABLE,
+    "LINER": LINER,
+    "RIGGER": RIGGER,
+    "MOP": MOP,
+    "DEER_FOOT": DEER_FOOT,
+    "FLAT_HOG": FLAT_HOG,
+    "FLAT_SABLE": FLAT_SABLE,
+    "BRIGHT": BRIGHT,
+    "ANGLED": ANGLED,
+    "DAGGER": DAGGER,
+    "BLENDER": BLENDER,
+    "FILBERT_HOG": FILBERT_HOG,
+    "FILBERT_SABLE": FILBERT_SABLE,
+    "FAN_HOG": FAN_HOG,
+    "FAN_SOFT": FAN_SOFT,
+    "STIPPLER": STIPPLER,
+    "PALETTE_KNIFE": PALETTE_KNIFE,
+    "KNIFE_TROWEL": KNIFE_TROWEL,
+    "KNIFE_SMALL": KNIFE_SMALL,
+    "KNIFE_PEAR": KNIFE_PEAR,
+    "KNIFE_STRAIGHT": KNIFE_STRAIGHT,
+    "KNIFE_ANGLED": KNIFE_ANGLED,
+    "KNIFE_SPOON": KNIFE_SPOON,
+    "KNIFE_COMB": KNIFE_COMB,
+    "SCRAPER": SCRAPER,
+    "RAG": RAG,
+    "BRUSH_HANDLE": BRUSH_HANDLE,
 }
 
 

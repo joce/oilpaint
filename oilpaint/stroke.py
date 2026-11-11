@@ -325,9 +325,14 @@ class _Relief(NamedTuple):
 
 
 class _Canvas(Protocol):
-    """What a stroke paints on (a :class:`oilpaint.Canvas`): its size and
-    surface, the wet paint (see :mod:`oilpaint._engine`), and what it hands
-    a stroke: its random numbers, its id and the relief under the paint."""
+    """What a stroke paints on (a :class:`oilpaint.Canvas`), and all a
+    stroke uses of it. It reads the size, the surface and the dried paint's
+    height (``dry_height``), and the volume of the wet paint (``top_v``,
+    ``und_v``); it changes the wet paint in place (``top``, ``und``, their
+    coverage ``top_a``, ``und_a`` and the stroke ids ``top_id``; see
+    :mod:`oilpaint._engine`). The canvas hands it its random numbers, its id
+    and the relief under the paint (maps it only reads, the same until the
+    paint dries)."""
 
     width: int
     height: int
@@ -337,9 +342,13 @@ class _Canvas(Protocol):
     top_a: np.ndarray
     und_a: np.ndarray
     top_id: np.ndarray
-    top_v: np.ndarray
-    und_v: np.ndarray
     dry_height: np.ndarray
+
+    @property
+    def top_v(self) -> np.ndarray: ...  # (views of the volume in top, und)
+
+    @property
+    def und_v(self) -> np.ndarray: ...
 
     def _stroke_rng(self, seed) -> np.random.Generator: ...
 
@@ -606,6 +615,120 @@ class _Window(NamedTuple):
         return self.cx0 < self.cx1 and self.cy0 < self.cy1
 
 
+def _arc_length(pts: np.ndarray) -> np.ndarray:
+    """The distance along the path (px) at each of its points ``pts``."""
+    return np.concatenate(
+        [[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
+    )
+
+
+class _Shape(NamedTuple):
+    """The footprint of a tool, as a stroke works with it."""
+
+    circle: bool  # round: the same whichever way it turns
+    aspect: float  # its thickness over its width (1 for a circle)
+    reach: float  # how far it reaches from its centre, in half-widths
+    area_unit: float  # its area, in half-widths squared
+
+
+def _shape(bt: BrushType) -> _Shape:
+    """The footprint of tool ``bt``."""
+    circle = _circular(bt)
+    aspect = 1.0 if circle else bt.aspect
+    return _Shape(
+        circle,
+        aspect,
+        1.0 if circle else float(np.hypot(1.0, aspect)),
+        _footprint_area("round" if circle else bt.shape, aspect),
+    )
+
+
+# (where the hair pattern of a stroke with none lies: see _stroke_hair)
+_NO_HAIR = (0.0, 0.0, 1.0, 1.0)
+
+
+def _stroke_hair(
+    bt: BrushType, w_typ: float, half: float, r_max: float, reach: float, arc, rng
+):
+    """The brush's hair over the stroke: where its bristle clumps run along
+    it, or a blade's nicks (which score nearly straight lines, coming and
+    going as grit catches and paint closes over them), and where that lies
+    (see :func:`_hair_field`), from a little before its start to a little
+    past its end. ``half`` is the bristle bundle's largest half-width (px),
+    ``r_max`` the largest it is splayed to under pressure."""
+    pad = r_max * reach + 4.0
+    return _hair_field(
+        bt,
+        w_typ,
+        half,
+        -pad,
+        float(arc[-1]) + pad,
+        rng,
+        wander=_NICK_WANDER if bt.rigid else 1.0,
+    )
+
+
+def _stroke_consts(
+    bt: BrushType,
+    eff: dict,
+    brush: Brush,
+    surf: Surface,
+    *,
+    stroke_id: int,
+    circle: bool,
+    is_dab: bool,
+    margin: float,
+    arc_end: float,
+    hair_at: tuple[float, float, float, float],
+    spacing: float,
+):
+    """The settings of a stroke with tool ``bt`` (settings ``eff``, see
+    :func:`_resolve`) on a canvas of surface ``surf``, as the engine takes
+    them (an :class:`_engine.StrokeConsts`)."""
+    return eng.StrokeConsts(
+        stroke_id=int(stroke_id),
+        circle=bool(circle),
+        is_dab=bool(is_dab),
+        ring=bool(brush.ring),
+        rigid=bool(bt.rigid),
+        deposits=bool(bt.deposits),
+        margin=float(margin),
+        # how much the surface texture (vs. the hair pattern) decides
+        # where a dry brush catches
+        tooth_w=float(np.clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85)),
+        drag=float(eff["drag"]),
+        pickup=float(eff["pickup"]),
+        streaks=float(eff["streaks"]),
+        mixing=float(eff["mixing"]),
+        smear=float(eff["smear"]),
+        blending=float(eff["blending"]),
+        rough=float(eff["rough"]),
+        ridge=float(eff["ridge"]),
+        stiffness=float(bt.stiffness),
+        capacity=float(bt.capacity),
+        dig=float(bt.dig),
+        softness=float(bt.softness),
+        slant=float(bt.slant),
+        clumps=float(bt.clumps),
+        # soft brushes fade in and out over this many widths
+        feather=float(bt.softness * 3.0),
+        # soft brushes are lowered and lifted gently, so their ends feather
+        end_k=1.0 if is_dab else max(0.0, 1.0 - 1.5 * float(bt.softness)),
+        surface_acts=bool(surf.affects_paint),
+        slickness=float(surf.slickness),
+        absorbency=float(surf.absorbency),
+        surface_tooth=float(surf.tooth),
+        arc_end=float(arc_end),
+        hair_s0=hair_at[0],
+        hair_x0=hair_at[1],
+        hair_ds=hair_at[2],
+        hair_dx=hair_at[3],
+        spacing=float(spacing),
+        # the brush's own size: how wide it paints on average (px)
+        bundle=float(brush.width),
+    )
+
+
 class _Run:
     """One stroke in progress: the tool, the sampled path, and the textures
     and constants that stay the same along the stroke.
@@ -642,42 +765,57 @@ class _Run:
         return cls(canvas, rng, brush, bt, eff, smp)
 
     def __init__(
-        self, canvas: _Canvas, rng, brush: Brush, bt: BrushType, eff: dict, smp
+        self,
+        canvas: _Canvas,
+        rng,
+        brush: Brush,
+        bt: BrushType,
+        eff: dict,
+        smp: _Samples,
     ):
         self.canvas, self.rng = canvas, rng
         self.brush, self.bt, self.eff = brush, bt, eff
         pts, is_dab, w_typ = smp.pts, smp.is_dab, smp.w_typ
         self.pts, self.is_dab, self.w_typ = pts, is_dab, w_typ
         self.lays_paint = bool(bt.deposits and brush.volume > 0)
-        arc = self.arc = np.concatenate(
-            [[0.0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
-        )
-        self.tex = _NO_TEX
-        tex = _stroke_textures(rng, bt, smp, arc)
-        self.chatter, self.blade_tilt = tex.chatter, tex.blade_tilt
-
-        circle = self.circle = _circular(bt)
-        aspect = self.aspect = 1.0 if circle else bt.aspect
-        self.reach = 1.0 if circle else float(np.hypot(1.0, aspect))
-        # in half-widths squared
-        self.area_unit = _footprint_area("round" if circle else bt.shape, aspect)
+        arc = self.arc = _arc_length(pts)
+        shape = _shape(bt)
+        self.circle, self.aspect, self.reach, self.area_unit = shape
         self.stiff_blade = float(np.clip((bt.stiffness - 0.4) / 0.6, 0.0, 1.0))
         # where each column sits across the mark
         self.col_u = (_RING_X if brush.ring else _COL_X) * 2.0 - 1.0
         # squeezed-out ridges are at most this wide (px); they lie just outside the mark
         self.margin = float(np.clip(0.12 * w_typ * (1.0 + bt.spread), 0.6, 7.0)) + 1.0
+        self.tex = _NO_TEX
+
+        # (from here to lift_var, the stroke's textures are drawn from rng in
+        # the order the class gives; nothing in between draws any)
+        tex = _stroke_textures(rng, bt, smp, arc)
+        self.chatter, self.blade_tilt = tex.chatter, tex.blade_tilt
         nominal, radii = _radii(smp, tex.wobble, bt)
         self.radii = radii
         self.lift_reach, self._lift_from = _lift_reach(bt, eff, smp, arc, radii)
-
         if bt.rigid:
-            pad = float(radii.max()) * self.reach + 3.0
+            pad = float(radii.max()) * shape.reach + 3.0
             self.blade = _before_the_blade(canvas, rng, pts, pad, w_typ, arc)
-
         self.stroke_id = canvas._new_stroke_id()
+        if is_dab:
+            self.tex2, hair_at = tex.dab, _NO_HAIR
+        else:
+            self.tex2, hair_at = _stroke_hair(
+                bt,
+                w_typ,
+                float(nominal.max()),
+                float(radii.max()),
+                shape.reach,
+                arc,
+                rng,
+            )
+        # how ragged this stroke's end is (each stroke ends its own way)
+        self.lift_var = float(0.4 + 1.2 * rng.random()) if self.lift_reach > 0 else 1.0
+
         self.dry = False
         brush.wet = 0.0
-
         # the samples as plain floats, for the per-step arithmetic
         self._pts = [(float(x), float(y)) for x, y in pts]
         self._pressure, self._angles, self._rolls = (
@@ -694,71 +832,18 @@ class _Run:
         self.aux = (relief.floor, relief.tooth, relief.hollows, canvas.dry_height)
         self.br = (brush.tip, brush.reservoir, brush.heel)
         self.pend = _NO_PENDING
-        # the brush's hair: where its bristle clumps run along the stroke (see
-        # _hair_field)
-        hair_at = (0.0, 0.0, 1.0, 1.0)
-        if is_dab:
-            self.tex2 = tex.dab
-        else:
-            pad = float(radii.max()) * self.reach + 4.0
-            # (a blade's nicks score nearly straight lines, which come and go
-            # as grit catches and paint closes over them)
-            self.tex2, hair_at = _hair_field(
-                bt,
-                w_typ,
-                float(nominal.max()),
-                -pad,
-                float(arc[-1]) + pad,
-                rng,
-                wander=_NICK_WANDER if bt.rigid else 1.0,
-            )
-        # how ragged this stroke's end is (each stroke ends its own way)
-        self.lift_var = float(0.4 + 1.2 * rng.random()) if self.lift_reach > 0 else 1.0
-        self.K = self._consts(hair_at, smp.spacing)
-
-    def _consts(self, hair_at, spacing: float):
-        """The stroke's settings as the engine takes them."""
-        bt, eff, surf = self.bt, self.eff, self.canvas.surface
-        return eng.StrokeConsts(
-            stroke_id=int(self.stroke_id),
-            circle=bool(self.circle),
-            is_dab=bool(self.is_dab),
-            ring=bool(self.brush.ring),
-            rigid=bool(bt.rigid),
-            deposits=bool(bt.deposits),
-            margin=float(self.margin),
-            # how much the surface texture (vs. the hair pattern) decides
-            # where a dry brush catches
-            tooth_w=float(np.clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85)),
-            drag=float(eff["drag"]),
-            pickup=float(eff["pickup"]),
-            streaks=float(eff["streaks"]),
-            mixing=float(eff["mixing"]),
-            smear=float(eff["smear"]),
-            blending=float(eff["blending"]),
-            rough=float(eff["rough"]),
-            ridge=float(eff["ridge"]),
-            stiffness=float(bt.stiffness),
-            capacity=float(bt.capacity),
-            dig=float(bt.dig),
-            softness=float(bt.softness),
-            slant=float(bt.slant),
-            clumps=float(bt.clumps),
-            # soft brushes fade in and out over this many widths
-            feather=float(bt.softness * 3.0),
-            # soft brushes are lowered and lifted gently, so their ends feather
-            end_k=1.0 if self.is_dab else max(0.0, 1.0 - 1.5 * float(bt.softness)),
-            surface_acts=bool(surf.affects_paint),
-            slickness=float(surf.slickness),
-            absorbency=float(surf.absorbency),
-            surface_tooth=float(surf.tooth),
-            arc_end=float(self.arc[-1]),
-            hair_s0=hair_at[0],
-            hair_x0=hair_at[1],
-            hair_ds=hair_at[2],
-            hair_dx=hair_at[3],
-            spacing=float(spacing),
-            bundle=float(self.brush.width),
+        self.K = _stroke_consts(
+            bt,
+            eff,
+            brush,
+            canvas.surface,
+            stroke_id=self.stroke_id,
+            circle=shape.circle,
+            is_dab=is_dab,
+            margin=self.margin,
+            arc_end=float(arc[-1]),
+            hair_at=hair_at,
+            spacing=smp.spacing,
         )
 
     # ------------------------------------------------------------------
@@ -988,9 +1073,7 @@ class _Run:
             return None
         if self.bt.rigid:
             taps, taps_all = _knife_taps(self, st, F)
-            step = _Step(st, F, tables, taps)
-            step.taps_all = taps_all
-            return step
+            return _Step(st, F, tables, taps, taps_all)
         u_px = F[eng.F_U][_step_slices(st)[1]]
         taps = eng.bristle_taps(u_px, st.span, st.nsub, self.brush.ring, st.rho)
         return _Step(st, F, tables, taps)

@@ -85,7 +85,40 @@ IMPASTO_MEDIUM = Paint.from_optics(
     np.zeros(N_BANDS), 0.4, name="Impasto Medium", body=1.0
 )
 
-ALL = [v for v in list(globals().values()) if isinstance(v, Paint)]
+#: Every paint above.
+ALL = [
+    TITANIUM_WHITE,
+    ZINC_WHITE,
+    IVORY_BLACK,
+    CADMIUM_YELLOW,
+    LEMON_YELLOW,
+    YELLOW_OCHRE,
+    CADMIUM_ORANGE,
+    CADMIUM_RED,
+    ALIZARIN_CRIMSON,
+    QUINACRIDONE_MAGENTA,
+    BURNT_SIENNA,
+    BURNT_UMBER,
+    RAW_UMBER,
+    ULTRAMARINE_BLUE,
+    COBALT_BLUE,
+    CERULEAN_BLUE,
+    PHTHALO_BLUE,
+    PHTHALO_GREEN,
+    VIRIDIAN,
+    SAP_GREEN,
+    DIOXAZINE_PURPLE,
+    LEAD_WHITE,
+    LEAD_TIN_YELLOW,
+    RED_OCHRE,
+    VERMILION,
+    RED_LAKE,
+    CASSEL_EARTH,
+    BONE_BLACK,
+    SMALT,
+    MEDIUM,
+    IMPASTO_MEDIUM,
+]
 
 
 class Match(NamedTuple):
@@ -100,6 +133,7 @@ class Match(NamedTuple):
 
 #: Proportions :func:`match` tries, from a pinch to equal parts, on a log scale.
 _STEPS = np.geomspace(1 / 64, 1.0, 10)
+_STEPS.flags.writeable = False
 #: About how many mixes :func:`match` evaluates in one batch.
 _BATCH_ROWS = 2048
 

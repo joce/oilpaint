@@ -129,8 +129,17 @@ GLASS = Surface(
     name="Glass",
 )
 
+#: Every preset above, by name.
 ALL = {
-    name: value for name, value in list(globals().items()) if isinstance(value, Surface)
+    "CANVAS": CANVAS,
+    "LINEN_FINE": LINEN_FINE,
+    "LINEN_COARSE": LINEN_COARSE,
+    "COTTON_DUCK": COTTON_DUCK,
+    "GESSO_PANEL": GESSO_PANEL,
+    "CANVAS_BOARD": CANVAS_BOARD,
+    "OIL_PAPER": OIL_PAPER,
+    "COPPER": COPPER,
+    "GLASS": GLASS,
 }
 
 

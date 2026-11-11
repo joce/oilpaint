@@ -315,7 +315,7 @@ def test_overlapping_wet_knife_slabs_are_smooth():
     rough, at_step = [], []
     for seed in (4, 5, 6):
         c = _wet_knife_field(n=2, seed=seed)
-        surface = (c._floor + c.top_v + c.und_v)[86:100, 120:480].astype(float)
+        surface = (c._relief().floor + c.top_v + c.und_v)[86:100, 120:480].astype(float)
         ripple = surface - np.apply_along_axis(
             lambda r: np.convolve(r, np.ones(15) / 15, mode="same"), 1, surface
         )
@@ -337,7 +337,7 @@ def test_a_clean_knife_drag_leaves_no_ribs():
         pressure=0.6,
         seed=8,
     )
-    surface = c._floor + c.top_v + c.und_v
+    surface = c._relief().floor + c.top_v + c.und_v
     assert _ripple_along_x(surface, slice(90, 112), slice(150, 450)) < 0.3
 
 

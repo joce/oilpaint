@@ -164,7 +164,17 @@ def _knife_step(run: _Run, s: _Step) -> None:
     eng.squeeze_out(run.br, run.K, st, col_vol, col_load, hold, ridges, run.col_u)
     grid, c_tab, h_tab = s.tables
     eng.lay_ridges_off(
-        run.cv, run.pend, run.br, run.K, st, ridges, grid, c_tab, h_tab, _NO_TEX2, True
+        run.cv,
+        run.pend,
+        run.br,
+        run.K,
+        st,
+        ridges,
+        grid,
+        c_tab,
+        h_tab,
+        hair=_NO_TEX2,
+        lose_off=True,
     )
     _fill_under_blade(run, s, level, ride, area, whole)  # 6)
     # A knife lifted off thick paint pulls it up into little peaks and torn ridges.
@@ -218,7 +228,7 @@ def _blade_rest(run: _Run, s: _Step):
         s.F,
         st.wy0,
         st.wx0,
-        s.sl is None,
+        gathered=s.sl is None,
     )
     # Wet paint from earlier strokes holds the blade up too, the heap it pushes
     # included (a knife rides on a wave of paint): it rests on its high points
@@ -289,12 +299,12 @@ def _blade_level(run: _Run, s: _Step, gap: float, film):
         film,
         _KNIFE_FILM,
         gap,
-        run.bt.clumps > 0,
-        1.0 + chat * run.chatter[st.i],
-        run.blade_tilt,
-        s.F,
-        st.wy0,
-        st.wx0,
+        comb=run.bt.clumps > 0,
+        chat=1.0 + chat * run.chatter[st.i],
+        tilt=run.blade_tilt,
+        F=s.F,
+        wy0=st.wy0,
+        wx0=st.wx0,
     )
 
 
@@ -429,11 +439,11 @@ def _fill_under_blade(run: _Run, s: _Step, level, ride, area: float, whole) -> N
         d,
         np.ascontiguousarray(s.cover[wsl]),
         run.stroke_id,
-        True,
-        False,
-        np.ascontiguousarray(s.expo[wsl]),
-        False,
-        extra,
+        moved=True,
+        by_film=False,
+        reach=np.ascontiguousarray(s.expo[wsl]),
+        has_reach=False,
+        extra=extra,
     )
 
 
@@ -455,8 +465,8 @@ def _whole_window(run: _Run, s: _Step) -> _Whole:
     the nearest canvas pixel, see :func:`_nearest`)."""
     st = s.st
     st_w = st._replace(cy0=st.y0, cx0=st.x0, ch=st.hh, cw=st.ww, wy0=0, wx0=0)
-    sw = _Step(st_w, s.F, s.tables, s.taps_all)
-    sw.sl = None  # (gathered: see _nearest)
+    # (its pixels gathered: see _nearest)
+    sw = _Step(st_w, s.F, s.tables, s.taps_all, gathered=True)
     # Past the edge, the surface is the canvas's at its edge, with the slab
     # this stroke has laid out there in place of the one it laid at the edge
     # (a blade fills up to its level: over its own slab it lays no more).
@@ -591,11 +601,11 @@ def _knife_step_off(run: _Run, s: _Step, area: float) -> None:
         empty,
         empty,
         run.stroke_id,
-        True,
-        False,
-        empty,
-        False,
-        extra,
+        moved=True,
+        by_film=False,
+        reach=empty,
+        has_reach=False,
+        extra=extra,
     )
 
 
