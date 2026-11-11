@@ -2,18 +2,31 @@
 
     python tools/bench.py                 # the timing table
     python tools/bench.py -k knife -n 9   # some scenes, best of 9
-    python tools/bench.py --save DIR      # also keep each scene's canvas state
-    python tools/bench.py --compare DIR   # ... and compare with a kept one
+    python tools/bench.py --save DIR      # also keep each scene's state and picture
+    python tools/bench.py --compare DIR   # ... and compare with kept ones
+    python tools/bench.py --compare DIR --no-picture   # the paint only
 
 Every scene is painted with fixed seeds, so the same code always paints the
 same canvas: the ``state`` column is a hash of everything the scene left on
 the canvas (and on its brushes). An optimisation that leaves the paint alone
 leaves those hashes alone; ``--compare`` says how far any array moved.
 
+With ``--save`` or ``--compare`` each painted scene is also rendered, once,
+after its timing (see ``canvas_picture``: lit by the default lamp and by two
+others, lit as if on an absorbent ground, unlit, its reflectance and its
+surface height), and the ``picture`` column is a hash of that: rendering,
+compositing and the colour science are compared byte for byte as the paint
+is. ``--no-picture`` leaves it out. A state kept by an older version of this
+tool, or with ``--no-picture``, holds no picture: it is compared for the
+paint alone, and the summary says the picture was not compared. The picture
+repeats bit for bit only with the same numpy (and BLAS) build and thread
+settings on both sides: the reverse painting's colour is a matrix product.
+
 Each scene is set up (a canvas, perhaps some wet paint on it) outside the
 clock and then timed several times over, each time from a fresh copy; the
 table gives the best and the median wall time, the best CPU time, and the
-best time per mark. The compiled engine is warmed up first.
+best time per mark. The compiled engine (and, for the picture, the renderer)
+is warmed up first; the time spent rendering is given at the end, apart.
 """
 
 from __future__ import annotations
@@ -27,7 +40,7 @@ import statistics
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -72,6 +85,49 @@ def canvas_state(canvas, tools=()) -> dict[str, np.ndarray]:
     return state
 
 
+#: Names of the picture's arrays begin with this (see canvas_picture), which
+#: sets them apart from the painted state's in a kept ``.npz``.
+PICTURE = "picture_"
+
+#: The renders that make up the picture: name -> arguments of Canvas.render.
+RENDERS = {
+    "lit": {},
+    "unlit": {"lighting": False},
+    # a low lamp from the other side, over doubled relief, at half gloss: the
+    # shadows are searched the other way, far enough on the thicker scenes
+    # that the search is capped and fades out
+    "raking": {"light": (0.9, 0.4, 0.15), "relief": 2.0, "gloss": 0.5},
+    # a lamp straight above, without gloss: no shadow search, no highlights
+    "overhead": {"light": (0.0, 0.0, 1.0), "gloss": 0.0},
+}
+
+
+#: The absorbency of the ground the ``matte`` render pretends the paint lies
+#: on (no scene paints on an absorbent one): the most absorbent of the
+#: grounds in ``surfaces``.
+MATTE_ABSORBENCY = surfaces.GESSO_PANEL.absorbency
+
+
+def canvas_picture(canvas) -> dict[str, np.ndarray]:
+    """What the painting looks like: the renders (RENDERS), its spectral
+    reflectance (worked out apart from the unlit render, which composites
+    the wet paint in a compiled kernel of its own) and the surface height
+    the lamp lights; and, unless it is a reverse painting (behind glass,
+    where nothing sinks in), the default render as if the ground were
+    absorbent (MATTE_ABSORBENCY): the paint dulled where it is thin. That
+    one is rendered from a shallow copy of the canvas with another surface,
+    which rendering reads only for its absorbency; the canvas is left as
+    it is."""
+    picture = {PICTURE + name: canvas.render(**kw) for name, kw in RENDERS.items()}
+    if not canvas.reverse:
+        sunk = copy.copy(canvas)
+        sunk.surface = replace(canvas.surface, absorbency=MATTE_ABSORBENCY)
+        picture[PICTURE + "matte"] = sunk.render()
+    picture[PICTURE + "reflectance"] = canvas.reflectance()
+    picture[PICTURE + "height"] = canvas.surface_height()
+    return picture
+
+
 def digest(state: dict[str, np.ndarray]) -> str:
     h = hashlib.sha256()
     for name in sorted(state):
@@ -81,43 +137,60 @@ def digest(state: dict[str, np.ndarray]) -> str:
     return h.hexdigest()
 
 
-def compare(state: dict[str, np.ndarray], path: str) -> list[str]:
-    """How ``state`` differs from the one kept at ``path`` (no lines: not at all).
+def difference(name: str, a: np.ndarray, b: np.ndarray) -> str | None:
+    """How the array ``a`` differs from the kept ``b`` (None: not at all).
 
-    Arrays are compared byte for byte, as the ``state`` hash sees them: a
-    value that only changed the sign of a zero, or the bits of a NaN, counts
-    as a difference, and is reported as such."""
-    lines = []
+    Compared byte for byte, as the hashes see them: a value that only
+    changed the sign of a zero, or the bits of a NaN, counts as a
+    difference, and is reported as such."""
+    a, b = np.ascontiguousarray(a), np.ascontiguousarray(b)
+    if a.shape != b.shape or a.dtype != b.dtype:
+        return f"{name}: {a.dtype}{a.shape} was {b.dtype}{b.shape}"
+    if a.tobytes() == b.tobytes():
+        return None
+    if a.dtype.kind not in "fiub":
+        return f"{name}: {a.tolist()} was {b.tolist()}"
+    if np.array_equal(a, b, equal_nan=True):
+        zeros = (a == 0) & (np.signbit(a) != np.signbit(b))
+        return (
+            f"{name}: equal in value but not in bits: {int(zeros.sum())} "
+            "zeros changed sign" + ("" if zeros.any() else " (NaN payloads differ)")
+        )
+    a64, b64 = a.astype(np.float64), b.astype(np.float64)
+    diff = np.abs(a64 - b64)
+    diff[np.isnan(diff)] = np.inf
+    diff[np.isnan(a64) & np.isnan(b64)] = 0.0
+    rel = diff / np.maximum(np.abs(b64), 1e-12)
+    return (
+        f"{name}: {int((diff > 0).sum())} of {diff.size} values differ, "
+        f"max abs {diff.max():.3g}, max rel {rel[diff > 0].max():.3g}"
+    )
+
+
+def compare(
+    state: dict[str, np.ndarray],
+    path: str,
+    picture: dict[str, np.ndarray] | None = None,
+) -> tuple[list[str], bool]:
+    """How ``state`` (the paint) and ``picture`` differ from the ones kept at
+    ``path`` (no lines: not at all), and whether the picture was compared:
+    not if ``picture`` is None, nor if the kept state holds no picture (one
+    kept by an older version of this tool); the paint is compared anyway."""
     with np.load(path) as kept:
-        for name in sorted(set(state) | set(kept.files)):
-            if name not in state or name not in kept.files:
-                lines.append(f"{name}: only in one of the two")
-                continue
-            a, b = np.ascontiguousarray(state[name]), np.ascontiguousarray(kept[name])
-            if a.shape != b.shape or a.dtype != b.dtype:
-                lines.append(f"{name}: {a.dtype}{a.shape} was {b.dtype}{b.shape}")
-            elif a.tobytes() == b.tobytes():
-                continue
-            elif a.dtype.kind not in "fiub":
-                lines.append(f"{name}: {a.tolist()} was {b.tolist()}")
-            elif np.array_equal(a, b, equal_nan=True):
-                zeros = (a == 0) & (np.signbit(a) != np.signbit(b))
-                lines.append(
-                    f"{name}: equal in value but not in bits: {int(zeros.sum())} "
-                    "zeros changed sign"
-                    + ("" if zeros.any() else " (NaN payloads differ)")
-                )
-            else:
-                a64, b64 = a.astype(np.float64), b.astype(np.float64)
-                diff = np.abs(a64 - b64)
-                diff[np.isnan(diff)] = np.inf
-                diff[np.isnan(a64) & np.isnan(b64)] = 0.0
-                rel = diff / np.maximum(np.abs(b64), 1e-12)
-                lines.append(
-                    f"{name}: {int((diff > 0).sum())} of {diff.size} values differ, "
-                    f"max abs {diff.max():.3g}, max rel {rel[diff > 0].max():.3g}"
-                )
-    return lines
+        held = {n for n in kept.files if n.startswith(PICTURE)}
+        groups = [(state, set(kept.files) - held)]
+        compared = False
+        if picture is not None and held:
+            groups.append((picture, held))
+            compared = True
+        lines = []
+        for new, old in groups:
+            for name in sorted(set(new) | old):
+                if name not in new or name not in old:
+                    lines.append(f"{name}: only in one of the two")
+                elif line := difference(name, new[name], kept[name]):
+                    lines.append(line)
+    return lines, compared
 
 
 # ----------------------------------------------------------------------------
@@ -567,8 +640,9 @@ def painting(c):
 # ----------------------------------------------------------------------------
 
 
-def warm_up():
-    """Compile (or load from the cache) every kernel the scenes use."""
+def warm_up(picture: bool = False):
+    """Compile (or load from the cache) every kernel the scenes use, and with
+    ``picture`` every one that renders them."""
     c = Canvas(160, 120, seed=1)
     c.stroke([(20, 20), (140, 100)], P.COBALT_BLUE, width=20)
     c.stroke([(20, 100), (140, 20)], P.TITANIUM_WHITE, brush=brushes.FAN_HOG)
@@ -579,59 +653,139 @@ def warm_up():
     c.stipple([(40, 40), (80, 80)], P.SAP_GREEN)
     c.spatter((20, 20), P.IVORY_BLACK, amount=0.1, seed=1)
     c.dry()
+    if picture:
+        c.stroke([(20, 60), (140, 60)], P.TITANIUM_WHITE, amount=10, width=20)
+        canvas_picture(c)
+
+
+def time_scene(sc: Scene, reps: int, differences: list[str]):
+    """Paint ``sc`` ``reps`` times, each from a fresh copy of its set-up, and
+    time it: its row of the table, its state and the canvas last painted."""
+    start = sc.setup()
+    wall, cpu, marks, state, c = [], [], 0, {}, start
+    for _ in range(reps):
+        c = copy.deepcopy(start)
+        gc.collect()
+        w0, c0 = time.perf_counter(), time.process_time()
+        marks, tools = sc.run(c)
+        wall.append(time.perf_counter() - w0)
+        cpu.append(time.process_time() - c0)
+        again = canvas_state(c, tools)
+        if state and digest(again) != digest(state):
+            differences.append(f"{sc.name}: not the same from one run to the next")
+        state = again
+    best = min(wall)
+    row = (
+        f"{sc.name:<12} {marks:>5} {1e3 * best:>9.1f} "
+        f"{1e3 * statistics.median(wall):>9.1f} {1e3 * min(cpu):>9.1f} "
+        f"{1e3 * best / max(marks, 1):>8.2f}  {digest(state)[:12]}"
+    )
+    return row, state, c
+
+
+def verdict(
+    kept: str, differences: list[str], no_picture: list[str], scenes: int, picture: bool
+) -> str:
+    """The summary of a comparison of ``scenes`` scenes with the states kept
+    in ``kept``: ``no_picture`` are those whose kept state holds no picture,
+    ``picture`` False if no picture was rendered."""
+    if not picture:
+        not_compared = "; picture not compared (--no-picture)"
+    elif len(no_picture) == scenes:
+        not_compared = "; picture not compared"
+    elif no_picture:
+        not_compared = f"; picture not compared for {', '.join(no_picture)}"
+    else:
+        not_compared = ""
+    if differences:
+        return f"not the same as {kept}{not_compared}:"
+    if not_compared:
+        return f"same paint as {kept}{not_compared}"
+    return f"same paint and same picture as {kept}"
+
+
+def bench_scene(sc: Scene, args, picture: bool, differences: list[str]):
+    """Time ``sc`` and print its row; render its picture if ``picture``; keep
+    or compare them as ``args`` say, adding to ``differences``. Returns the
+    seconds spent rendering and whether the picture was compared. (A
+    function of its own, so that nothing of this scene is held while the
+    next one is timed.)"""
+    row, state, c = time_scene(sc, args.n or sc.reps, differences)
+    pic, seconds, compared = None, 0.0, False
+    if picture:
+        t0 = time.perf_counter()
+        pic = canvas_picture(c)
+        seconds = time.perf_counter() - t0
+        row += f"  {digest(pic)[:12]}"
+    print(row)
+    if args.save:
+        os.makedirs(args.save, exist_ok=True)
+        np.savez_compressed(  # pyright: ignore[reportCallIssue]
+            os.path.join(args.save, sc.name + ".npz"),
+            **state,  # pyright: ignore[reportArgumentType]
+            **(pic or {}),  # pyright: ignore[reportArgumentType]
+        )
+    if args.compare:
+        path = os.path.join(args.compare, sc.name + ".npz")
+        lines, compared = compare(state, path, pic)
+        differences += [f"{sc.name}: {line}" for line in lines]
+    return seconds, compared
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     ap.add_argument("-k", metavar="TEXT", help="only scenes whose name contains this")
     ap.add_argument("-n", type=int, help="time each scene this many times")
-    ap.add_argument("--save", metavar="DIR", help="keep each scene's state (npz)")
+    ap.add_argument(
+        "--save", metavar="DIR", help="keep each scene's state and picture (npz)"
+    )
     ap.add_argument("--compare", metavar="DIR", help="compare with a kept state")
+    ap.add_argument(
+        "--no-picture",
+        action="store_true",
+        help="with --save or --compare: leave the picture out (the paint only)",
+    )
     args = ap.parse_args(argv)
+    scenes = [sc for sc in SCENES if not args.k or args.k in sc.name]
+    if not scenes:
+        ap.error(f"no scene's name contains {args.k!r}")
+    if (
+        args.save
+        and args.compare
+        and os.path.realpath(args.save) == os.path.realpath(args.compare)
+    ):
+        ap.error(
+            "--save and --compare name the same directory: it would be "
+            "compared with itself"
+        )
+    picture = bool(args.save or args.compare) and not args.no_picture
 
     t0 = time.perf_counter()
-    warm_up()
+    warm_up(picture)
     print(
-        f"warm-up (compiling, or loading the cache): {time.perf_counter() - t0:.1f} s"
+        f"warm-up ({'engine and renderer' if picture else 'engine'}: compiling, "
+        f"or loading the cache): {time.perf_counter() - t0:.1f} s"
     )
     print(
         f"{'scene':<12} {'marks':>5} {'best ms':>9} {'median':>9} {'cpu ms':>9} "
-        f"{'ms/mark':>8}  state"
+        f"{'ms/mark':>8}  state" + ("         picture" if picture else "")
     )
-    differences = []
-    for sc in SCENES:
-        if args.k and args.k not in sc.name:
-            continue
-        start = sc.setup()
-        wall, cpu, marks, state = [], [], 0, {}
-        for _ in range(args.n or sc.reps):
-            c = copy.deepcopy(start)
-            gc.collect()
-            w0, c0 = time.perf_counter(), time.process_time()
-            marks, tools = sc.run(c)
-            wall.append(time.perf_counter() - w0)
-            cpu.append(time.process_time() - c0)
-            again = canvas_state(c, tools)
-            if state and digest(again) != digest(state):
-                differences.append(f"{sc.name}: not the same from one run to the next")
-            state = again
-        best = min(wall)
+    differences, no_picture, rendering = [], [], 0.0
+    for sc in scenes:
+        seconds, compared = bench_scene(sc, args, picture, differences)
+        rendering += seconds
+        if args.compare and picture and not compared:
+            no_picture.append(sc.name)
+    if picture:
+        print(f"picture: rendered in {rendering:.1f} s (after the timing, not in it)")
+    if no_picture:
         print(
-            f"{sc.name:<12} {marks:>5} {1e3 * best:>9.1f} "
-            f"{1e3 * statistics.median(wall):>9.1f} {1e3 * min(cpu):>9.1f} "
-            f"{1e3 * best / max(marks, 1):>8.2f}  {digest(state)[:12]}"
+            f"the state kept in {args.compare} holds no picture (kept by an older "
+            "bench.py, or with --no-picture), so the picture was not compared"
+            + ("" if len(no_picture) == len(scenes) else f": {', '.join(no_picture)}")
         )
-        if args.save:
-            os.makedirs(args.save, exist_ok=True)
-            np.savez_compressed(  # pyright: ignore[reportCallIssue]
-                os.path.join(args.save, sc.name + ".npz"),
-                **state,  # pyright: ignore[reportArgumentType]
-            )
-        if args.compare:
-            path = os.path.join(args.compare, sc.name + ".npz")
-            differences += [f"{sc.name}: {line}" for line in compare(state, path)]
     if args.compare:
-        print("same paint as", args.compare if not differences else "... no:")
+        print(verdict(args.compare, differences, no_picture, len(scenes), picture))
     for line in differences:
         print("  " + line)
     return 1 if differences else 0

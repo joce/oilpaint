@@ -145,7 +145,7 @@ make tox                        # black, ruff, pyright and pytest on every suppo
 make coverage                   # coverage run (at least 80% is required)
 make spell                      # cspell over the whole repository
 python tools/bench.py           # time the 16 benchmark scenes
-python tools/bench.py --save DIR      # keep each scene's painted state
+python tools/bench.py --save DIR      # keep each scene's painted state and picture
 python tools/bench.py --compare DIR   # compare byte for byte with a kept state
 ```
 
