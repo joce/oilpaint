@@ -180,9 +180,8 @@ preview = true
 max-complexity = 13
 
 [tool.ruff.lint.per-file-ignores]
-# The compiled kernels keep their loops in one function (numba compiles each
+# The rendering kernels keep their loops in one function (numba compiles each
 # call), and the example paintings are long scripts of marks.
-"oilpaint/_engine.py" = ["complex-structure"]
 "oilpaint/_render.py" = ["complex-structure"]
 "examples/*" = ["complex-structure"]
 
