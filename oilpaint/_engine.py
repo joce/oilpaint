@@ -31,7 +31,7 @@ from collections import namedtuple
 import numpy as np
 from numba import njit
 
-from .spectral import N_BANDS
+from .spectral import _check_bands
 
 # Compiling: the helpers that split a kernel into named steps, shared ones
 # included (bury_top, hair_at, radius_at, demand_with, ...), are compiled
@@ -42,18 +42,21 @@ from .spectral import N_BANDS
 # helpers would add some 13 s to it, against 4 s inlined), and a call per
 # pixel to one taking the stroke's settings (st, K) can cost run time.
 
-# The band count, written out rather than taken from spectral.N_BANDS. numba
-# compiles it into the cached kernels as a constant and throws a cached kernel
-# away only when this file changes, whichever process wrote it. So a change of
-# band count is an edit here too, and that edit is what keeps a kernel cached
-# for the old count (even by a process still running with it) from being
-# loaded. The check below makes forgetting the edit loud.
+# The band count, written out rather than taken from spectral.N_BANDS: numba
+# compiles it into the cached kernels as a constant, so a change of band count
+# must be an edit here, which numba sees as a change of this file. The check
+# refuses a count that differs from spectral.py's, and a cache that kept its
+# stamp all the same (see spectral._check_bands).
 N = 24
-if N != N_BANDS:
-    raise RuntimeError(
-        f"{__file__} has N = {N} spectral bands, spectral.py has {N_BANDS}: "
-        f"set N = {N_BANDS} in that file."
-    )
+
+
+@njit(cache=True, error_model="numpy")
+def _compiled_bands():
+    return N
+
+
+_check_bands(__file__, N, _compiled_bands)
+
 # packed indices of scattering, volume and body (stiffness x volume)
 IS, IV, IB = N, N + 1, N + 2
 PACKED = N + 3
