@@ -12,9 +12,19 @@ import math
 import numpy as np
 from numba import njit
 
-from .spectral import N_BANDS
+from .spectral import _check_bands
 
-N = N_BANDS
+# The band count, written out for the reason given in _engine.py.
+N = 24
+
+
+@njit(cache=True, error_model="numpy")
+def _compiled_bands():
+    return N
+
+
+_check_bands(__file__, N, _compiled_bands)
+
 IS, IV = N, N + 1  # packed indices of scattering and volume (as in _engine)
 
 # tanh(B) / B, the Kubelka-Munk layer term, on an even grid of B up to

@@ -4,14 +4,18 @@ these need the compiled stroke engine. The sections from "the engine's
 guards" on do: the stroke engine's limits, and what strokes, brushes and
 canvases accept."""
 
+import ast
 import copy
 import dataclasses
+import inspect
 import math
 import os
 import pickle
+import re
 import shutil
 import subprocess
 import sys
+import types
 from fractions import Fraction
 from typing import Any
 
@@ -580,49 +584,250 @@ def test_swapping_paint_between_layers_exchanges_at_most_all_of_it():
     assert min(a.min() for a in full) >= 0
 
 
-@pytest.mark.skipif(
-    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
-)
-def test_kernels_cached_for_another_band_count_are_refused(tmp_path):
-    # The band count is compiled into the cached kernels, and numba only
-    # throws a cached kernel away when its own file changes: changing
-    # spectral.WAVELENGTHS alone used to corrupt memory.
+# The band count is compiled into the cached kernels as a constant, and numba
+# remakes a cached kernel only when it sees the kernel's own file change: these
+# tests work on a copy of the package with a cache of its own, and change its
+# band count from 24 to 16.
+def _package_copy(tmp_path):
     package = tmp_path / "oilpaint"
     shutil.copytree(
         os.path.dirname(oilpaint.__file__),
         package,
         ignore=shutil.ignore_patterns("__pycache__"),
     )
-    env = dict(
-        os.environ,
+    env = {k: v for k, v in os.environ.items() if not k.startswith("NUMBA_")}
+    env.update(
         NUMBA_CACHE_DIR=str(tmp_path / "cache"),
         PYTHONPATH=str(tmp_path),
         PYTHONDONTWRITEBYTECODE="1",
     )
+    return package, env
 
-    def bands():
-        return subprocess.run(
-            [sys.executable, "-c", "import oilpaint._engine as e; print(e.N)"],
+
+def _python(env, code):
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=env["PYTHONPATH"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _to_16_bands(package, *files):
+    """Give spectral.py 16 bands (if it has not yet), and set N = 16 in each
+    of ``files``. Bytes in, bytes out: the files keep their line endings, and
+    so their size, on every platform."""
+    spectral = package / "spectral.py"
+    spectral.write_bytes(
+        spectral.read_bytes().replace(
+            b"np.linspace(400.0, 700.0, 24)", b"np.linspace(400.0, 700.0, 16)"
+        )
+    )
+    assert b"np.linspace(400.0, 700.0, 16)" in spectral.read_bytes()
+    for name in files:
+        path = package / name
+        text, edits = re.subn(rb"(?m)^N = 24(?=\r?\n)", b"N = 16", path.read_bytes())
+        assert edits == 1, name
+        path.write_bytes(text)
+
+
+_BOTH = "import oilpaint._engine as e, oilpaint._render as r; print(e.N, r.N)"
+
+# One cached engine kernel and one cached render kernel, on arrays with room
+# for 24 bands: what each touched shows the band count compiled into it (19 or
+# 27 packed values moved, 16 or 24 bands lit), and whether it came from the
+# cache.
+_KERNELS = """
+import numpy as np
+from oilpaint import _engine as e, _render as r
+top = np.ones((1, 1, 27), np.float32)
+und = np.zeros((1, 1, 27), np.float32)
+a, b = np.zeros((1, 1), np.float32), np.zeros((1, 1), np.float32)
+e.bury_top(top, und, a, b, 0, 0)
+R, layer = np.full(24, 0.5), np.ones(27)
+r._over(R, layer, 1.0, 0.1, r.TAU_TABLE)
+print((und != 0).sum(), (R != 0.5).sum(),
+      len(e.bury_top.stats.cache_hits), len(r._over.stats.cache_hits))
+"""
+
+
+def test_a_band_count_written_differently_in_a_kernel_file_is_refused(tmp_path):
+    # A band count changed in spectral.py alone used to leave the cached
+    # kernels to read and write past the ends of every paint vector.
+    package, env = _package_copy(tmp_path)
+    _to_16_bands(package)
+    for name in ("_engine.py", "_render.py"):
+        refused = _python(env, _BOTH)
+        assert refused.returncode == 1
+        assert (
+            f"{os.path.join('oilpaint', name)} has N = 24 spectral bands, "
+            "spectral.py has 16: set N = 16 in _engine.py and _render.py."
+        ) in refused.stderr
+        _to_16_bands(package, name)
+    fresh = _python(env, _BOTH)
+    assert fresh.returncode == 0 and fresh.stdout.split() == ["16", "16"], fresh.stderr
+
+
+def test_a_band_count_above_or_below_spectral_s_is_refused():
+    class Compiled:  # stands in for a kernel file's _compiled_bands
+        stats = types.SimpleNamespace(cache_path="/the/cache")
+
+        def __init__(self, n):
+            self.n = n
+
+        def __call__(self):
+            return self.n
+
+    n = sp.N_BANDS
+    sp._check_bands("k.py", n, Compiled(n))
+    for other in (n - 8, n + 8):
+        with pytest.raises(
+            RuntimeError,
+            match=re.escape(
+                f"k.py has N = {other} spectral bands, spectral.py has {n}: "
+                f"set N = {n} in _engine.py and _render.py."
+            ),
+        ):
+            sp._check_bands("k.py", other, Compiled(other))
+        with pytest.raises(
+            RuntimeError,
+            match=re.escape(
+                "numba cache is stale: the cached kernels of k.py were compiled "
+                f"for {other} spectral bands, it has N = {n}."
+            )
+            + ".* /the/cache and import again",
+        ):
+            sp._check_bands("k.py", n, Compiled(other))
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
+)
+@pytest.mark.parametrize(
+    ("stale", "other"), [("_engine", "_render"), ("_render", "_engine")]
+)
+def test_kernels_cached_by_bytecode_older_than_its_file_are_refused(
+    tmp_path, stale, other
+):
+    # Python takes a .pyc as current while its source keeps the same size and
+    # time (to the second): rewritten so, a file still runs the old code, which
+    # caches kernels for the old band count under the new file's stamp. Each
+    # kernel file must refuse them itself (the other's cache is cleared).
+    package, env = _package_copy(tmp_path)
+    del env["PYTHONDONTWRITEBYTECODE"]
+    env["PYTHONPYCACHEPREFIX"] = str(tmp_path / "pyc")
+    first = _python(env, _BOTH)
+    assert first.returncode == 0 and first.stdout.split() == ["24", "24"], first
+    files = [package / name for name in ("spectral.py", "_engine.py", "_render.py")]
+    was = [os.stat(path) for path in files]
+    _to_16_bands(package, "_engine.py", "_render.py")
+    for path, st in zip(files, was, strict=True):
+        assert os.stat(path).st_size == st.st_size
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    old = _python(env, _BOTH)
+    assert old.returncode == 0 and old.stdout.split() == ["24", "24"], old
+    shutil.rmtree(tmp_path / "pyc")
+    for path in (tmp_path / "cache").rglob(f"{other}.*"):
+        path.unlink()
+    refused = _python(env, _BOTH)
+    assert refused.returncode == 1
+    found = re.search(
+        r"numba cache is stale: the cached kernels of (\S+) were compiled for 24 "
+        r"spectral bands, it has N = 16\. .* files in (\S+) and import again",
+        refused.stderr,
+    )
+    assert found, refused.stderr
+    assert found[1] == str(package / f"{stale}.py") and os.path.isdir(found[2])
+    shutil.rmtree(tmp_path / "cache")
+    fresh = _python(env, _BOTH)
+    assert fresh.returncode == 0 and fresh.stdout.split() == ["16", "16"], fresh
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
+)
+def test_kernels_cached_for_24_bands_are_not_loaded_for_16(tmp_path):
+    package, env = _package_copy(tmp_path)
+
+    def kernels():
+        run = _python(env, _KERNELS)
+        assert run.returncode == 0, run.stderr
+        return run.stdout.split()
+
+    assert kernels() == ["27", "24", "0", "0"]
+    assert kernels() == ["27", "24", "1", "1"]  # (the cache is in use)
+    _to_16_bands(package, "_engine.py", "_render.py")
+    assert kernels() == ["19", "16", "0", "0"]
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
+)
+def test_a_process_still_running_for_24_bands_leaves_none_of_its_kernels(tmp_path):
+    # It compiles its kernels after the change, and caches them: neither it nor
+    # a process started after it may take the other's.
+    package, env = _package_copy(tmp_path)
+    old_code = "import oilpaint; print('ready', flush=True); input()\n" + _KERNELS
+    with (
+        open(tmp_path / "old.err", "w+") as err,
+        subprocess.Popen(
+            [sys.executable, "-c", old_code],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=err,
             cwd=tmp_path,
             env=env,
-            capture_output=True,
             text=True,
-        )
+        ) as old,
+    ):
+        assert old.stdout is not None and old.stdout.readline() == "ready\n"
+        _to_16_bands(package, "_engine.py", "_render.py")
+        new = _python(env, _KERNELS)
+        out, _ = old.communicate("go\n", timeout=600)
+        err.seek(0)
+        assert old.returncode == 0, err.read()
+    assert new.returncode == 0 and new.stdout.split() == ["19", "16", "0", "0"], new
+    assert out.split() == ["27", "24", "0", "0"]
+    last = _python(env, _KERNELS)
+    assert last.returncode == 0 and last.stdout.split() == ["19", "16", "0", "0"], last
 
-    first = bands()
-    assert first.returncode == 0 and first.stdout.split() == ["24"], first.stderr
-    spectral = package / "spectral.py"
-    text = spectral.read_text()
-    assert "np.linspace(400.0, 700.0, 24)" in text
-    spectral.write_text(
-        text.replace("np.linspace(400.0, 700.0, 24)", "np.linspace(400.0, 700.0, 16)")
-    )
-    stale = bands()
-    assert stale.returncode == 1
-    assert "numba cache is stale" in stale.stderr
-    shutil.rmtree(tmp_path / "cache")
-    fresh = bands()
-    assert fresh.returncode == 0 and fresh.stdout.split() == ["16"], fresh.stderr
+
+def _names(code):
+    """The global and attribute names a function's code reads, nested code
+    included."""
+    names = set(code.co_names)
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            names |= _names(const)
+    return names
+
+
+def test_no_kernel_reads_a_name_from_another_oilpaint_module():
+    # numba compiles it into the cached kernel as a constant, and would not
+    # see it change: the band count, for one, is written out in each file.
+    from oilpaint import _dab, _render
+
+    for module in (eng, _render, _dab):
+        imported = set()
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            if isinstance(node, ast.ImportFrom) and (
+                node.level or (node.module or "").startswith("oilpaint")
+            ):
+                imported |= {alias.asname or alias.name for alias in node.names}
+            elif isinstance(node, ast.Import):
+                imported |= {
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name.startswith("oilpaint")
+                }
+        checked = 0
+        for name, value in vars(module).items():
+            func = getattr(value, "py_func", value)
+            if inspect.isfunction(func) and func.__module__ == module.__name__:
+                assert not imported & _names(func.__code__), (module.__name__, name)
+                checked += 1
+        assert checked > 3
 
 
 # --------------------------------------------------------------------------
