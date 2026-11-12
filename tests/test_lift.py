@@ -7,8 +7,9 @@ around it."""
 import numpy as np
 import pytest
 
-from oilpaint import Brush, Canvas, brushes
+from oilpaint import Brush, Canvas, brushes, stroke
 from oilpaint import _engine as eng
+from oilpaint import _knife as knives
 from oilpaint import palette as P
 from oilpaint._engine import IV, PACKED, N
 
@@ -19,13 +20,18 @@ from oilpaint._engine import IV, PACKED, N
 # as the lift did, was 6e-4 to 0.2 off on them.
 KEPT = 1e-6
 
-# What pull_up itself may be off by, relative to a channel's total or to a
-# pixel's volume: it works in double precision and writes each pixel once,
+# What pull_up may be off by when it moves paint along its plan, relative to
+# a channel's total or to a pixel's volume: it works in double precision and
+# writes each pixel once,
 # a pixel that falls as fl(p * fl(f)), one that rises as fl(p + fl(t)) with
 # p, t >= 0. Each of those is within 2u of the exact value (u = 2^-24, the
 # rounding of single precision; for p + t, u t + u (p + t) <= 2u (p + t)),
 # so the total of a channel, all of whose terms are >= 0, is too; 1e-12
-# covers the double-precision sums.
+# covers the double-precision sums. (Where it falls back on scaling paint
+# all of one colour, each pixel is within 2u too, but "one colour" is to
+# SAME_COLUMN_PAINT, 1e-6 of the largest component of a unit of paint: a
+# channel's total is kept to that times the volume moved, plus 2u. The
+# tests' paint of one colour is so to rounding, so ROUND holds there too.)
 ROUND = 2 * 2.0**-24 + 1e-12
 
 
@@ -108,6 +114,45 @@ def _spread(paint, whole):
     unit = paint[:, :N] / paint[:, IV : IV + 1]
     dist = np.abs(unit - whole).sum(axis=1) / np.abs(whole).sum()
     return float((dist * paint[:, IV]).sum() / paint[:, IV].sum())
+
+
+@pytest.mark.parametrize("tool", ["dab", "knife"])
+def test_a_lift_leaves_other_strokes_paint_as_it_was(monkeypatch, tool):
+    """A dab lifted off over wet paint of another colour, and a knife lifted
+    off where it crosses another stroke: where the wet paint on top is not
+    the mark's own, the lift leaves it to the byte (and moves the mark's)."""
+    seen = []
+
+    def watch(canvas, sl, stroke_id, lift):
+        top = canvas.top[sl]
+        before = top.copy()
+        lift()
+        other = canvas.top_id[sl] != stroke_id
+        seen.append((other.sum(), before[other].tobytes() == top[other].tobytes()))
+        seen.append((None, before[~other].tobytes() != top[~other].tobytes()))
+
+    c = Canvas(260, 140, seed=3)
+    if tool == "dab":
+        dab_lift = stroke._dab_lift
+
+        def watched(run):
+            sl = (slice(None), slice(None))
+            watch(run.canvas, sl, run.stroke_id, lambda: dab_lift(run))
+
+        monkeypatch.setattr(stroke, "_dab_lift", watched)
+        c.stroke([(30, 70), (230, 70)], P.TITANIUM_WHITE, amount=8, seed=2)
+        _dab(c, brushes.ROUND_HOG)[1]()
+    else:
+        lift_off = knives._lift_off
+
+        def watched_off(canvas, sl, *args):
+            watch(canvas, sl, args[-1], lambda: lift_off(canvas, sl, *args))
+
+        monkeypatch.setattr(knives, "_lift_off", watched_off)
+        c.stroke([(190, 20), (190, 120)], P.ULTRAMARINE_BLUE, amount=8, seed=2)
+        _knife(c, brushes.KNIFE_TROWEL)[1]()
+    (others, kept), (_, moved) = seen
+    assert others > 0 and kept and moved
 
 
 def _locality(calls):
@@ -301,6 +346,27 @@ def test_pull_up_with_none_to_rise_or_no_reach_changes_nothing_or_pools():
     assert _pulled(top, rising).tobytes() == top.tobytes()
     for sigma in (0.0, -1.0, float("nan"), float("inf"), 1e-300):
         _assert_pulled(top, fac, _pulled(top, fac, sigma))
+
+
+@pytest.mark.parametrize("colours", [False, True])
+def test_pull_up_keeps_every_channel_when_the_factors_dont_keep_the_volume(
+    colours,
+):
+    """Factors that ask for more (or less) than the paint that falls gives
+    up: every channel is still kept, paint of one colour too (scaling it
+    would make or destroy paint with the volume)."""
+    rng = np.random.default_rng(7)
+    top, fac = _mound(rng, 20, 24, colours=colours)
+    for off in (1.3, 0.8):
+        skewed = np.where(fac != 1.0, fac * off, 1.0)
+        out = _pulled(top, skewed)
+        assert np.isfinite(out).all() and out.min() >= 0
+        np.testing.assert_allclose(
+            out.sum(axis=(0, 1), dtype=np.float64),
+            top.sum(axis=(0, 1), dtype=np.float64),
+            rtol=ROUND,
+            atol=0,
+        )
 
 
 def _halves(h=30, w=120, gap=60):

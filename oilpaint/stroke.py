@@ -1254,8 +1254,11 @@ def _brush_step(run: _Run, st, tables) -> None:
 
 
 # How far (in brush half-widths) the paint pulled up into a dab's peaks comes
-# from (a Gaussian's sigma, see _engine.pull_up): about the size of a peak
-# (0.18 to 0.3), so a peak is made mostly of the paint it stands in.
+# from: the spread (as a Gaussian's sigma) of the square window, about 1.7
+# times this each way, over which _engine.pull_up moves paint to a rising
+# pixel; about the size of a peak (0.18 to 0.3). Over a dab, 53% to 82% of
+# the paint moved goes that way; the rest, from the mound's rim, is shared
+# among all the pixels that rise.
 DAB_PULL = 0.3
 
 

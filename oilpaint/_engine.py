@@ -5311,33 +5311,54 @@ def _upwind(layer, fx, fy, g_rows, sy0, sx0, xdir, ydir):
 # a tool lifted off: paint pulled up into peaks (see stroke._dab_lift and
 # _knife._lift_off)
 
-# Sinkhorn passes of the local plan pull_up moves paint along. A few pass
-# most of it between near neighbours (95% or more of it on the marks tried);
-# what they leave unbalanced goes through a pool, so every pixel ends with
-# the volume asked of it whatever the count, and more passes would only
-# trade a little pooled paint for time.
+# Sinkhorn passes of the local plan pull_up moves paint along. What the plan
+# can't place goes through a pool shared among all the pixels that rise:
+# paint with no rising pixel within reach (a dab's rim), and what the plan
+# gives a rising pixel beyond its share where the pixels near it can't be
+# balanced. On the marks tried that is 18% to 47% of what a dab moves and 4%
+# to 19% of what a knife moves; more passes don't lower a dab's (33% on a
+# round hog dab with 4, 20 or 100). The count must stay small: where the
+# local problem can't be balanced, the factors a and b grow (and shrink)
+# geometrically with every pass (on a palette knife's lift b spans 1e-15 to
+# 1e14 after 4 passes, 1e-298 to inf after 100, and the paint comes out
+# NaN). With a pool, every pixel ends with the volume asked of it whatever
+# the count.
 PULL_PASSES = 4
+# Factors keep the volume (for the scaling pull_up falls back on) if what the
+# pixels that fall give up and what those that rise ask for differ by no
+# more than this share of the volume of the pixels that change. The callers'
+# factors, normalised in double precision, keep it to 2.4e-16 at worst (178
+# lifts of dabs and knives, one to three colours).
+PULL_KEEPS = 1e-12
 
 
 @njit(cache=True, error_model="numpy")
 def pull_up(top, fac, sigma):
     """Each pixel of ``top`` (h, w, PACKED: the part of the canvas lifted
-    from) is to end with ``fac`` times its volume. The factors must keep the
-    total volume (both callers make them so), and be 1 wherever the paint
-    is to be left alone (paint of other strokes). Paint moves, as whole
-    paint (every pigment, scattering, volume and body with it), from the
-    pixels that fall to those that rise, mostly between pixels within about
-    ``sigma`` px of each other: those that fall give up that share of their
-    paint, those that rise keep theirs and take in what comes to them. So
-    every channel is kept, and the paint pulled up into a peak is the paint
-    around it. (Scaling each pixel's paint kept the volume but, where the
-    paint holds more than one colour, made some pigment and destroyed some:
-    up to a fifth of a band.)
+    from) is to end with ``fac`` (float64: with single-precision factors a
+    pixel's volume can be off by more than their rounding) times its
+    volume. The factors should keep the total volume (both callers make
+    them so), and must be 1 wherever the paint is to be left alone (paint
+    of other strokes). Paint moves, as whole paint (every pigment,
+    scattering, volume and body with it), from the pixels that fall to those
+    that rise: those that fall give up that share of their paint, those that
+    rise keep theirs and take in what comes to them, so every channel is
+    kept. Paint within reach of a rising pixel (a square of about 1.7
+    ``sigma`` px each way, see _pull_reach) goes to it along a local plan;
+    the rest (18% to 47% of what a dab moves, 4% to 19% of what a knife
+    moves: see PULL_PASSES) is shared among the rising pixels of the whole
+    mark, in proportion to what each still lacks. (Scaling each pixel's
+    paint kept the volume but, where the paint holds more than one colour,
+    made some pigment and destroyed some: up to a fifth of a band.)
 
-    Where all the pixels that change hold the same paint, it is scaled as
-    before: with one composition, scaling each channel by the factors that
-    keep the volume keeps every channel too, and it is exact, cheap and
-    leaves a single-colour mark as it always was.
+    Where all the pixels that change hold the same paint and the factors
+    keep the volume (PULL_KEEPS), it is scaled as before: cheap, and a
+    single-colour mark is left as it always was. "The same paint" is
+    same_paint's: what is in a unit of each differs by no more than
+    SAME_COLUMN_PAINT (1e-6) of its largest component, so a trace of a
+    pigment can be made or lost there, by up to that share of the largest
+    component times the volume moved; every channel is kept to that and to
+    single-precision rounding.
 
     A pixel with no paint (volume 0) neither gives nor takes, whatever its
     factor. If no pixel would rise, or none fall, nothing changes; if the
@@ -5351,13 +5372,25 @@ def pull_up(top, fac, sigma):
     loss, gain = _falls_and_rises(t, f)
     if not (loss.sum() > 0.0 and gain.sum() > 0.0):
         return
-    if _uniform(t, loss, gain):
+    if _keeps_volume(t, loss, gain) and _uniform(t, loss, gain):
         _scale_paint(t, f, loss, gain)
         return
     k = _pull_reach(sigma, y1 - y0 + x1 - x0)
     a, b, kb = _balance(loss, gain, k, PULL_PASSES)
     got, pool = _pulled(t, f, loss, a, b, kb, k)
     _settle_pulled(t, gain, got, pool)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _keeps_volume(top, loss, gain):
+    """Whether what the pixels that fall give up and what those that rise
+    ask for are the same, to PULL_KEEPS of the volume of all of them."""
+    held = 0.0
+    for y in range(loss.shape[0]):
+        for x in range(loss.shape[1]):
+            if loss[y, x] > 0.0 or gain[y, x] > 0.0:
+                held += np.float64(top[y, x, IV])
+    return abs(loss.sum() - gain.sum()) <= PULL_KEEPS * held
 
 
 @njit(cache=True, error_model="numpy", inline="always")
@@ -5430,8 +5463,9 @@ def _scale_paint(top, fac, loss, gain):
 def _pull_reach(sigma, most):
     """Half-width k (px) of the square window the plan reaches over: one
     whose spread (variance k (k + 1) / 3 along each axis) is a Gaussian's
-    of sigma ``sigma``; 0 (each pixel alone: all of it goes through the
-    pool) for none, and no wider than ``most``."""
+    of sigma ``sigma``, about 1.7 sigma; 0 (each pixel alone: all of it goes
+    through the pool) for none. A sigma past ``most`` counts as ``most``,
+    whose window (about 1.7 ``most``) already spans the box."""
     if not sigma > 0.0:
         return 0
     s = min(sigma, float(most))
@@ -5557,8 +5591,10 @@ def _balance(loss, gain, k, passes):
     """The Sinkhorn factors (a over the pixels that give, b over those that
     take; (h, w, 1)) of the plan a_i K_ij b_j between them (K: 1 within the
     square of half-width ``k``, else 0), and K b: each giver gives exactly
-    ``loss`` (where any taker is within reach), each taker gets about
-    ``gain``."""
+    ``loss`` (where any taker is within reach). Each taker gets about
+    ``gain`` where the givers and takers near it can be balanced; where
+    they can't, some get much more and some much less (see PULL_PASSES), and
+    _settle_pulled evens that out through the pool."""
     h, w = loss.shape
     loss = loss.reshape((h, w, 1))
     gain = gain.reshape((h, w, 1))
@@ -5604,7 +5640,11 @@ def _pulled(top, fac, loss, a, b, kb, k):
                     else:
                         pool[c] += unit * loss[y, x]
     got = np.empty((h, w, PACKED))
-    _window(src, k, got, _window_room(h, w, PACKED))
+    # (along rows into src itself: each row's partial sums are taken before
+    # it is written; then down columns, in place, into got)
+    line_pre, line_suf = np.empty((w, PACKED)), np.empty((w, PACKED))
+    _window_rows(src, src, _window_plan(w, k), line_pre, line_suf)
+    _window_columns(src, got, _window_plan(h, k))
     for y in range(h):
         for x in range(w):
             for c in range(PACKED):

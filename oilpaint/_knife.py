@@ -823,8 +823,11 @@ def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
 
 
 # How far (in crest cells) the paint pulled up into a knife's crests comes
-# from (a Gaussian's sigma, see _engine.pull_up): crests lie about a cell
-# apart across the pull, so a crest is made of the paint beside it.
+# from: the spread (as a Gaussian's sigma) of the square window, about 1.7
+# times this each way, over which _engine.pull_up moves paint to a rising
+# pixel. Crests lie about a cell apart across the pull, so over a knife's
+# lift 81% to 96% of the paint moved comes from beside the crest it goes
+# to; the rest is shared among all the pixels that rise.
 KNIFE_PULL = 1.0
 
 

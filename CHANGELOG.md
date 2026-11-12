@@ -245,9 +245,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The peaks a loaded dab, or a knife, pulls up as it lifts off keep every
   pigment. They were made by scaling the mark's paint pixel by pixel, which
   kept the volume but, where the paint held several colours, made and
-  destroyed pigment (up to a fifth of a band on a three-colour dab, 0.3% on
-  a knife); paint now moves into a peak from the paint around it. A mark of
-  one paint on a clean canvas is unchanged bit for bit.
+  destroyed pigment (up to a fifth of a band on a three-colour dab, up to
+  0.3% on a three-colour knife); paint now moves into the peaks, mostly
+  from the paint near them. A mark of one paint on a clean canvas is
+  unchanged bit for bit.
 - A brush dragged hard over wet paint no longer moves more of a pixel's paint
   than is there: `drag` near 1 at high pressure (or a slick surface such as
   glass or copper under a stiff brush pressed fully down) left negative paint
