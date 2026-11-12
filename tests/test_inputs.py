@@ -616,19 +616,20 @@ def _python(env, code):
 
 def _to_16_bands(package, *files):
     """Give spectral.py 16 bands (if it has not yet), and set N = 16 in each
-    of ``files``."""
+    of ``files``. Bytes in, bytes out: the files keep their line endings, and
+    so their size, on every platform."""
     spectral = package / "spectral.py"
-    spectral.write_text(
-        spectral.read_text().replace(
-            "np.linspace(400.0, 700.0, 24)", "np.linspace(400.0, 700.0, 16)"
+    spectral.write_bytes(
+        spectral.read_bytes().replace(
+            b"np.linspace(400.0, 700.0, 24)", b"np.linspace(400.0, 700.0, 16)"
         )
     )
-    assert "np.linspace(400.0, 700.0, 16)" in spectral.read_text()
+    assert b"np.linspace(400.0, 700.0, 16)" in spectral.read_bytes()
     for name in files:
         path = package / name
-        text = path.read_text()
-        assert "\nN = 24\n" in text, name
-        path.write_text(text.replace("\nN = 24\n", "\nN = 16\n"))
+        text, edits = re.subn(rb"(?m)^N = 24(?=\r?\n)", b"N = 16", path.read_bytes())
+        assert edits == 1, name
+        path.write_bytes(text)
 
 
 _BOTH = "import oilpaint._engine as e, oilpaint._render as r; print(e.N, r.N)"
