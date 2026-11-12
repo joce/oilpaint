@@ -648,7 +648,9 @@ the top: blue scraped back to a thin film, a medium layer, a thick one (two
 layers), and the medium layer again with the brush pressed hard. The thin
 film only dirties the tips, and the next stroke is soon clean yellow again.
 Thicker paint, or pressing harder, gets further up into the brush, and the
-next stroke stays greenish all along.*
+next stroke stays greenish all along. Through the thicker layers, and
+pressed hard, the brush also ploughs the blue: the yellow is marbled with
+it.*
 
 ### Impasto: thick paint and relief
 
@@ -682,6 +684,21 @@ the canvas, and the tools push it around:
   spreads it thin and pushes the excess aside.
 * **Ploughing.** Dragging a tool through thick wet paint pushes the paint above
   it aside into ridges and ahead of it, and leaves a pile where it lifts.
+  Pressed hard (from a pressure of about 0.4, fully from 0.6) through wet paint
+  thicker than about 1.5 units and stiff enough to hold a groove (a `body`
+  near that of tube paint, 0.7: softer paint flows back in), a brush
+  doesn't ride on its own load: its bristles go down through it, cut the old
+  paint away (deeper along the lines of their clumps), push much of it up
+  into ridges beside the stroke and lay the new paint more into their
+  grooves; once the stroke has passed, the old paint left between the grooves
+  folds up over the new in proportion. That is wet-in-wet marbling: a white
+  hog flat pressed hard through thick wet blue comes out streaked with tints
+  from white to blue, where a light touch lays an even, bluish white over it.
+  The stiffer the hair, the more: soft hair bends and slides over the paint
+  and leaves a trace, a synthetic ploughs about half as much as a hog, and
+  the lanes follow the brush's own clumps. How far the old paint folds over
+  the new goes with the brush's `mixing`: with none, the stroke is ploughed
+  but not marbled. A drop of spatter has no bristles and never ploughs.
 * **Body.** How long the marks last depends on the paint's `body`. Paint thinned
   with `MEDIUM` flows and levels out; tube paint keeps its bristle marks,
   their sharpest crests rounding off a little where it lies thick; paint
@@ -883,7 +900,10 @@ along the spline it does four things:
 3. It lays down a mix of what the tip holds (deposit), refilling the tip from
    the reservoir. Neighbouring columns and layers slowly share their paint as
    the brush flexes (the `blending` setting).
-4. It stirs the new paint into the wet paint below, more with more pressure.
+4. It stirs the new paint into the wet paint below, more with more pressure
+   and `mixing` (ploughing, less: the old paint folds up over the new between
+   its grooves instead, once the stroke has passed, as far as `mixing` lets
+   it).
 
 Together this gives smears that fade over a short distance, dirty brushes,
 streaky wet-into-wet blends, and strokes that run dry and break up on the
@@ -891,7 +911,10 @@ canvas tooth.
 
 **Paint has height and gets pushed around.** The underside of the tool sits
 at a level above the canvas. For bristles, that's about the thickness they
-lay, lower along the hair lines. For a knife, it's the blade resting on the
+lay, lower along the hair lines; pressed hard through thick, stiff wet paint,
+a brush's bristles go down through their own load towards a level set by
+pressure and stiffness instead, deeper along the lines of their clumps (see
+ploughing, under Impasto). For a knife, it's the blade resting on the
 highest points below it (thread tops, dry ridges, and wet paint from
 earlier strokes, which it sinks into under pressure), plus a gap set by
 pressure, and no higher than the paint film under it. The blade is rigid

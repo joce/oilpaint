@@ -181,7 +181,10 @@ class Stroke:
         brushes are turned with ``angle`` instead.)
     mixing:
         How readily the stroke churns into wet paint below (0 = sits on top,
-        1 = stirs in strongly). Scaled by pressure.
+        1 = stirs in strongly). Scaled by pressure. Pressed hard through
+        thick wet paint, it also sets how far the old paint folds up over the
+        new between the grooves the brush cuts (0: not at all, the stroke is
+        ploughed but not marbled).
     pickup:
         How much wet paint the brush lifts and carries along (0..2).
         Brushes only: a knife drags wet paint instead (a thin-film flow).
@@ -381,6 +384,7 @@ def apply_stroke(canvas: _Canvas, stroke: Stroke) -> Brush:
         for st, tables in run.steps():
             _brush_step(run, st, tables)
     eng.settle_pending(run.cv, run.pend, run.stroke_id)
+    eng.fold_pending(run.cv, run.pend)
     if run.is_dab and not run.bt.rigid and run.bt.deposits:
         _dab_lift(run)
     run.settle()
@@ -397,22 +401,30 @@ def _pending(y0, y1, x0, x1):
     paint becomes the new top. Pixels only ever grazed by the brush's
     feathered edge are settled when the stroke ends: the old top keeps its
     place, the share the faint new film would bury goes under, and the new
-    paint stirs into the rest. Returns an :class:`_engine.Pending`, as
-    :func:`_engine.deposit` takes it."""
+    paint stirs into the rest. It also keeps how far the wet paint the brush
+    meets at each pixel can be ploughed (see _engine._meet), and how far the
+    old paint there folds up over the new when the stroke has passed (see
+    _engine.fold_pending). Returns an
+    :class:`_engine.Pending`, as :func:`_engine.deposit` takes it."""
     h, w = y1 - y0, x1 - x0
-    where = [0] * 9
+    where = [0] * 13
     where[eng.PEND_ON] = 1
     where[eng.PEND_Y0], where[eng.PEND_X0] = y0, x0
     where[eng.PEND_H], where[eng.PEND_W] = h, w
     # (the rows and columns where any is held: none yet)
     where[eng.PEND_ROW0], where[eng.PEND_ROW1] = h, 0
     where[eng.PEND_COL0], where[eng.PEND_COL1] = w, 0
+    # (where any old paint is to fold up: none yet)
+    where[eng.PEND_FOLD_ROW0], where[eng.PEND_FOLD_ROW1] = h, 0
+    where[eng.PEND_FOLD_COL0], where[eng.PEND_FOLD_COL1] = w, 0
     return eng.Pending(
         paint=np.zeros((h, w, PACKED), np.float32),
         cover=np.zeros((h, w), np.float32),
         reach=np.zeros((h, w), np.float32),
         held=np.zeros((h, w), bool),
         where=np.array(where, np.int64),
+        met=np.full((h, w), -1.0, np.float32),
+        folds=np.zeros((h, w), np.float32),
     )
 
 
@@ -424,7 +436,9 @@ _NO_PENDING = eng.Pending(
     cover=np.zeros((1, 1), np.float32),
     reach=np.zeros((1, 1), np.float32),
     held=np.zeros((1, 1), bool),
-    where=np.zeros(9, np.int64),
+    where=np.zeros(13, np.int64),
+    met=np.full((1, 1), -1.0, np.float32),
+    folds=np.zeros((1, 1), np.float32),
 )
 
 
@@ -709,7 +723,8 @@ def _stroke_consts(
         blending=float(eff["blending"]),
         rough=float(eff["rough"]),
         ridge=float(eff["ridge"]),
-        stiffness=float(bt.stiffness),
+        # (0 to 1: beyond, a soft brush would give back more than it took)
+        stiffness=float(np.clip(bt.stiffness, 0.0, 1.0)),
         capacity=float(bt.capacity),
         dig=float(bt.dig),
         softness=float(bt.softness),
@@ -731,6 +746,8 @@ def _stroke_consts(
         spacing=float(spacing),
         # the brush's own size: how wide it paints on average (px)
         bundle=float(brush.width),
+        # (BrushTypes pickled before it existed plough)
+        ploughs=bool(getattr(bt, "ploughs", True)),
     )
 
 

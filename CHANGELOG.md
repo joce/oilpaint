@@ -49,6 +49,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A brush pressed hard through thick wet paint ploughs it: wet-in-wet
+  marbling. Its bristles go down through the paint they carry (they used to
+  ride on it) to a level set by pressure and stiffness, cut the old paint
+  away, deeper along the lines of their clumps, push much of it up into
+  ridges beside the stroke, and lay their own paint more into their grooves;
+  once the stroke has passed, the old paint left between the grooves folds up
+  over the new in proportion, so the stroke is streaked with tints of both
+  paints. How much a brush ploughs grows smoothly with the stiffness of its
+  hair, from a trace for sable to about half for a synthetic and most for
+  hog, and its lanes follow its own hair pattern (more of them on a wider
+  brush). A white hog flat pressed at 0.9 through about 5 units of wet blue
+  now leaves about 45% of the blue in its path (it used to leave nearly nine
+  tenths under an even, bluish white) and heaps it into ridges about twice as
+  high as the bed. It sets in smoothly from a pressure of 0.4 to 0.6, and
+  pixel by pixel from about 1.5 to 2.5 units of wet paint (as the stroke met
+  it) and from a `body` of about 0.55 to 0.7 (tube paint: softer paint flows
+  back into a groove), so a light touch, a thin film or paint thinned for
+  wet-on-wet work is brushed exactly as before. Dabs, the brush handle and
+  knives don't plough, nor do drops of spatter (a new `BrushType.ploughs`,
+  False for them). How far the old paint folds over the new goes with the
+  brush's `mixing`: a brush with none ploughs but doesn't marble. A
+  `stiffness` outside 0 to 1 is taken as the nearest end of that range.
 - Thick paint has the relief of real oil paint. The furrows a brush combs
   into it come from a pattern of hair clumps over the whole stroke, each
   clump a physical size (coarser for hog than for sable, the same on any
