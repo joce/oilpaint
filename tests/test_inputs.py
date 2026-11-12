@@ -580,13 +580,11 @@ def test_swapping_paint_between_layers_exchanges_at_most_all_of_it():
     assert min(a.min() for a in full) >= 0
 
 
-@pytest.mark.skipif(
-    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
-)
-def test_kernels_cached_for_another_band_count_are_refused(tmp_path):
-    # The band count is compiled into the cached kernels, and numba only
-    # throws a cached kernel away when its own file changes: changing
-    # spectral.WAVELENGTHS alone used to corrupt memory.
+# The band count is compiled into the cached kernels, and numba throws a cached
+# kernel away only when its own file changes, whichever process wrote it: these
+# tests work on a copy of the package with a cache of its own, and change its
+# band count from 24 to 16.
+def _package_copy(tmp_path):
     package = tmp_path / "oilpaint"
     shutil.copytree(
         os.path.dirname(oilpaint.__file__),
@@ -599,30 +597,119 @@ def test_kernels_cached_for_another_band_count_are_refused(tmp_path):
         PYTHONPATH=str(tmp_path),
         PYTHONDONTWRITEBYTECODE="1",
     )
+    return package, env
+
+
+def _python(env, code):
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=env["PYTHONPATH"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _to_16_bands(package, *files):
+    """Give spectral.py 16 bands, and set N = 16 in each of ``files``."""
+    spectral = package / "spectral.py"
+    text = spectral.read_text().replace(
+        "np.linspace(400.0, 700.0, 24)", "np.linspace(400.0, 700.0, 16)"
+    )
+    assert "np.linspace(400.0, 700.0, 16)" in text
+    spectral.write_text(text)
+    for name in files:
+        path = package / name
+        path.write_text(path.read_text().replace("\nN = 24\n", "\nN = 16\n"))
+
+
+# One cached engine kernel and one cached render kernel, on arrays with room
+# for 24 bands: what each touched shows the band count compiled into it (19 or
+# 27 packed values moved, 16 or 24 bands lit), and whether it came from the
+# cache.
+_KERNELS = """
+import numpy as np
+from oilpaint import _engine as e, _render as r
+top = np.ones((1, 1, 27), np.float32)
+und = np.zeros((1, 1, 27), np.float32)
+a, b = np.zeros((1, 1), np.float32), np.zeros((1, 1), np.float32)
+e.bury_top(top, und, a, b, 0, 0)
+R, layer = np.full(24, 0.5), np.ones(27)
+r._over(R, layer, 1.0, 0.1, r.TAU_TABLE)
+print((und != 0).sum(), (R != 0.5).sum(),
+      len(e.bury_top.stats.cache_hits), len(r._over.stats.cache_hits))
+"""
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
+)
+def test_a_band_count_written_differently_in_a_kernel_file_is_refused(tmp_path):
+    # A band count changed in spectral.py alone used to leave the cached
+    # kernels to read and write past the ends of every paint vector; now each
+    # kernel file writes its own, and a mismatch is refused at import.
+    package, env = _package_copy(tmp_path)
 
     def bands():
-        return subprocess.run(
-            [sys.executable, "-c", "import oilpaint._engine as e; print(e.N)"],
-            cwd=tmp_path,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
+        code = "import oilpaint._engine as e, oilpaint._render as r; print(e.N, r.N)"
+        return _python(env, code)
 
-    first = bands()
-    assert first.returncode == 0 and first.stdout.split() == ["24"], first.stderr
-    spectral = package / "spectral.py"
-    text = spectral.read_text()
-    assert "np.linspace(400.0, 700.0, 24)" in text
-    spectral.write_text(
-        text.replace("np.linspace(400.0, 700.0, 24)", "np.linspace(400.0, 700.0, 16)")
-    )
+    _to_16_bands(package)
     stale = bands()
     assert stale.returncode == 1
-    assert "numba cache is stale" in stale.stderr
-    shutil.rmtree(tmp_path / "cache")
+    assert "_engine.py has N = 24 spectral bands, spectral.py has 16" in stale.stderr
+    _to_16_bands(package, "_engine.py")
+    stale = bands()
+    assert stale.returncode == 1
+    assert "_render.py has N = 24 spectral bands, spectral.py has 16" in stale.stderr
+    _to_16_bands(package, "_render.py")
     fresh = bands()
-    assert fresh.returncode == 0 and fresh.stdout.split() == ["16"], fresh.stderr
+    assert fresh.returncode == 0 and fresh.stdout.split() == ["16", "16"], fresh.stderr
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
+)
+def test_kernels_cached_for_24_bands_are_not_loaded_for_16(tmp_path):
+    package, env = _package_copy(tmp_path)
+
+    def kernels():
+        run = _python(env, _KERNELS)
+        assert run.returncode == 0, run.stderr
+        return run.stdout.split()
+
+    assert kernels() == ["27", "24", "0", "0"]
+    assert kernels() == ["27", "24", "1", "1"]  # (the cache is in use)
+    _to_16_bands(package, "_engine.py", "_render.py")
+    assert kernels() == ["19", "16", "0", "0"]
+
+
+@pytest.mark.skipif(
+    bool(os.environ.get("NUMBA_DISABLE_JIT")), reason="nothing is compiled or cached"
+)
+def test_a_process_still_running_for_24_bands_leaves_none_of_its_kernels(tmp_path):
+    # It compiles its kernels after the change, and caches them: neither it nor
+    # a process started after it may take the other's.
+    package, env = _package_copy(tmp_path)
+    old_code = "import oilpaint; print('ready', flush=True); input()\n" + _KERNELS
+    with subprocess.Popen(
+        [sys.executable, "-c", old_code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=tmp_path,
+        env=env,
+        text=True,
+    ) as old:
+        assert old.stdout is not None and old.stdout.readline() == "ready\n"
+        _to_16_bands(package, "_engine.py", "_render.py")
+        new = _python(env, _KERNELS)
+        out, err = old.communicate("go\n", timeout=600)
+        assert old.returncode == 0, err
+    assert new.returncode == 0 and new.stdout.split() == ["19", "16", "0", "0"], new
+    assert out.split() == ["27", "24", "0", "0"]
+    last = _python(env, _KERNELS)
+    assert last.returncode == 0 and last.stdout.split() == ["19", "16", "0", "0"], last
 
 
 # --------------------------------------------------------------------------

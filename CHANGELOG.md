@@ -300,8 +300,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Footprint tables no longer depend on what was painted before (two brushes
   whose aspects round alike to 3 decimals got whichever table was built
   first).
-- A numba cache left from another number of spectral bands is refused with
-  a clear `RuntimeError` instead of corrupting memory.
+- Kernels cached by numba for another number of spectral bands are never
+  loaded (they used to corrupt memory), and a band count changed in
+  `spectral.py` but not in the engine and the renderer is refused at import
+  with a clear `RuntimeError`.
 - A canvas one pixel wide or high renders.
 - `render(light=None)` lights the picture with the default lamp, as its type
   hint allows; a lit render used to raise `ValueError` for it.

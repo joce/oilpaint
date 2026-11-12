@@ -14,7 +14,14 @@ from numba import njit
 
 from .spectral import N_BANDS
 
-N = N_BANDS
+# The band count, written out for the reason given in _engine.py (an edit here
+# is what makes numba remake these cached kernels for a new count).
+N = 24
+if N != N_BANDS:
+    raise RuntimeError(
+        f"{__file__} has N = {N} spectral bands, spectral.py has {N_BANDS}: "
+        f"set N = {N_BANDS} in that file."
+    )
 IS, IV = N, N + 1  # packed indices of scattering and volume (as in _engine)
 
 # tanh(B) / B, the Kubelka-Munk layer term, on an even grid of B up to

@@ -26,7 +26,8 @@ from numba import njit
 # --------------------------------------------------------------------------
 #: Sample wavelengths in nm. 24 uniform bands over the visible range keep the
 #: mixing error below ~0.3 dE (mean) compared with a full 10 nm spectrum,
-#: while keeping the per-pixel memory of the canvas reasonable.
+#: while keeping the per-pixel memory of the canvas reasonable. A change of
+#: their number is also written into _engine.py and _render.py (their ``N``).
 WAVELENGTHS = np.linspace(400.0, 700.0, 24)
 N_BANDS = WAVELENGTHS.size
 

@@ -40,6 +40,13 @@ def test_the_dab_pattern_spans_what_the_engine_reads():
     assert _dab.SPAN == eng.DAB_SPAN
 
 
+def test_the_renderer_reads_paint_where_the_engine_packs_it():
+    from oilpaint import _engine as eng
+    from oilpaint import _render
+
+    assert (_render.N, _render.IS, _render.IV) == (eng.N, eng.IS, eng.IV)
+
+
 def test_dab_patterns_are_laid_out_and_turned_as_before():
     from oilpaint import _dab
 

@@ -42,7 +42,18 @@ from .spectral import N_BANDS
 # helpers would add some 13 s to it, against 4 s inlined), and a call per
 # pixel to one taking the stroke's settings (st, K) can cost run time.
 
-N = N_BANDS
+# The band count, written out rather than taken from spectral.N_BANDS. numba
+# compiles it into the cached kernels as a constant and throws a cached kernel
+# away only when this file changes, whichever process wrote it. So a change of
+# band count is an edit here too, and that edit is what keeps a kernel cached
+# for the old count (even by a process still running with it) from being
+# loaded. The check below makes forgetting the edit loud.
+N = 24
+if N != N_BANDS:
+    raise RuntimeError(
+        f"{__file__} has N = {N} spectral bands, spectral.py has {N_BANDS}: "
+        f"set N = {N_BANDS} in that file."
+    )
 # packed indices of scattering, volume and body (stiffness x volume)
 IS, IV, IB = N, N + 1, N + 2
 PACKED = N + 3
@@ -5290,27 +5301,3 @@ def _upwind(layer, fx, fy, g_rows, sy0, sx0, xdir, ydir):
                 # (rounding doesn't leave less than nothing where all
                 # of it moved on)
                 layer[Y, X, ch] = nv if nv >= 0 else np.float32(0.0)
-
-
-# --- a stale cache -------------------------------------------------------------
-# The kernels are cached on disk (cache=True), with the band count of
-# spectral.py (N, PACKED) compiled into them as constants. numba throws a
-# cached kernel away only when this file changes, so after a change to
-# spectral.WAVELENGTHS alone the cached kernels would read and write past the
-# ends of every paint vector. This tiny kernel is cached the same way: if it
-# remembers another size, so do the others. (It is the only kernel compiled or
-# loaded at import; the others still wait for their first call.)
-@njit(cache=True)
-def _compiled_packed():
-    return PACKED
-
-
-if _compiled_packed() != PACKED:
-    raise RuntimeError(
-        f"numba cache is stale: the cached kernels of {__name__} were compiled "
-        f"for {_compiled_packed() - (PACKED - N)} spectral bands, spectral.py "
-        f"now has {N}. "
-        "Delete the cache and import again: the *.nbi and *.nbc files in "
-        f"{_compiled_packed.stats.cache_path} (numba keeps them in the "
-        "__pycache__ next to this file, or under NUMBA_CACHE_DIR if it is set)."
-    )
