@@ -291,8 +291,8 @@ def test_dabs_of_a_multi_colour_brush_keep_every_pigment(name, load, wet):
     """Every band of K, S, volume and body: what is on the canvas and on the
     brush after a dab, and after a stipple of several, is what there was
     before (they were off by up to a few percent, up to 40% on a mop).
-    (Without the peak a loaded brush pulls up as it leaves, ``lift``: that
-    rescales pixels of the mound, which is done outside the engine.)"""
+    (With the brush's own lift: the peak it pulls up as it leaves is tested
+    with heavier loads in test_lift.)"""
     bt = getattr(brushes, name)
     for taps in (1, 6):
         c = Canvas(200, 140, seed=3)
@@ -307,11 +307,11 @@ def test_dabs_of_a_multi_colour_brush_keep_every_pigment(name, load, wet):
         brush = load(bt)
         before = _totals(c, brush)
         if taps == 1:
-            c.stroke([(100, 70)], brush=brush, pressure=0.7, seed=1, lift=0)
+            c.stroke([(100, 70)], brush=brush, pressure=0.7, seed=1)
         else:
             pts = [(70 + 12 * i, 60 + 9 * (i % 3)) for i in range(taps)]
             press = [0.2, 0.5, 0.8, 0.4, 0.9, 0.3]
-            c.stipple(pts, brush=brush, pressure=press, lift=0)
+            c.stipple(pts, brush=brush, pressure=press)
         after = _totals(c, brush)
         # (the worst found over 9 presets, both loads, wet and dry, 1 and 6
         # taps: 4.4e-9; another configuration has given 2.6e-8)

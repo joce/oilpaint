@@ -1305,5 +1305,5 @@ def _dab_lift(run: _Run) -> None:
     m = (V * peak).sum() / V.sum()
     fac = np.clip(1.0 + 2.0 * amp * (peak - m), 0.05, None)
     fac *= V.sum() / max(float((V * fac).sum()), 1e-12)
-    fac = np.where(own, fac, 1.0)
-    eng.pull_up(top, own, fac, DAB_PULL * r)
+    fac = np.where(own, fac, 1.0)  # (1: left alone)
+    eng.pull_up(top, fac, DAB_PULL * r)

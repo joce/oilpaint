@@ -849,5 +849,5 @@ def _lift_off(canvas, sl, under, amp, cell, direction, rng, stroke_id):
     m = (wv * crest).sum() / wv.sum()
     fac = np.clip(1.0 + 2.0 * amp * under * (crest - m), 0.05, None)
     fac *= V.sum() / max((V * fac).sum(), 1e-12)
-    fac = np.where(own, fac, 1.0)
-    eng.pull_up(top, own, fac, KNIFE_PULL * cell)
+    fac = np.where(own, fac, 1.0)  # (1: left alone)
+    eng.pull_up(top, fac, KNIFE_PULL * cell)
