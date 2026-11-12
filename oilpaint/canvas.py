@@ -193,12 +193,16 @@ class Canvas:
         ``_tooth``, ...), as every version has pickled them, so that a pickle
         holds no class private to oilpaint and loads in other versions."""
         state = self.__dict__.copy()
+        for name in _CACHED:  # (made again when needed: never stale)
+            state.pop(name, None)
         for name, a in state.pop("_relief_maps")._asdict().items():
             state["_" + name] = a
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        for name in _CACHED:  # (should a pickle hold them, made again)
+            self.__dict__.pop(name, None)
         self.__dict__.setdefault("reverse", False)  # canvases saved before glass
         # (canvases saved by versions that kept the paint a stroke holds back
         # on the canvas: none is held between strokes)
@@ -493,8 +497,7 @@ class Canvas:
         )
         # How far each point lies below the local average surface (the hollows
         # of the weave and of dried paint): thick wet paint fills these first.
-        r_mean = max(2, int(round(self.surface.scale)))
-        hollows = (_box_blur(floor, r_mean) - floor).astype(np.float32)
+        hollows = self._below_mean(floor)
         r_fine = max(1, int(round(0.5 * self.surface.scale)))
         self._relief_maps = _Relief(
             floor=floor,
@@ -503,6 +506,44 @@ class Canvas:
             peaks_fine=_box_blur(eng.max_filter(floor, r_fine), 1),
             peaks_wide=_box_blur(eng.max_filter(floor, 3 * r_fine + 3), 2),
         )
+        self.__dict__.pop("_beyond_weave_at", None)  # (see _beyond_weave)
+
+    def _below_mean(self, floor: np.ndarray) -> np.ndarray:
+        """How far each point of the surface ``floor`` lies below the local
+        average around it (over about a thread of the weave)."""
+        r_mean = max(2, int(round(self.surface.scale)))
+        return (_box_blur(floor, r_mean) - floor).astype(np.float32)
+
+    def _weave_hollows(self) -> np.ndarray:
+        """How far each point of the weave alone lies below the weave around
+        it (the hollows of :meth:`_update_relief` on bare canvas, to the
+        bit): the part of the surface's hollows that is the weave's, which a
+        dry brush meets through ``tooth``; what lies deeper, in dried paint,
+        the tips of a lightly pressed brush may not reach (see
+        ``_engine.REACH_MIN``). Made when first needed (and not pickled)."""
+        weave = self.__dict__.get("_weave_hollows_map")
+        if weave is None:
+            weave = (WEAVE_DEPTH * self.texture * self.grain).astype(np.float32)
+            weave = self._weave_hollows_map = self._below_mean(weave)
+        return weave
+
+    def _beyond_weave(self) -> float:
+        """How much deeper than the weave's own (see :meth:`_weave_hollows`)
+        the deepest hollow of the surface is, at most: where it is no deeper
+        than the tips of a brush reach, the brush reaches everywhere (and the
+        engine need not look). With no dried paint, the hollows are the
+        weave's: 0. Worked out when first needed after paint dries (and not
+        pickled)."""
+        deep = self.__dict__.get("_beyond_weave_at")
+        if deep is None:
+            deep = 0.0
+            if self.dry_height.any():
+                # (in double precision, as the engine compares them)
+                hollows = self._relief_maps.hollows.astype(np.float64)
+                weave = self._weave_hollows().astype(np.float64)
+                deep = float(np.max(hollows - np.maximum(weave, 0.0)))
+            self._beyond_weave_at = deep
+        return deep
 
     # ------------------------------------------------------------------
     # inspection
@@ -761,6 +802,11 @@ class Canvas:
             np.round(self.render(**render_options) * 255).astype(np.uint8)
         )
 
+
+#: What a canvas keeps worked out from its relief, made again when needed:
+#: left out of what it pickles (``__getstate__``, which ``copy`` goes through
+#: too), so never stale (see Canvas._beyond_weave).
+_CACHED = ("_weave_hollows_map", "_beyond_weave_at")
 
 #: Rendered height of one unit of paint thickness, in pixels (``relief`` in
 #: :meth:`Canvas.render` scales it).

@@ -359,6 +359,10 @@ class _Canvas(Protocol):
 
     def _relief(self) -> _Relief: ...
 
+    def _weave_hollows(self) -> np.ndarray: ...
+
+    def _beyond_weave(self) -> float: ...
+
 
 def apply_stroke(canvas: _Canvas, stroke: Stroke) -> Brush:
     """Run the stroke simulation on ``canvas``. Returns the brush used.
@@ -702,10 +706,13 @@ def _stroke_consts(
     hair_at: tuple[float, float, float, float],
     spacing: float,
     max_pressure: float,
+    beyond_weave: float,
 ):
     """The settings of a stroke with tool ``bt`` (settings ``eff``, see
-    :func:`_resolve`) on a canvas of surface ``surf``, as the engine takes
-    them (an :class:`_engine.StrokeConsts`)."""
+    :func:`_resolve`) on a canvas of surface ``surf`` whose deepest hollow
+    lies ``beyond_weave`` deeper than the weave's own (see
+    ``Canvas._beyond_weave``), as the engine takes them (an
+    :class:`_engine.StrokeConsts`)."""
     return eng.StrokeConsts(
         stroke_id=int(stroke_id),
         circle=bool(circle),
@@ -741,6 +748,7 @@ def _stroke_consts(
         slickness=float(surf.slickness),
         absorbency=float(surf.absorbency),
         surface_tooth=float(surf.tooth),
+        beyond_weave=float(beyond_weave),
         arc_end=float(arc_end),
         hair_s0=hair_at[0],
         hair_x0=hair_at[1],
@@ -875,11 +883,19 @@ class _Run:
             top_id=canvas.top_id,
         )
         relief = self.relief = canvas._relief()
+        beyond_weave = canvas._beyond_weave()
         self.aux = eng.Beneath(
             floor=relief.floor,
             tooth=relief.tooth,
             hollows=relief.hollows,
             dry_height=canvas.dry_height,
+            # (read only where something may be out of reach: see
+            # _engine._contact_catch_wet_dry)
+            weave_hollows=(
+                canvas._weave_hollows()
+                if beyond_weave > eng.REACH_MIN
+                else relief.hollows
+            ),
         )
         self.br = eng.Load(tip=brush.tip, belly=brush.reservoir, heel=brush.heel)
         self.pend = _NO_PENDING
@@ -897,6 +913,7 @@ class _Run:
             hair_at=hair_at,
             spacing=smp.spacing,
             max_pressure=float(np.max(smp.pressure)),
+            beyond_weave=beyond_weave,
         )
 
     @property

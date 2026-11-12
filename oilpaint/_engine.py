@@ -249,6 +249,10 @@ StrokeConsts = namedtuple(
         "slickness",
         "absorbency",
         "surface_tooth",
+        # how much deeper than the weave's own the deepest hollow of the
+        # surface is (see Canvas._beyond_weave): a brush whose tips reach
+        # that deep reaches everywhere (see _reach)
+        "beyond_weave",
         "arc_end",
         # where the brush's hair pattern (see hair_field) lies in stroke
         # coordinates: distance along the stroke and position across the
@@ -334,9 +338,13 @@ Layers = namedtuple("Layers", ["top", "und", "top_a", "und_a", "top_id"])
 
 #: What the wet paint lies on (``aux``): the solid surface (the weave and
 #: dried paint, in units of paint thickness), what a nearly dry brush catches
-#: on (0..1), how far each point lies below the surface around it, and the
-#: height of the dried paint.
-Beneath = namedtuple("Beneath", ["floor", "tooth", "hollows", "dry_height"])
+#: on (0..1), how far each point lies below the surface around it, the
+#: height of the dried paint, and how far each point of the weave alone lies
+#: below the weave around it (the part of ``hollows`` that is the weave's:
+#: see _beyond_reach).
+Beneath = namedtuple(
+    "Beneath", ["floor", "tooth", "hollows", "dry_height", "weave_hollows"]
+)
 
 #: The paint on a tool (``br``), (COLUMNS, PACKED) per depth.
 Load = namedtuple("Load", ["tip", "belly", "heel"])
@@ -2873,15 +2881,68 @@ def pick_up(cv, br, taps, F, part, p, K, f_pick):
                     belly[b, c] += wt * deep * lifted_und[c]
 
 
+#: How far down into the hollows of the dried surface the tips of a brush
+#: reach, in units of paint thickness, below what the weave's own hollows
+#: account for (see _reach): REACH_MIN (always: the weave's hollows and a
+#: flat film over them are never out of reach), and REACH_P * p^3 *
+#: (REACH_SOFT - stiffness) as it is pressed (little at a light touch, soon
+#: a lot; soft hair bends down into them more readily than stiff), and
+#: REACH_LOAD * load^2 as it carries more paint (``load`` in width-squares:
+#: the paint standing on the tips of a loaded brush bridges down into them;
+#: a nearly dry one has next to none). Deeper than that, what the tips
+#: offer catches less and less (see _beyond_reach) ...
+REACH_MIN, REACH_P, REACH_SOFT, REACH_LOAD = 0.01, 6.0, 1.6, 0.03
+#: ... over a depth of REACH_W0 + REACH_WK * reach (the further the tips
+#: reach, the more gradually they give out), past which it takes REACH_LIFT
+#: more of the tooth or hair (``to``, see _catch) to catch than on the
+#: surface around: a point just out of reach still catches where the tooth
+#: and the hair favour it, one well out of it nowhere.
+REACH_W0, REACH_WK, REACH_LIFT = 0.3, 1.0, 1.5
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _catch_at(fill, wet, to, wet_contact, rough_thr):
+    """How much of the paint a bristle tip with this column's ``fill`` (the
+    bristles coated ``wet``) offers a pixel of tooth and hair ``to`` catches
+    there, beyond the threshold ``rough_thr`` (see _catch)."""
+    fl = clip(max(fill, 0.9 * wet), 0.0, 1.0)
+    thr = 1.5 * (1.0 - fl) ** 0.8 - 0.35 + rough_thr
+    return max(smoothstep(thr - 0.08, thr + 0.08, to), wet_contact)
+
+
 @njit(cache=True, error_model="numpy")
 def _catch(fill, wet, to, wet_contact, fill_all, rough_thr):
     """How much of the paint a bristle tip offers a pixel catches there (see
     brush_step_on): (with this column's fill, with the brush's as a whole)."""
-    fl = clip(max(fill, 0.9 * wet), 0.0, 1.0)
-    thr = 1.5 * (1.0 - fl) ** 0.8 - 0.35 + rough_thr
-    catch = max(smoothstep(thr - 0.08, thr + 0.08, to), wet_contact)
+    catch = _catch_at(fill, wet, to, wet_contact, rough_thr)
     thr_all = 1.5 * (1.0 - fill_all) ** 0.8 - 0.35 + rough_thr
     return catch, max(smoothstep(thr_all - 0.08, thr_all + 0.08, to), wet_contact)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _reach(p, K, load):
+    """How far down into the hollows of the dried surface, beyond the weave's
+    own, the tips of a brush pressed ``p`` and carrying ``load``
+    (width-squares) reach (see REACH_MIN): REACH_MIN at least, never less (a
+    negative reach would read as "everywhere": see _contact_catch_wet_dry).
+    Wet paint lying in a hollow makes it no shallower: the tips touch it
+    there as anywhere (``wet_contact``, see _catch_at)."""
+    press = max(REACH_P * p * p * p * (REACH_SOFT - K.stiffness), 0.0)
+    return REACH_MIN + press + REACH_LOAD * load * load
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _beyond_reach(hollow, weave, reach):
+    """How much more it takes to catch at a point ``hollow`` below the dried
+    surface around it (see Beneath), where the weave alone lies ``weave``
+    below the weave around it, for tips that reach ``reach`` deeper than the
+    weave's own hollows (see REACH_W0): 0 within reach, and wherever the
+    surface is no deeper than the weave. (Wet paint lying in the hollow
+    does not make it shallower: it catches through ``wet_contact``.)"""
+    d = hollow - max(weave, 0.0) - reach
+    if not d > 0.0:
+        return 0.0
+    return REACH_LIFT * d / (REACH_W0 + REACH_WK * reach)
 
 
 @njit(cache=True, error_model="numpy")
@@ -3538,7 +3599,13 @@ def _contact_catch_wet_dry(st, part, wet, dry, K, F, taps, cv, aux, col_fill, lo
     # breaks up a lightly pressed stroke even when the brush is loaded (scumbling)
     rough_t = K.surface_tooth - 0.5
     rough_thr = (3.2 if rough_t > 0 else 0.6) * rough_t * (1.0 - st.hold.p) ** 1.2
-    brush_state = (wet, fill_all, rough_thr)
+    # light pressure and little paint: the tips ride over the hollows of the
+    # surface deeper than they reach (see _reach)
+    reach = _reach(st.hold.p, K, load)
+    # (-1: it reaches everywhere, nothing to look at; _reach is never
+    # negative itself)
+    reach = reach if K.beyond_weave > reach else -1.0
+    brush_state = (wet, fill_all, rough_thr, reach)
     q, sums = _catch_on(aux, F, part, K, fill, wet_contact, contact, brush_state)
     o_q, sums = _catch_off(aux, F, off, K, o_fill, o_wet, o_contact, brush_state, sums)
     sum_q, sum_all = sums
@@ -3611,9 +3678,12 @@ def _catch_on(aux, F, part, K, fill, wet_contact, contact, brush_state):
     how full the brush is as a whole, the roughness threshold), times its
     contact; and (the sum of that, of the contact times what would catch
     with the brush's fill as a whole). Dry brush: only the canvas tooth (and
-    hair lines) catch paint."""
-    tooth_map = aux.tooth
-    wet, fill_all, rough_thr = brush_state
+    hair lines) catch paint. Where the surface lies deeper than the tips
+    reach (``reach``, -1 if they reach everywhere), less catches (see
+    _beyond_reach); not counted in the sums, so what the tips keep there
+    stays on them."""
+    tooth_map, hollows, weave = aux.tooth, aux.hollows, aux.weave_hollows
+    wet, fill_all, rough_thr, reach = brush_state
     ch, cw, cy0, cx0, wy0, wx0 = (
         part.ch,
         part.cw,
@@ -3638,6 +3708,12 @@ def _catch_on(aux, F, part, K, fill, wet_contact, contact, brush_state):
             # (once the brush as a whole is effectively dry, the rest stays in the
             # bristles)
             sum_all += contact[y, x] * a
+            # where the tips do not reach, less catches: after the sums, so
+            # that what they keep stays on them (see _reach)
+            if reach >= 0.0:
+                at = (hollows[cy0 + y, cx0 + x], weave[cy0 + y, cx0 + x], reach)
+                pt = (fill[y, x], wet, to, wet_contact[y, x], rough_thr)
+                q[y, x] = _within_reach(q[y, x], contact[y, x], pt, at)
     return q, (sum_q, sum_all)
 
 
@@ -3646,8 +3722,8 @@ def _catch_off(aux, F, off, K, o_fill, o_wet, o_contact, brush_state, sums):
     """:func:`_catch_on` at the pixels ``off`` the canvas, added to its
     ``sums``. (The sums carry on from the canvas's, in the same order of
     additions: not to be summed apart and added.)"""
-    tooth_map = aux.tooth
-    wet, fill_all, rough_thr = brush_state
+    tooth_map, hollows, weave = aux.tooth, aux.hollows, aux.weave_hollows
+    wet, fill_all, rough_thr, reach = brush_state
     sum_q, sum_all = sums
     no = off.shape[0]
     o_q = np.empty(no)
@@ -3658,7 +3734,24 @@ def _catch_off(aux, F, off, K, o_fill, o_wet, o_contact, brush_state, sums):
         o_q[i] *= o_contact[i]
         sum_q += o_q[i]
         sum_all += o_contact[i] * a
+        if reach >= 0.0:
+            at = (hollows[Y, X], weave[Y, X], reach)
+            pt = (o_fill[0, i], wet, to, o_wet[i], rough_thr)
+            o_q[i] = _within_reach(o_q[i], o_contact[i], pt, at)
     return o_q, (sum_q, sum_all)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _within_reach(q, contact, pt, at):
+    """What catches at a point ``at`` = (hollow, weave, reach: see
+    _beyond_reach) where ``q`` would catch within reach, of the tips there
+    ``pt`` = (fill, wet, to, wet_contact, rough_thr: see _catch_at), in
+    ``contact``: ``q`` within reach, less and less beyond."""
+    lift = _beyond_reach(at[0], at[1], at[2])
+    if lift > 0.0:
+        fill, wet, to, wet_contact, rough_thr = pt
+        return contact * _catch_at(fill, wet, to, wet_contact, rough_thr + lift)
+    return q
 
 
 @njit(cache=True, error_model="numpy", inline="always")
