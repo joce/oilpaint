@@ -255,7 +255,8 @@ StrokeConsts = namedtuple(
         "spacing",
         # the brush's own size: how wide it paints on average (px)
         "bundle",
-        # whether it has bristles to plough wet paint with (a drop has none)
+        # whether it may plough wet paint anywhere: it has bristles (a drop
+        # has none) and is pressed above PLOUGH_P0 somewhere along it
         "ploughs",
     ],
 )
@@ -3130,18 +3131,24 @@ def _ploughs(cv, F, st, K, pend):
     GAP), whether they do anywhere, and how hard their clumps press there
     where they do (see _lane; 1 elsewhere): as hard as they are pressed, as
     far as the paint the stroke met there can be ploughed (see _meet, which
-    this brings up to date). How much stiff hair then cuts, and soft hair
-    less, is a matter of the cut itself (see _bite). (A point cuts instead,
-    and a dab or a drop of spatter only presses. Where they plough nowhere,
+    this brings up to date at every step, however lightly the brush is
+    pressed: a stroke may come back harder over paint it first met
+    lightly). How much stiff hair then cuts, and soft hair less, is a matter
+    of the cut itself (see _bite). (A point cuts instead, a dab or a drop of
+    spatter only presses, and a stroke never pressed above PLOUGH_P0 has
+    nothing to record: see StrokeConsts.ploughs. Where they plough nowhere,
     the two arrays are placeholders, not to be read.)"""
     win = st.win
     press = smoothstep(PLOUGH_P0, PLOUGH_P1, st.hold.p)
     nowhere = np.zeros((1, 1))
-    if K.dig > 0 or K.is_dab or not K.ploughs or not press > 0:
+    if K.dig > 0 or K.is_dab or not K.ploughs or pend.where[PEND_ON] == 0:
         return nowhere, False, nowhere
-    if pend.where[PEND_ON] == 0:
-        return nowhere, False, nowhere
+    # (what the stroke meets is recorded however lightly it is pressed: it
+    # may come back over it harder, after a light pass has laid its paint
+    # there)
     _meet(cv, st, K, pend)
+    if not press > 0:
+        return nowhere, False, nowhere
     met, where = pend.met, pend.where
     by0, bx0 = where[PEND_Y0], where[PEND_X0]
     y0, y1 = max(win.cy0, by0), min(win.cy0 + win.ch, by0 + where[PEND_H])
@@ -3183,9 +3190,9 @@ def _meet(cv, st, K, pend):
     all round it as far as the brush moves in the step or lays the paint it
     pushes out to its sides (``K.margin``), whichever is further: before
     what it pushes ahead or aside lands there. It records a pixel the first
-    time it comes there (and the pixel holds none of the stroke's own
-    paint): what the stroke met there, not what it left of it, stirred into
-    it or pushed onto it. (Not yet recorded: below 0.)"""
+    time it comes there, however lightly pressed (and the pixel holds none
+    of the stroke's own paint): what the stroke met there, not what it left
+    of it, stirred into it or pushed onto it. (Not yet recorded: below 0.)"""
     ids = cv.top_id
     met, where = pend.met, pend.where
     win = st.win

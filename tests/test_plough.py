@@ -454,3 +454,47 @@ def test_the_ploughs_property_stays_out_of_a_brush_repr():
     always did."""
     assert "ploughs" not in repr(brushes.STIPPLER)
     assert not brushes.FLAT_HOG.with_(ploughs=False).ploughs
+
+
+def _run_watched(c, stroke):
+    """Paint ``stroke`` on ``c`` step by step; returns (the pressure and how
+    far the brush ploughs at its most, per step; the stroke's Pending paint,
+    and the top-left corner of its box)."""
+    run = stm._Run.begin(c, stroke)
+    y0, y1, x0, x1 = run.bounds()
+    run.pend = stm._pending(y0, y1, x0, x1)
+    out = []
+    for st, tables in run.steps():
+        F, _ = eng.footprint(st, run.K, run.tex, run.tex2, *tables)
+        w, _, _ = eng._ploughs(run.cv, F, st, run.K, run.pend)
+        out.append((float(st.hold.p), float(w.max())))
+        stm._brush_step(run, st, tables)
+    return out, run.pend, (y0, x0)
+
+
+def _down_and_back(pressure):
+    return Stroke(
+        path=[(X, 15), (X, H - 15), (X + 0.5, 15)],
+        paint=P.TITANIUM_WHITE,
+        amount=45,
+        brush=HOG,
+        pressure=pressure,
+        seed=3,
+    )
+
+
+def test_a_light_pass_then_a_hard_return_ploughs_on_the_way_back():
+    """A stroke that first crosses thick paint lightly, laying its own paint
+    on it, and comes back over it pressed hard ploughs on the way back: what
+    it met there was recorded on the light pass. One that stays light
+    ploughs and folds nothing."""
+    steps, pend, (y0, x0) = _run_watched(_bed(), _down_and_back([0.3, 0.3, 0.9]))
+    hard = [w for p, w in steps if p > 0.6]
+    assert len(hard) > 20
+    assert np.mean([w > 0 for w in hard]) > 0.8
+    core = pend.met[ROWS.start - y0 : ROWS.stop - y0, X - 10 - x0 : X + 11 - x0]
+    assert core.min() >= 0 and core.mean() > 0.9
+    assert pend.folds.max() > 0
+    steps, pend, _ = _run_watched(_bed(), _down_and_back(0.3))
+    assert max(w for _, w in steps) == 0
+    assert pend.folds.max() == 0

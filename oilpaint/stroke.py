@@ -700,6 +700,7 @@ def _stroke_consts(
     arc_end: float,
     hair_at: tuple[float, float, float, float],
     spacing: float,
+    max_pressure: float,
 ):
     """The settings of a stroke with tool ``bt`` (settings ``eff``, see
     :func:`_resolve`) on a canvas of surface ``surf``, as the engine takes
@@ -746,8 +747,11 @@ def _stroke_consts(
         spacing=float(spacing),
         # the brush's own size: how wide it paints on average (px)
         bundle=float(brush.width),
-        # (BrushTypes pickled before it existed plough)
-        ploughs=bool(getattr(bt, "ploughs", True)),
+        # whether it may plough anywhere: it has bristles (BrushTypes pickled
+        # before the property existed do), and is pressed hard enough
+        # somewhere along it (see _engine.PLOUGH_P0; a stroke that is, may
+        # come back hard over paint it first met lightly)
+        ploughs=bool(getattr(bt, "ploughs", True)) and max_pressure > eng.PLOUGH_P0,
     )
 
 
@@ -883,6 +887,7 @@ class _Run:
             arc_end=float(arc[-1]),
             hair_at=hair_at,
             spacing=smp.spacing,
+            max_pressure=float(np.max(smp.pressure)),
         )
 
     @property
