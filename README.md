@@ -997,10 +997,6 @@ off towards white rather than clip.
 * Knives lie flat on the canvas (or, with a tiny `aspect`, on their edge);
   the tilt of the blade (spreading with the trailing edge down vs scraping
   with the leading edge) is folded into pressure.
-* Paint volume is conserved, and so is each pigment, except where a loaded
-  dab holding several colours lifts off: the peak it pulls up is reshaped as
-  a whole, which keeps its volume but can change how much of each colour
-  it holds by a few percent.
 * Paint optics are derived from RGB colors, not measured pigment data. If you
   have measured spectra, `Paint.from_optics(K, S)` accepts them directly.
 * Speed: a few milliseconds for a small brush stroke, about a tenth of a

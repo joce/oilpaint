@@ -124,6 +124,7 @@
     "segs",
     "setflags",
     "signbit",
+    "Sinkhorn",
     "sRGB",
     "superellipse",
     "SVML",

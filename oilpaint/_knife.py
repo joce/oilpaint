@@ -822,10 +822,21 @@ def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
         )
 
 
+# How far (in crest cells) the paint pulled up into a knife's crests comes
+# from: the spread (as a Gaussian's sigma) of the square window, about 1.7
+# times this each way, over which _engine.pull_up moves paint to a rising
+# pixel. Crests lie about a cell apart across the pull, so over a knife's
+# lift 81% to 96% of the paint moved comes from beside the crest it goes
+# to; the rest is shared among all the pixels that rise.
+KNIFE_PULL = 1.0
+
+
 def _lift_off(canvas, sl, under, amp, cell, direction, rng, stroke_id):
     """The stroke's own paint under a tool lifted off it is pulled up into
-    torn crests and peaks, stretched along the way the tool was moving
-    (volume-conserving; other strokes' paint is left as it is)."""
+    torn crests and peaks, stretched along the way the tool was moving: the
+    crests are made of the paint between them, which falls (see
+    _engine.pull_up), so nothing is made or lost, pigment by pigment; other
+    strokes' paint is left as it is."""
     if amp <= 0 or not under.any():
         return
     top = canvas.top[sl]
@@ -841,9 +852,5 @@ def _lift_off(canvas, sl, under, amp, cell, direction, rng, stroke_id):
     m = (wv * crest).sum() / wv.sum()
     fac = np.clip(1.0 + 2.0 * amp * under * (crest - m), 0.05, None)
     fac *= V.sum() / max((V * fac).sum(), 1e-12)
-    # (scaling each pixel's paint: where the stroke's own paint holds more
-    # than one colour, that makes some pigment and destroys some, up to a few
-    # percent of it; moving paint between pixels instead either mixes the
-    # colours together or, between neighbours only, hardly piles it up)
-    fac = np.where(own, fac, 1.0)
-    top *= fac.astype(np.float32)[..., None]
+    fac = np.where(own, fac, 1.0)  # (1: left alone)
+    eng.pull_up(top, fac, KNIFE_PULL * cell)

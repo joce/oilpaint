@@ -1253,10 +1253,21 @@ def _brush_step(run: _Run, st, tables) -> None:
     )
 
 
+# How far (in brush half-widths) the paint pulled up into a dab's peaks comes
+# from: the spread (as a Gaussian's sigma) of the square window, about 1.7
+# times this each way, over which _engine.pull_up moves paint to a rising
+# pixel; about the size of a peak (0.18 to 0.3). Over a dab, 53% to 82% of
+# the paint moved goes that way; the rest, from the mound's rim, is shared
+# among all the pixels that rise.
+DAB_PULL = 0.3
+
+
 def _dab_lift(run: _Run) -> None:
     """A loaded brush lifted straight off the mound of paint it pressed out
-    pulls it up into a peak or two, a little off centre the way it leaves
-    (volume-conserving): more so for thick, stiff paint and stiff hair."""
+    pulls it up into a peak or two, a little off centre the way it leaves:
+    more so for thick, stiff paint and stiff hair. The peaks are made of the
+    paint around them, which falls a little (see _engine.pull_up): nothing
+    is made or lost, pigment by pigment."""
     canvas, lift = run.canvas, float(run.eff["lift"])
     if lift <= 0:
         return
@@ -1297,6 +1308,5 @@ def _dab_lift(run: _Run) -> None:
     m = (V * peak).sum() / V.sum()
     fac = np.clip(1.0 + 2.0 * amp * (peak - m), 0.05, None)
     fac *= V.sum() / max(float((V * fac).sum()), 1e-12)
-    # (scaling each pixel's paint: see _knife._lift_off)
-    fac = np.where(own, fac, 1.0)
-    top *= fac.astype(np.float32)[..., None]
+    fac = np.where(own, fac, 1.0)  # (1: left alone)
+    eng.pull_up(top, fac, DAB_PULL * r)
