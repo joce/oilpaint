@@ -30,7 +30,7 @@ import importlib
 import math
 import numbers
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from itertools import starmap
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -223,9 +223,11 @@ class BrushType:
     stiffness:
         0 = very soft (sable, squirrel) to 1 = very stiff (hog bristle, knife).
         Stiff tools leave stronger ridges and ragged edges, push more paint
-        and blend less; soft ones lay smooth paint and blend gently. For a
-        knife: a flexible blade (~0.5) bends under pressure, scrapes closer
-        and spreads thinner; a stiff one (1) rides on the highest points.
+        (pressed hard through thick wet paint, the stiffer a brush the more
+        it ploughs it into streaks) and blend less; soft ones lay smooth
+        paint and blend gently. For a knife: a flexible blade (~0.5) bends
+        under pressure, scrapes closer and spreads thinner; a stiff one (1)
+        rides on the highest points.
     bristles:
         Bristle density: 0 = sparse and coarse (bold streaks, dry-brush
         breakup), 1 = dense and fine (smooth).
@@ -249,6 +251,10 @@ class BrushType:
         soft blenders); 0 = crisp.
     deposits:
         False for tools that only lift paint (a rag wiping back to the ground).
+    ploughs:
+        False for paint that lands without bristles to cut through what is
+        there (a drop of spatter): pressed hard through thick wet paint, it
+        still lies on top of it rather than ploughing it.
     dig:
         0..1: how deep a point cuts into the wet paint under it, as a share
         of that paint (1: down to the dry paint or the canvas beneath), pushing
@@ -292,6 +298,8 @@ class BrushType:
     slant: float = 0.0
     softness: float = 0.0
     deposits: bool = True
+    # (left out of the repr, which seeds a dab's pattern of tips: see _dab)
+    ploughs: bool = field(default=True, repr=False)
     dig: float = 0.0
     blending: float | None = None
     taper: float = 0.0

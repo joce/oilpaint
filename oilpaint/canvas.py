@@ -926,7 +926,7 @@ _STRETCH, _STRETCH_REACH = 1.6, 2.5
 _SATELLITES_FROM = 2.0
 
 #: A drop of paint landing (see Canvas.spatter): no bristles, it neither drags
-#: nor picks up the paint it lands on, and sits on top of it.
+#: nor picks up nor ploughs the paint it lands on, and sits on top of it.
 _DROP = BrushType(
     shape="round",
     width=4.0,
@@ -937,6 +937,7 @@ _DROP = BrushType(
     drag=0.0,
     mixing=0.03,
     rough=0.0,
+    ploughs=False,
     name="Drop",
 )
 

@@ -136,6 +136,61 @@ FILM_KNOWN = 1e-2 * MIN_FILM
 # stiff (body 1) paint can hold before it flows.
 SLOPE_FLUID, SLOPE_STIFF = 0.05, 4.0
 
+# Ploughing (see _plough). A brush combs through the thick wet paint already
+# there. Lightly, it rides on the paint it carries; pressed hard, its bristles
+# go down through that paint towards a level above the solid surface that has
+# nothing to do with its load: GAP (units of paint thickness) times (1.15 -
+# pressure) times (1.3 - 0.8 stiffness) (see _gap). They cut the paint above
+# it away, deeper along the lines of their clumps the more the brush leaves
+# streaks, push more of it out to the sides the harder they are pressed, lay
+# their own paint more into their grooves than onto the old paint left standing
+# between them, and the old paint folds over the new there: the streaky,
+# marbled mark of wet-in-wet work.
+GAP = 3.5
+# It sets in between these pressures ...
+PLOUGH_P0, PLOUGH_P1 = 0.4, 0.6
+# ... and between these thicknesses of the earlier wet paint the brush meets
+# at a pixel (units of paint thickness): a film a brush can't cut a groove
+# into (a wet sky scrubbed on thin) is brushed as it always was ...
+PLOUGH_T0, PLOUGH_T1 = 1.5, 2.5
+# ... and only in paint stiff enough to hold a groove: from the first body to
+# the second (see paint.Paint). The walls of a groove a few units deep between
+# clumps a few px apart are about a unit per px steep; paint holds a slope of
+# SLOPE_FLUID + (SLOPE_STIFF - SLOPE_FLUID) body^4 (see level), about 0.4 at
+# body 0.55 and 1 at 0.7 (tube paint): softer paint, such as paint thinned
+# with medium for wet-on-wet work, flows back in and is brushed as it always
+# was.
+PLOUGH_B0, PLOUGH_B1 = 0.55, 0.7
+# How fast hair clears the paint above that level: a pass of hair of
+# stiffness s, where its clumps press as hard as on average, leaves
+# e^-(PLOUGH_RATE s^3) of it (soft hair bends and slides over thick paint: a
+# sable flat, stiffness 0.24, clears about a fifteenth of it, a sable round a
+# tenth, a synthetic about half, a hog flat nine tenths). The rest of what a
+# brush does ploughing (the side push, where it lays its paint, the folding)
+# goes with that share, 1 - e^-(PLOUGH_RATE s^3).
+PLOUGH_RATE = 5.0
+# How much harder the clumps of the bristles press than the hair between them,
+# per unit of the brush's streaks (see BrushType.streaks): where the hair
+# pattern (0..1, mean 0.5, see hair_field) is h, they press e^(LANE_K streaks
+# (1 - 2h)) times as hard as on average. They lay paint in proportion, and cut
+# at a rate that goes with its square root.
+LANE_K = 6.0
+# Share of the paint the bristles shift that they push out to the sides of
+# the stroke; ploughing at full pressure with hair that clears all it cuts,
+# they push this much more (the rest of what the brush doesn't take up is
+# pushed ahead).
+SIDE_SHARE, SIDE_PLOUGH = 0.35, 0.4
+# Ploughing, the old paint pushed up between the clumps folds up over the new
+# paint they lay there, once the stroke has passed (see fold_pending): over a
+# pass it gathers FOLD times the brush's mixing times pressure squared (a
+# brush that doesn't mix doesn't fold), in inverse proportion to how hard the
+# clumps press (most between them, least along their lines), as far as the
+# brush ploughs; for a total f, 1 - e^-f of the thinner of the two wet layers
+# trades places with the other. Meanwhile the brush stirs the two layers less
+# (see _stir_fraction): in its grooves its paint lies on what is left of the
+# old.
+FOLD = 1.2
+
 # Per-pixel footprint quantities, as planes of the array `footprint` returns.
 (
     F_ALONG,
@@ -200,6 +255,9 @@ StrokeConsts = namedtuple(
         "spacing",
         # the brush's own size: how wide it paints on average (px)
         "bundle",
+        # whether it may plough wet paint anywhere: it has bristles (a drop
+        # has none) and is pressed above PLOUGH_P0 somewhere along it
+        "ploughs",
     ],
 )
 
@@ -279,11 +337,18 @@ Load = namedtuple("Load", ["tip", "belly", "heel"])
 
 #: Paint a brushstroke holds back (``pend``, see stroke._pending): per pixel
 #: of its box, the paint, the cover and the reach it brought, and whether
-#: any is held; and ``where`` (int64), indexed by the PEND_* below.
-Pending = namedtuple("Pending", ["paint", "cover", "reach", "held", "where"])
+#: any is held; ``where`` (int64), indexed by the PEND_* below; how far the
+#: wet paint the brush met there can be ploughed (see _met); and how far the
+#: old paint there is to fold up over the new once the stroke has passed (see
+#: fold_pending).
+Pending = namedtuple(
+    "Pending",
+    ["paint", "cover", "reach", "held", "where", "met", "folds"],
+)
 # whether anything is held at all (0: a knife's, which holds nothing); the
 # box on the canvas (y0, x0, h, w); the rows and columns of it where any is
-# held (row0..row1, col0..col1)
+# held (row0..row1, col0..col1); and those where any old paint is to fold up
+# (see fold_pending)
 (
     PEND_ON,
     PEND_Y0,
@@ -294,7 +359,11 @@ Pending = namedtuple("Pending", ["paint", "cover", "reach", "held", "where"])
     PEND_ROW1,
     PEND_COL0,
     PEND_COL1,
-) = range(9)
+    PEND_FOLD_ROW0,
+    PEND_FOLD_ROW1,
+    PEND_FOLD_COL0,
+    PEND_FOLD_COL1,
+) = range(13)
 
 #: Which bristle columns are above each pixel (see bristle_taps): for pixel q
 #: (row-major), ``ntap[q]`` columns ``cols[q, :]`` with weights ``wts[q, :]``.
@@ -2279,6 +2348,32 @@ def stir(cv, sy0, sx0, m):
 
 
 @njit(cache=True, error_model="numpy")
+def fold_up(cv, sy0, sx0, f):
+    """The wet paint below folds up over the top layer of the window at (sy0,
+    sx0) by a fraction ``f`` (0: not at all, 1: as much of it as the thinner
+    of the two layers holds changes places): equal volumes of the two layers
+    trade places, each keeping its volume, so the top layer takes on the
+    paint below in proportion."""
+    top, und, top_a, und_a = cv.top, cv.und, cv.top_a, cv.und_a
+    hh, ww = f.shape
+    for y in range(hh):
+        for x in range(ww):
+            Y, X = sy0 + y, sx0 + x
+            tv, uv = top[Y, X, IV], und[Y, X, IV]
+            # (specks of dust are not paint)
+            if f[y, x] == 0 or not (tv > EMPTY and uv > EMPTY):
+                continue
+            v = f[y, x] * min(tv, uv)
+            ft, fu = np.float32(v / tv), np.float32(v / uv)
+            if f[y, x] > 0.01:
+                und_a[Y, X] = max(und_a[Y, X], top_a[Y, X])
+            for c in range(PACKED):
+                down, up = ft * top[Y, X, c], fu * und[Y, X, c]
+                top[Y, X, c] += up - down
+                und[Y, X, c] += down - up
+
+
+@njit(cache=True, error_model="numpy")
 def merge_same(cv, sy0, sx0, own, thr):
     """Where both wet layers of the window are much the same paint (not the
     stroke's own), merge them into the lower one."""
@@ -2735,11 +2830,13 @@ def _catch(fill, wet, to, wet_contact, fill_all, rough_thr):
 
 
 @njit(cache=True, error_model="numpy")
-def lay_amount(F, wy, wx, K, lift_gain, tp, glob, q, f_dep, f_pick, hollow):
+def lay_amount(F, wy, wx, K, lift_gain, tp, glob, q, f_dep, f_pick, hollow, comb):
     """The volume a brush lays at window pixel (wy, wx) in a step (see
     brush_step_on): ``tp`` thick from its tips there (``glob`` of it from a
     glob), caught ``q``, on a surface taking ``f_dep`` and lifting ``f_pick``
-    with ``hollow`` to fill."""
+    with ``hollow`` to fill, combing a glob into ridges ``comb`` as far as
+    usual (less where it ploughs: the old paint left standing between its
+    clumps takes their place)."""
     # absorbent / toothy grounds pull paint off the brush
     dd = tp * q * f_dep
     # what the bristles behind lift again and carry on (see own_lift)
@@ -2751,7 +2848,7 @@ def lay_amount(F, wy, wx, K, lift_gain, tp, glob, q, f_dep, f_pick, hollow):
     # thick paint from a glob is combed by the bristles into deep grooves and
     # ridges
     g = glob / max(tp, 1e-9)
-    dd *= max(1.0 + g * 2.0 * K.streaks * (2.0 * F[F_HAIR, wy, wx] - 1.0), 0.15)
+    dd *= max(1.0 + g * 2.0 * K.streaks * comb * (2.0 * F[F_HAIR, wy, wx] - 1.0), 0.15)
     # and it rounds off over the last px or two at the stroke's edges (rather
     # than standing in a cliff one pixel wide, which on a slant steps from pixel
     # to pixel)
@@ -2866,6 +2963,9 @@ def brush_step_on(
     # for these calls and a knife's)
     brush, knife = not K.rigid, K.rigid
     f_pick, f_dep, f_mix, f_drag = surface_factors_on(cv, aux, st, part, K)
+    # how far the bristles plough through thick wet paint at each pixel of the
+    # step's window on the canvas (see _plough), and whether anywhere
+    ploughing = _ploughs(cv, F, st, K, pend)
 
     # 0) drag: wet paint under the brush is pushed along with it
     if K.drag > 0:
@@ -2903,7 +3003,7 @@ def brush_step_on(
     #    is shifted, partly onto the brush, partly out to the sides (ridges), the rest
     #    pushed ahead (left as a ridge where the brush lifts)
     ridges = Ridges(np.zeros(PACKED), np.zeros(PACKED), np.zeros(PACKED))
-    _plough(cv, aux, pend, br, F, st, K, thick, ridges)
+    _plough(cv, aux, pend, br, F, st, K, thick, ridges, ploughing)
     squeeze_out(br, K, st, col_vol, col_over, hold, ridges, col_u)
     lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, brush)
 
@@ -2916,12 +3016,12 @@ def brush_step_on(
     )
     if not dry and _tip_volume(tip) > 0 and K.deposits:
         lift_gain = OWN_LIFT * K.pickup * 1.2 * (0.05 + 1.9 * min(p, 1.0))
-        d = _lay_on(
-            aux, F, part, K, taps, col_thick, col_glob, q, f_dep, f_pick, lift_gain
-        )
-        d_off = _lay_beyond(
-            cv, aux, F, off, K, o_taps, col_thick, col_glob, o_q, lift_gain
-        )
+        laying = (col_thick, col_glob, lift_gain)
+        d = _lay_on(aux, F, st.win, part, K, taps, laying, q, f_dep, f_pick, ploughing)
+        d_off = _lay_beyond(cv, aux, F, st.win, off, K, o_taps, laying, o_q, ploughing)
+        if ploughing[1]:
+            # ploughing, it lays its paint more into the grooves it cuts
+            _into_grooves(d, d_off, st.win, part, off, K, ploughing)
         if K.is_dab:
             # pressed down, an overloaded brush leaves part of its glob as a mound
             press_glob(d, F, st, part, col_vol, col_over, hold, hair, off, d_off)
@@ -2951,8 +3051,12 @@ def brush_step_on(
     overflow(tip, belly, capacity)
 
     # 5) stir: pressure churns the fresh top layer and the wet paint below into each
-    # other
-    stir(cv, part.cy0, part.cx0, _stir_fraction(K, p, contact, f_mix))
+    # other; ploughing, the old paint between the clumps folds over the new
+    if ploughing[1]:
+        m = _fold_fractions(K, p, contact, f_mix, st, part, ploughing, pend)
+        stir(cv, part.cy0, part.cx0, m)
+    else:
+        stir(cv, part.cy0, part.cx0, _stir_fraction(K, p, contact, f_mix))
     return wet, dry
 
 
@@ -3021,25 +3125,142 @@ def _column_loads(br, st, K):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _plough(cv, aux, pend, br, F, st, K, thick, ridges):
+def _ploughs(cv, F, st, K, pend):
+    """How far a brush's bristles plough through the earlier strokes' wet
+    paint at each pixel of the step's window on the canvas, 0 to 1 (see
+    GAP), whether they do anywhere, and how hard their clumps press there
+    where they do (see _lane; 1 elsewhere): as hard as they are pressed, as
+    far as the paint the stroke met there can be ploughed (see _meet, which
+    this brings up to date at every step, however lightly the brush is
+    pressed: a stroke may come back harder over paint it first met
+    lightly). How much stiff hair then cuts, and soft hair less, is a matter
+    of the cut itself (see _bite). (A point cuts instead, a dab or a drop of
+    spatter only presses, and a stroke never pressed above PLOUGH_P0 has
+    nothing to record: see StrokeConsts.ploughs. Where they plough nowhere,
+    the two arrays are placeholders, not to be read.)"""
+    win = st.win
+    press = smoothstep(PLOUGH_P0, PLOUGH_P1, st.hold.p)
+    nowhere = np.zeros((1, 1))
+    if K.dig > 0 or K.is_dab or not K.ploughs or pend.where[PEND_ON] == 0:
+        return nowhere, False, nowhere
+    # (what the stroke meets is recorded however lightly it is pressed: it
+    # may come back over it harder, after a light pass has laid its paint
+    # there)
+    _meet(cv, st, K, pend)
+    if not press > 0:
+        return nowhere, False, nowhere
+    met, where = pend.met, pend.where
+    by0, bx0 = where[PEND_Y0], where[PEND_X0]
+    y0, y1 = max(win.cy0, by0), min(win.cy0 + win.ch, by0 + where[PEND_H])
+    x0, x1 = max(win.cx0, bx0), min(win.cx0 + win.cw, bx0 + where[PEND_W])
+    if not _any_above(met, y0 - by0, y1 - by0, x0 - bx0, x1 - bx0):
+        return nowhere, False, nowhere
+    w = np.zeros((win.ch, win.cw))
+    lane = np.ones((win.ch, win.cw))
+    H, W = cv.top_id.shape
+    for Y in range(y0, y1):
+        for X in range(x0, x1):
+            v = met[Y - by0, X - bx0]
+            if v > 0:
+                y, x = Y - win.cy0, X - win.cx0
+                w[y, x] = press * v
+                # (where the brush passes in the step, and at the canvas's
+                # edges, which stand for the pixels past them)
+                wy, wx = win.wy0 + y, win.wx0 + x
+                edge = Y == 0 or X == 0 or Y == H - 1 or X == W - 1
+                if F[F_EXPO, wy, wx] > 0 or edge:
+                    lane[y, x] = _lane(K, F[F_HAIR, wy, wx])
+    return w, True, lane
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _any_above(a, y0, y1, x0, x1):
+    """Whether any of ``a[y0:y1, x0:x1]`` is above 0."""
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            if a[y, x] > 0:
+                return True
+    return False
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _meet(cv, st, K, pend):
+    """Record how far the wet paint the brush is about to meet can be
+    ploughed (see _met), at each pixel of the step's window on the canvas and
+    all round it as far as the brush moves in the step or lays the paint it
+    pushes out to its sides (``K.margin``), whichever is further: before
+    what it pushes ahead or aside lands there. It records a pixel the first
+    time it comes there, however lightly pressed (and the pixel holds none
+    of the stroke's own paint): what the stroke met there, not what it left
+    of it, stirred into it or pushed onto it. (Not yet recorded: below 0.)"""
+    ids = cv.top_id
+    met, where = pend.met, pend.where
+    win = st.win
+    m = int(math.ceil(max(st.motion.ds, K.margin))) + 1
+    by0, bx0 = where[PEND_Y0], where[PEND_X0]
+    # (the window, so much bigger, within the box the stroke can reach)
+    y0, y1 = max(win.cy0 - m, by0), min(win.cy0 + win.ch + m, by0 + where[PEND_H])
+    x0, x1 = max(win.cx0 - m, bx0), min(win.cx0 + win.cw + m, bx0 + where[PEND_W])
+    for Y in range(y0, y1):
+        for X in range(x0, x1):
+            if met[Y - by0, X - bx0] < 0 and ids[Y, X] != K.stroke_id:
+                met[Y - by0, X - bx0] = _met(cv, Y, X)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _met(cv, Y, X):
+    """How far the wet paint at pixel (Y, X) (both layers: the top one from
+    an earlier stroke) can be ploughed, 0 to 1: as far as it is thick enough
+    to cut a groove into and stiff enough to hold one."""
+    v = cv.top[Y, X, IV] + cv.und[Y, X, IV]
+    if not v > 0:
+        return 0.0
+    body = (cv.top[Y, X, IB] + cv.und[Y, X, IB]) / v
+    thick = smoothstep(PLOUGH_T0, PLOUGH_T1, v)
+    return thick * smoothstep(PLOUGH_B0, PLOUGH_B1, body)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _bite(K):
+    """The share of the paint above the bristles' level that a pass of a
+    brush's hair clears (see PLOUGH_RATE): how far a brush ploughs, from a
+    little for soft hair to almost all for stiff."""
+    return 1.0 - math.exp(-PLOUGH_RATE * K.stiffness**3)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _lane(K, hair):
+    """How hard the bristles press at a pixel where the brush's hair pattern
+    is ``hair``, against how hard they press on average (see LANE_K):
+    harder along the lines of their clumps, the more the brush streaks."""
+    return math.exp(LANE_K * K.streaks * (1.0 - 2.0 * hair))
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _plough(cv, aux, pend, br, F, st, K, thick, ridges, ploughing):
     """The bristles of a brush laying paint ``thick`` comb through the thick
     wet paint already there (over all of the step's window on the canvas):
     what stands above them is shifted, partly onto the brush, partly out to
     the sides (into ``ridges``), the rest pushed ahead. A point (``K.dig``)
-    cuts a groove through a share of all of it."""
+    cuts a groove through a share of all of it. Where they plough
+    (``ploughing``: how far at each pixel of the window on the canvas, and
+    whether anywhere; see _ploughs), they go down through the paint they
+    carry and cut into the paint below (see GAP)."""
     win = st.win
     top, und = cv.top, cv.und
+    plough, ploughs = ploughing[0], ploughing[1]
     p = st.hold.p
-    hb = max(1.25 * thick, 3.5 * (1.15 - p) * (1.3 - 0.8 * K.stiffness))
+    gap = _gap(p, K.stiffness)
+    hb = max(1.25 * thick, gap)
     digging = K.dig > 0
     vmax = 0.0
     for y in range(win.ch):
         for x in range(win.cw):
             Y, X = win.cy0 + y, win.cx0 + x
             vmax = max(vmax, top[Y, X, IV] + und[Y, X, IV])
-    if not (digging or vmax > (1.0 - 0.4 * K.streaks) * hb):
+    if not (digging or ploughs or vmax > (1.0 - 0.4 * K.streaks) * hb):
         return
-    tv, wet_h, excess, emax = _excess(cv, aux, F, st, K, hb, digging)
+    tv, wet_h, excess, emax = _excess(cv, aux, F, st, K, (hb, gap), ploughing)
     if not emax > 1e-3:
         return
     moved = take(top, und, win.cy0, win.cx0, excess, tv)
@@ -3054,12 +3275,19 @@ def _plough(cv, aux, pend, br, F, st, K, thick, ridges):
                     ring[c] += moved[y, x, c]
         return
     # a point pushes it all aside
-    to_side = 1.0 if digging else 0.35 / (1.0 - share_pick)
+    to_side = 1.0 if digging else SIDE_SHARE / (1.0 - share_pick)
     wy0, wx0 = win.wy0, win.wx0
     lat = np.ascontiguousarray(F[F_LAT, wy0 : wy0 + win.ch, wx0 : wx0 + win.cw])
-    add_sides(ridges, moved, lat, to_side)
+    if ploughs:
+        # ploughing, the harder and the more it cuts, the more it pushes out
+        # to the sides
+        more = SIDE_PLOUGH * p * _bite(K) / (1.0 - share_pick)
+        _to_sides(ridges, moved, lat, to_side, more * plough)
+    else:
+        add_sides(ridges, moved, lat, to_side)
+        if to_side < 1.0:
+            moved *= 1.0 - to_side
     if to_side < 1.0:
-        moved *= 1.0 - to_side
         ds = st.motion.ds
         place(
             cv,
@@ -3074,16 +3302,45 @@ def _plough(cv, aux, pend, br, F, st, K, thick, ridges):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _excess(cv, aux, F, st, K, hb, digging):
+def _gap(p, stiffness):
+    """How high (units of paint thickness) the tips of a brush's bristles,
+    of ``stiffness``, ride above the solid surface pressed ``p``, whatever
+    paint it carries (see GAP): stiff hair pressed hard comes close to it."""
+    return GAP * (1.15 - p) * (1.3 - 0.8 * stiffness)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _to_sides(ridges, moved, lat, to_side, more):
+    """Push the share ``to_side`` of the paint the bristles shifted
+    (``moved``, packed per pixel of the step's window on the canvas) out to
+    the left and right edges of the footprint (see add_sides), and the share
+    ``more`` more of it at each pixel (all of it at most); keep the rest of
+    it in ``moved``."""
+    left, right = ridges.left, ridges.right
+    hh, ww = lat.shape
+    for y in range(hh):
+        for x in range(ww):
+            side = right if lat[y, x] > 0 else left
+            s = min(max(to_side + more[y, x], 0.0), 1.0)
+            for c in range(PACKED):
+                side[c] += s * moved[y, x, c]
+                moved[y, x, c] *= 1.0 - s
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _excess(cv, aux, F, st, K, levels, ploughing):
     """How much of the earlier strokes' wet paint at each pixel of the step's
-    window on the canvas stands above the bristles (``hb`` above the solid
-    surface, deeper along the hair lines) and is shifted as they pass; or,
-    ``digging``, the share of it a point cuts through. Returns (the volume
-    of the top layer there, of all the wet paint, the excess, the most of
-    it)."""
+    window on the canvas stands above the bristles and is shifted as they
+    pass (``levels``: (how high they ride on the paint they carry, the gap
+    they leave pressed through it), see _riding and _ploughing, as far as
+    they plough there, ``ploughing``: see _ploughs); or, digging, the share
+    of it a point cuts through. Returns (the volume of the top layer there,
+    of all the wet paint, the excess, the most of it)."""
     win = st.win
     top, und, ids = cv.top, cv.und, cv.top_id
     floor = aux.floor
+    hb, gap = levels
+    plough, ploughs, lane = ploughing
     ch, cw, cy0, cx0, wy0, wx0 = (
         win.ch,
         win.cw,
@@ -3105,22 +3362,47 @@ def _excess(cv, aux, F, st, K, hb, digging):
             tv[y, x] = t
             wet_h[y, x] = t + und[Y, X, IV]
             e = F[F_EXPO, wy0 + y, wx0 + x]
+            hair = F[F_HAIR, wy0 + y, wx0 + x]
             # a point cut into the paint: a groove through a share of all of it
-            if digging:
+            if K.dig > 0:
                 ex = (t + und[Y, X, IV]) * depth * (1.0 - math.exp(-6.0 * e))
             else:
-                level = floor[Y, X] + hb * (
-                    1.0 + 0.8 * K.streaks * (F[F_HAIR, wy0 + y, wx0 + x] - 0.5)
-                )
-                ex = max((floor[Y, X] + t + und[Y, X, IV]) - level, 0.0)
-                # shifted gradually as it passes
-                ex *= 1.0 - math.exp(-0.8 * K.stiffness**2 * e)
-                # a light tap only touches with the bristle tips: it doesn't plough
-                if K.is_dab:
-                    ex *= smoothstep(0.4, 0.8, st.hold.p)
+                ex = _riding(K, st, floor[Y, X], t, und[Y, X, IV], hb, hair, e)
+            if ploughs and plough[y, x] > 0:
+                # (riding lower than the gap, it shaves what stands above that)
+                cut = max(_ploughing(K, wet_h[y, x], gap, lane[y, x], e), ex)
+                ex += plough[y, x] * (cut - ex)
             excess[y, x] = ex
             emax = max(emax, ex)
     return tv, wet_h, excess, emax
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _riding(K, st, floor, t, uv, hb, hair, e):
+    """How much of the wet paint (``t`` in the top layer from earlier
+    strokes, ``uv`` below it, on a solid surface ``floor`` high) at a pixel
+    the bristles shift as they pass in a step (exposure ``e``) riding ``hb``
+    above the surface, deeper along the hair lines (``hair``)."""
+    level = floor + hb * (1.0 + 0.8 * K.streaks * (hair - 0.5))
+    ex = max((floor + t + uv) - level, 0.0)
+    # shifted gradually as it passes
+    ex *= 1.0 - math.exp(-0.8 * K.stiffness**2 * e)
+    # a light tap only touches with the bristle tips: it doesn't plough
+    if K.is_dab:
+        ex *= smoothstep(0.4, 0.8, st.hold.p)
+    return ex
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _ploughing(K, wet, gap, lane, e):
+    """How much of the wet paint (``wet`` thick) at a pixel the bristles,
+    pressed down through it to ``gap`` above the solid surface, cut out of
+    it as they pass in a step (exposure ``e``): of what stands above the
+    gap, as much as their stiffness lets them clear (see PLOUGH_RATE), more
+    along the lines of their clumps (they press ``lane`` times as hard as on
+    average there: see _lane and LANE_K)."""
+    rate = PLOUGH_RATE * K.stiffness**3 * math.sqrt(lane)
+    return max(wet - gap, 0.0) * (1.0 - math.exp(-rate * e))
 
 
 @njit(cache=True, error_model="numpy", inline="always")
@@ -3337,11 +3619,16 @@ def _tip_volume(tip):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _lay_on(aux, F, part, K, taps, col_thick, col_glob, q, f_dep, f_pick, lift_gain):
-    """The volume the brush lays at each pixel it passes over (see
-    lay_amount): the columns above it laying ``col_thick`` (``col_glob`` of
-    it from a glob), caught ``q``, on a surface taking ``f_dep`` and lifting
-    ``f_pick``, its own bristles lifting with ``lift_gain`` (see own_lift)."""
+def _lay_on(aux, F, win, part, K, taps, laying, q, f_dep, f_pick, ploughing):
+    """The volume the brush lays at each pixel of the ``part`` of the step's
+    window ``win`` it passes over (see lay_amount): the columns above it
+    laying ``laying`` = (col_thick, col_glob: that much of it from a glob,
+    lift_gain: its own bristles lifting with that, see own_lift), caught
+    ``q``, on a surface taking ``f_dep`` and lifting ``f_pick``, ploughing
+    ``ploughing`` (see _ploughs: a glob is combed less where it does)."""
+    col_thick, col_glob, lift_gain = laying
+    plough = ploughing[0]
+    bite = _bite(K)
     hollows = aux.hollows
     ch, cw, cy0, cx0, wy0, wx0 = (
         part.ch,
@@ -3356,6 +3643,9 @@ def _lay_on(aux, F, part, K, taps, col_thick, col_glob, q, f_dep, f_pick, lift_g
     d = np.empty((ch, cw))
     for y in range(ch):
         for x in range(cw):
+            comb = 1.0
+            if ploughing[1]:
+                comb -= bite * plough[cy0 - win.cy0 + y, cx0 - win.cx0 + x]
             d[y, x] = lay_amount(
                 F,
                 wy0 + y,
@@ -3368,14 +3658,18 @@ def _lay_on(aux, F, part, K, taps, col_thick, col_glob, q, f_dep, f_pick, lift_g
                 f_dep[y, x],
                 f_pick[y, x],
                 hollows[cy0 + y, cx0 + x],
+                comb,
             )
     return d
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _lay_beyond(cv, aux, F, off, K, o_taps, col_thick, col_glob, o_q, lift_gain):
+def _lay_beyond(cv, aux, F, win, off, K, o_taps, laying, o_q, ploughing):
     """:func:`_lay_on` at each of the pixels ``off`` the canvas the brush
     passes over, as on the canvas at its edge."""
+    col_thick, col_glob, lift_gain = laying
+    plough = ploughing[0]
+    bite = _bite(K)
     hollows = aux.hollows
     no = off.shape[0]
     d_off = np.zeros(no)
@@ -3398,8 +3692,138 @@ def _lay_beyond(cv, aux, F, off, K, o_taps, col_thick, col_glob, o_q, lift_gain)
             fd,
             fp,
             hollows[Y, X],
+            1.0 - bite * _at(plough, Y - win.cy0, X - win.cx0, 0.0),
         )
     return d_off
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _into_grooves(d, d_off, win, part, off, K, ploughing):
+    """A brush ploughing (``ploughing``: how far at each pixel of the step's
+    window ``win`` on the canvas, and how hard its clumps press there, see
+    _ploughs) lays its paint more where they press harder, as far as it
+    ploughs and its hair cuts
+    (see _bite), and as much in all: it rescales the volume it lays at each
+    pixel of the ``part`` of the window it passes over (``d``) and at the
+    pixels ``off`` the canvas (``d_off``, as at the canvas's edge, ``off``
+    as off_canvas gives them). Where it doesn't plough, it lays as it
+    would."""
+    w, lane, o_w, o_lane = _lanes_under(win, part, off, K, ploughing)
+    laid, pressed = 0.0, 0.0
+    for y in range(part.ch):
+        for x in range(part.cw):
+            laid += d[y, x] * w[y, x]
+            pressed += d[y, x] * w[y, x] * lane[y, x]
+    for i in range(off.shape[0]):
+        laid += d_off[i] * o_w[i]
+        pressed += d_off[i] * o_w[i] * o_lane[i]
+    if not (laid > 0 and pressed > 0):
+        return
+    # (in proportion to how hard they press, against the mean over what it
+    # lays where it ploughs: what it lays there adds up to the same)
+    mean = pressed / laid
+    for y in range(part.ch):
+        for x in range(part.cw):
+            d[y, x] *= 1.0 + w[y, x] * (lane[y, x] / mean - 1.0)
+    for i in range(off.shape[0]):
+        d_off[i] *= 1.0 + o_w[i] * (o_lane[i] / mean - 1.0)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _at(a, y, x, outside):
+    """``a[y, x]``, or ``outside`` past its edges (a pixel off the canvas
+    is taken as at the canvas's edge, which lies outside the step's window
+    on the canvas when none of the window is on the canvas)."""
+    if 0 <= y < a.shape[0] and 0 <= x < a.shape[1]:
+        return a[y, x]
+    return outside
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _lanes_under(win, part, off, K, ploughing):
+    """How far a brush ploughing (``ploughing``, over the step's window
+    ``win`` on the canvas, see _ploughs) shifts the paint it lays towards
+    where its clumps press (see _into_grooves), and how hard they press, at
+    each pixel of the ``part`` of the window it passes over and at the
+    pixels ``off`` the canvas (as at the canvas's edge)."""
+    plough, _, lanes = ploughing
+    bite = _bite(K)
+    oy, ox = part.cy0 - win.cy0, part.cx0 - win.cx0
+    w = np.empty((part.ch, part.cw))
+    lane = np.empty((part.ch, part.cw))
+    for y in range(part.ch):
+        for x in range(part.cw):
+            w[y, x] = bite * plough[oy + y, ox + x]
+            lane[y, x] = lanes[oy + y, ox + x]
+    no = off.shape[0]
+    o_w = np.empty(no)
+    o_lane = np.empty(no)
+    for i in range(no):
+        Y, X = off[i, 2] - win.cy0, off[i, 3] - win.cx0
+        o_w[i] = bite * _at(plough, Y, X, 0.0)
+        o_lane[i] = _at(lanes, Y, X, 1.0)
+    return w, lane, o_w, o_lane
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _fold_fractions(K, p, contact, f_mix, st, part, ploughing, pend):
+    """Where a brush ploughs (``ploughing``: how far at each pixel of the
+    step's window on the canvas, and how hard its clumps press there, see
+    _ploughs): how far it stirs the two wet layers into each other at each
+    pixel of the ``part`` of the window it passes over (see _stir_fraction;
+    less as far as it ploughs and its hair cuts, see _bite: in its grooves
+    the new paint lies on what is left of the old). And it adds to how far
+    the old paint below folds up over the new there once the stroke has
+    passed (``pend.folds``, see fold_pending; between its clumps, where they
+    press less, the more: see FOLD)."""
+    plough, _, lanes = ploughing
+    folds, where = pend.folds, pend.where
+    bite = _bite(K)
+    oy, ox = part.cy0 - st.win.cy0, part.cx0 - st.win.cx0
+    ch, cw = contact.shape
+    m = np.empty((ch, cw))
+    for y in range(ch):
+        for x in range(cw):
+            w = bite * plough[oy + y, ox + x]
+            k = p * p * contact[y, x] * f_mix[y, x]
+            m[y, x] = 1.0 - math.exp(
+                -K.mixing * 3.0 * p * p * contact[y, x] * f_mix[y, x] * (1.0 - w)
+            )
+            Y, X = part.cy0 + y, part.cx0 + x
+            if w > 0 and _pending_at(where, Y, X):
+                py, px = Y - where[PEND_Y0], X - where[PEND_X0]
+                fold = FOLD * K.mixing * k * w / lanes[oy + y, ox + x]
+                folds[py, px] += np.float32(fold)
+                where[PEND_FOLD_ROW0] = min(where[PEND_FOLD_ROW0], py)
+                where[PEND_FOLD_ROW1] = max(where[PEND_FOLD_ROW1], py + 1)
+                where[PEND_FOLD_COL0] = min(where[PEND_FOLD_COL0], px)
+                where[PEND_FOLD_COL1] = max(where[PEND_FOLD_COL1], px + 1)
+    return m
+
+
+@njit(cache=True, error_model="numpy")
+def fold_pending(cv, pend):
+    """The stroke has passed: where it ploughed, the old paint below folds up
+    over the new as far as it gathered to (``pend.folds``: f, folding
+    1 - e^-f of it, see fold_up). Done once, on the paint as the stroke left
+    it, so that it doesn't matter how finely the stroke was cut."""
+    where = pend.where
+    r0, r1, c0, c1 = (
+        where[PEND_FOLD_ROW0],
+        where[PEND_FOLD_ROW1],
+        where[PEND_FOLD_COL0],
+        where[PEND_FOLD_COL1],
+    )
+    if where[PEND_ON] == 0 or r0 >= r1 or c0 >= c1:
+        return
+    # (over the rows and columns where any landed)
+    folds = pend.folds
+    f = np.zeros((r1 - r0, c1 - c0))
+    for py in range(r0, r1):
+        for px in range(c0, c1):
+            if folds[py, px] > 0:
+                f[py - r0, px - c0] = 1.0 - math.exp(-folds[py, px])
+    fold_up(cv, where[PEND_Y0] + r0, where[PEND_X0] + c0, f)
 
 
 @njit(cache=True, error_model="numpy", inline="always")
