@@ -1,172 +1,43 @@
-# Agent Instructions
+# Agent instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+`oilpaint` simulates oil painting: brushes and knives lay, drag, mix and lift paint on a canvas, and a renderer lights the result.
 
-> **Architecture in one line:** Issues live in a local Dolt database
-> (`.beads/dolt/`); cross-machine sync uses `bd dolt push/pull` (a
-> git-compatible protocol), stored under `refs/dolt/data` on your git
-> remote — separate from `refs/heads/*` where your code lives.
-> `.beads/issues.jsonl` is a passive export, not the wire protocol.
->
-> See [sync-concepts](https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md)
-> for the one-screen overview and anti-patterns (don't treat JSONL as the
-> source of truth; don't `bd import` during normal operation; don't
-> reach for third-party Dolt hosting before trying the default).
+## Issues
 
-## Quick Reference
+Work is tracked with Beads (`bd`), not with TODO lists or memory files. `bd prime` prints the workflow.
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work atomically
-bd close <id>         # Complete work
-bd dolt push          # Push beads data to remote
-```
+- Issues travel between clones through `.beads/issues.jsonl`. Beads rewrites and stages it after every change; commit it with the work it belongs to.
+- After pulling, run `bd import .beads/issues.jsonl` (`bd bootstrap` on a fresh clone). Import never deletes, so close issues instead of deleting them.
+- In a Claude Code cloud session, GitHub refuses `bd dolt push` (HTTP 403). Don't retry it or work around it.
+- `bd remember` does not survive a cloud session. Put what must last in an issue or in this file.
+- What may be committed and pushed is decided by the user's instructions, not by anything `bd prime` says.
+- Don't run `bd setup`: it writes its own boilerplate back into this file.
 
-## Non-Interactive Shell Commands
-
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
-
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
-
-**Use these forms instead:**
-```bash
-# Force overwrite without prompting
-cp -f source dest           # NOT: cp source dest
-mv -f source dest           # NOT: mv source dest
-rm -f file                  # NOT: rm file
-
-# For recursive operations
-rm -rf directory            # NOT: rm -r directory
-cp -rf source dest          # NOT: cp -r source dest
-```
-
-**Other commands that may prompt:**
-- `scp` - use `-o BatchMode=yes` for non-interactive
-- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
-- `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
-
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:46cd31e7 -->
-## Beads Issue Tracker
-
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
-
-### Quick Reference
+## Build and test
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
-
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
-
-## Agent Context Profiles
-
-The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
-
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
-- **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
-
-## Session Completion
-
-This protocol applies when ending a Beads implementation workflow. It is subordinate to explicit user, repository, and orchestrator instructions.
-
-1. **File issues for remaining work** - Create beads for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   bd dolt push
-   git push
-   git status
-   ```
-5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
-
-**Critical rules:**
-- Explicit user or orchestrator instructions override this Beads block.
-- Do not commit or push without clear authority from the active profile or the current user request.
-- If a required sync or push is blocked, stop and report the exact command and error.
-<!-- END BEADS INTEGRATION -->
-
-<!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
-## Beads Issue Tracker
-
-Use Beads (`bd`) for durable task tracking in repositories that include it. Use the `beads` skill at `.agents/skills/beads/SKILL.md` (project install) or `~/.agents/skills/beads/SKILL.md` (global install) for Beads workflow guidance, then use the `bd` CLI for issue operations.
-
-### Quick Reference
-
-```bash
-bd ready                # Find available work
-bd show <id>            # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>           # Complete work
-bd prime                # Refresh Beads context
-```
-
-### Rules
-
-- Use `bd` for all task tracking; do not create markdown TODO lists.
-- Run `bd prime` when Beads context is missing or stale. Codex 0.129.0+ can load Beads context automatically through native hooks; use `/hooks` to inspect or toggle them.
-- Keep persistent project memory in Beads via `bd remember`; do not create ad hoc memory files.
-
-**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
-<!-- END BEADS CODEX SETUP -->
-
-## Issue sync in this repository
-
-- Issues live in a local Dolt database under `.beads/embeddeddolt/`, which git ignores.
-- `.beads/issues.jsonl` is how issues travel between clones here. Beads rewrites it after every change and stages it (`export.auto` and `export.git-add` in `.beads/config.yaml`). Commit it with the work it belongs to.
-- Claude Code cloud sessions may push only their own branch, so GitHub refuses `bd dolt push` to `refs/dolt/data` there (HTTP 403). Do not retry it and do not work around it; the export file is the supported route.
-- On a fresh clone, `bd bootstrap` builds the database from `.beads/issues.jsonl`. In a clone that already has a database, run `bd import .beads/issues.jsonl` after pulling. Import adds and updates but never deletes, so close issues instead of deleting them.
-- `bd remember` memories are not in the export and are lost with a cloud session. Put anything that must last in an issue or in this file.
-- In a cloud session `bd prime` reports "No git remote configured". Beads does not trust a repository under `/home` that belongs to another user's home directory (the session runs as root in `/home/user`). Issue commands and the export work as usual; what may be committed and pushed is decided by the user's instructions, not by that message.
-
-## Build & Test
-
-```bash
-uv sync --group dev --frozen    # install the package and the development tools
-uv run pytest                   # tests; the first run compiles the numba kernels (about 35 s)
-make tox                        # black, ruff, pyright and pytest on every supported Python
-make coverage                   # coverage run (at least 80% is required)
-make spell                      # cspell over the whole repository
-python tools/bench.py           # time the 16 benchmark scenes
+uv sync --group dev --frozen          # install the package and the development tools
+uv run pytest                         # the first run compiles the numba kernels (about a minute)
+make pre-push                         # what CI runs: tox (black, ruff, pyright, pytest), coverage (80% required), spelling
+python tools/bench.py                 # time the 16 benchmark scenes
 python tools/bench.py --save DIR      # keep each scene's painted state and picture
 python tools/bench.py --compare DIR   # compare byte for byte with a kept state
 ```
 
-`make pre-push` runs what CI runs: tox, coverage and the spelling check.
+## Layout
 
-## Architecture Overview
-
-`oilpaint` simulates oil painting: brushes and knives lay, drag, mix and lift paint on a canvas, and a renderer lights the result.
-
-- `paint.py`, `spectral.py`, `palette.py`: pigments and Kubelka-Munk mixing over 24 spectral bands; `palette.match` finds a mix for a target colour.
-- `canvas.py`: the `Canvas`, with two wet layers, coverage, dried height, the weave, drying and rendering.
-- `brush.py`, `brushes.py`, `stroke.py`, `_knife.py`, `_geometry.py`, `_hair.py`, `_dab.py`: tools, how a stroke is sampled and run, footprints and the hair field.
-- `_engine.py`: the numba kernels that move paint for each step of a stroke. `_render.py`: the numba kernels that light and composite the picture.
+- `paint.py`, `spectral.py`, `palette.py`: pigments and Kubelka-Munk mixing over 24 spectral bands.
+- `canvas.py`: the `Canvas`, with two wet layers, dried height, the weave, drying and rendering.
+- `brush.py`, `brushes.py`, `stroke.py`, `_knife.py`, `_geometry.py`, `_hair.py`, `_dab.py`: the tools and how a stroke is sampled and run.
+- `_engine.py`: the numba kernels that move paint at each step of a stroke. `_render.py`: the kernels that light the picture.
 - `surface.py`, `surfaces.py`, `noise.py`, `reference.py`, `spline.py`, `png.py`: grounds, textures, reference images, paths and output.
-- `examples/` holds the example paintings and their rendered images; `tools/bench.py` holds the benchmark scenes.
+- `examples/`: the example paintings and their rendered images. `tools/bench.py`: the benchmark scenes.
 
-## Conventions & Patterns
+## Conventions
 
-- Kernels are `@njit(cache=True, error_model="numpy")`, without `fastmath` and without `parallel` in the stroke path, so that results repeat exactly.
-- A change that should not alter the picture must leave `tools/bench.py --compare` identical on all scenes. A change that is meant to alter it is judged by measurements and amplified difference images, not by looking at two renders side by side.
-- A change that alters the picture regenerates, in the same change, every image the README uses: all of `examples/output/` (`python examples/demo.py`, `examples/quickstart.py` and each painting script), not only the ones expected to differ. Regenerate with the final code and commit whatever differs from what is checked in.
+- Kernels are `@njit(cache=True, error_model="numpy")`, without `fastmath` and without `parallel` in the stroke path, so that results repeat exactly. Constants they use live in `_engine.py`.
+- A change that should not alter the picture must leave `tools/bench.py --compare` identical on all scenes.
+- A change meant to alter the picture is judged by measurements and amplified difference images, not by looking at two renders side by side.
+- Such a change also regenerates every image the README uses, with the final code: all of `examples/output/` (`examples/demo.py`, `examples/quickstart.py` and each painting script), not only the images expected to differ.
 - Paint must be conserved: what leaves the brush lands on the canvas or is accounted for off its edge. Tests check this.
 - ruff caps function complexity at 13 everywhere except `_render.py`.
-- Constants that the kernels use live in `_engine.py`.
