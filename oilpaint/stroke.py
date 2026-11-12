@@ -407,7 +407,7 @@ def _pending(y0, y1, x0, x1):
     _engine.fold_pending). Returns an
     :class:`_engine.Pending`, as :func:`_engine.deposit` takes it."""
     h, w = y1 - y0, x1 - x0
-    where = [0] * 13
+    where = [0] * 14
     where[eng.PEND_ON] = 1
     where[eng.PEND_Y0], where[eng.PEND_X0] = y0, x0
     where[eng.PEND_H], where[eng.PEND_W] = h, w
@@ -436,7 +436,7 @@ _NO_PENDING = eng.Pending(
     cover=np.zeros((1, 1), np.float32),
     reach=np.zeros((1, 1), np.float32),
     held=np.zeros((1, 1), bool),
-    where=np.zeros(13, np.int64),
+    where=np.zeros(14, np.int64),
     met=np.full((1, 1), -1.0, np.float32),
     folds=np.zeros((1, 1), np.float32),
 )
@@ -697,6 +697,7 @@ def _stroke_consts(
     circle: bool,
     is_dab: bool,
     margin: float,
+    room: float,
     arc_end: float,
     hair_at: tuple[float, float, float, float],
     spacing: float,
@@ -713,6 +714,7 @@ def _stroke_consts(
         rigid=bool(bt.rigid),
         deposits=bool(bt.deposits),
         margin=float(margin),
+        room=float(room),
         # how much the surface texture (vs. the hair pattern) decides
         # where a dry brush catches
         tooth_w=float(np.clip(0.3 + (surf.tooth - 0.5), 0.0, 0.85)),
@@ -816,8 +818,14 @@ class _Run:
         self.stiff_blade = float(np.clip((bt.stiffness - 0.4) / 0.6, 0.0, 1.0))
         # where each column sits across the mark
         self.col_u = (_RING_X if brush.ring else _COL_X) * 2.0 - 1.0
-        # squeezed-out ridges are at most this wide (px); they lie just outside the mark
-        self.margin = float(np.clip(0.12 * w_typ * (1.0 + bt.spread), 0.6, 7.0)) + 1.0
+        # squeezed-out ridges lie just outside the mark, as a rule within this
+        # many px of it; a brush's side ridges within ``room`` px, which grows
+        # with the width of the mark (see lay_ridges_off)
+        spill = 0.12 * w_typ * (1.0 + bt.spread)
+        self.margin = float(np.clip(spill, 0.6, 7.0)) + 1.0
+        self.room = (
+            self.margin if (bt.rigid or is_dab) else max(self.margin, spill + 1.0)
+        )
         self.tex = _NO_TEX
 
         # (from here to lift_var, the stroke's textures are drawn from rng in
@@ -884,6 +892,7 @@ class _Run:
             circle=shape.circle,
             is_dab=is_dab,
             margin=self.margin,
+            room=self.room,
             arc_end=float(arc[-1]),
             hair_at=hair_at,
             spacing=smp.spacing,
@@ -1155,11 +1164,14 @@ class _Run:
         )
         return _Step(st, F, tables, taps)
 
-    def bounds(self):
-        """(y0, y1, x0, x1): the part of the canvas the stroke can reach."""
+    def bounds(self, ridges: float | None = None):
+        """(y0, y1, x0, x1): the part of the canvas the stroke can reach,
+        its ridges reaching ``ridges`` px past the mark (by default as far as
+        they may: its room)."""
         canvas, pts = self.canvas, self.pts
         H, W = canvas.height, canvas.width
-        pad = float(self.radii.max()) * self.reach + self.margin + 2.0
+        out = self.room if ridges is None else ridges
+        pad = float(self.radii.max()) * self.reach + out + 2.0
         bx0, by0 = (
             int(max(np.floor(pts[:, 0].min() - pad), 0)),
             int(max(np.floor(pts[:, 1].min() - pad), 0)),
@@ -1174,7 +1186,9 @@ class _Run:
         """The paint settles: fluid paint levels out, sheer edges of thick paint
         slump."""
         canvas = self.canvas
-        by0, by1, bx0, bx1 = self.bounds()
+        # (as far as its ridges reached)
+        reach = float(self.pend.where[eng.PEND_REACH])
+        by0, by1, bx0, bx1 = self.bounds(max(self.margin, min(reach, self.room)))
         if bx0 < bx1 and by0 < by1:
             eng.level(
                 canvas.top,

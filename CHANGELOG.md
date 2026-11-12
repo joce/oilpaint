@@ -198,6 +198,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- How wide the ridges a brush pushes out at its sides may be now grows with
+  the brush at every width; it stopped growing at 7 px, so that a wide brush
+  pressed hard through thick wet paint pushed it up into a narrow wall that
+  read as a dark line along the lit stroke. A white 120 px hog flat pressed
+  at 0.9 down 5 units of wet blue now leaves ridges 41 units high and 12 px
+  wide at half height, from 43 and 9 (the set-up of `tests/test_ridges.py`,
+  three seeds). A brush whose limit stays under 7 px (a hog flat up to
+  about 55 px, a round up to 33 to 43 px depending on its hair), and a wider
+  one whose ridges stay that narrow, paints exactly as before.
 - A stroke that runs partly or wholly off the canvas paints what is on the
   canvas as the same stroke would on a canvas large enough to hold it: one
   running along an edge, one starting, ending or wandering off it, a dab
