@@ -49,6 +49,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Scumbling over dried impasto: a lightly pressed brush carrying little
+  paint now leaves broken paint on the crests of the dried relief, with the
+  hollows showing through, and carries what it does not lay further along;
+  it used to lay a solid patch over crests and hollows alike until it ran
+  dry. Pressed harder or loaded more, it reaches down into the hollows
+  again: strokes pressed as hard as the default or harder cover dried paint
+  practically as before, and nothing changes on bare canvas or on dried
+  paint no rougher than the weave.
 - A brush pressed hard through thick wet paint ploughs it: wet-in-wet
   marbling. Its bristles go down through the paint they carry (they used to
   ride on it) to a level set by pressure and stiffness, cut the old paint
