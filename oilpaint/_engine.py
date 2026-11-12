@@ -1831,19 +1831,20 @@ def _move_paint(cols, src, dst, vol):
         cols[dst, c] += m
 
 
-# Two columns' paints are the same paint (for share_by_reach) if what is in
-# a unit of each differs by no more than this, relative to the largest
-# component: rounding.
+# Two columns' paints are the same paint (for share_by_reach, and two pixels'
+# for pull_up) if what is in a unit of each differs by no more than this,
+# relative to the largest component: rounding.
 SAME_COLUMN_PAINT = 1e-6
 
 
 @njit(cache=True, error_model="numpy")
 def same_paint(cols):
-    """Whether the columns holding paint (volume > 0) all hold the same paint
-    (to rounding, see SAME_COLUMN_PAINT)."""
+    """Whether the rows of ``cols`` (n, PACKED: a brush's columns, or pixels)
+    holding paint (volume > 0) all hold the same paint (to rounding, see
+    SAME_COLUMN_PAINT)."""
     ref = -1
     big = 0.0
-    for b in range(COLUMNS):
+    for b in range(cols.shape[0]):
         tv = cols[b, IV]
         if tv > 0:
             if ref < 0:
@@ -1854,7 +1855,7 @@ def same_paint(cols):
         return True
     rv = cols[ref, IV]
     tol = SAME_COLUMN_PAINT * big
-    for b in range(COLUMNS):
+    for b in range(cols.shape[0]):
         tv = cols[b, IV]
         if tv > 0 and b != ref:
             for c in range(PACKED):
@@ -5304,3 +5305,274 @@ def _upwind(layer, fx, fy, g_rows, sy0, sx0, xdir, ydir):
                 # (rounding doesn't leave less than nothing where all
                 # of it moved on)
                 layer[Y, X, ch] = nv if nv >= 0 else np.float32(0.0)
+
+
+# ----------------------------------------------------------------------------
+# a tool lifted off: paint pulled up into peaks (see stroke._dab_lift and
+# _knife._lift_off)
+
+# Sinkhorn passes of the local plan pull_up moves paint along. A few pass
+# most of it between near neighbours (95% or more of it on the marks tried);
+# what they leave unbalanced goes through a pool, so every pixel ends with
+# the volume asked of it whatever the count, and more passes would only
+# trade a little pooled paint for time.
+PULL_PASSES = 4
+# How far (in sigmas) the plan reaches: past that a pixel's paint goes to
+# no pixel directly (exp(-4.5) of the weight at the centre is left out).
+PULL_REACH = 3.0
+
+
+@njit(cache=True, error_model="numpy")
+def pull_up(top, own, fac, sigma):
+    """Each pixel of the stroke's own paint (``own``) in ``top`` (h, w,
+    PACKED: the part of the canvas lifted from) is to end with ``fac`` times
+    its volume (factors that keep the total; 1 elsewhere). Paint moves, as
+    whole paint (every pigment, scattering, volume and body with it), from
+    the pixels that fall to those that rise, mostly between pixels within
+    about ``sigma`` px of each other: those that fall give up that share of
+    their paint, those that rise keep theirs and take in what comes to
+    them. So every channel is kept, and the paint pulled up into a peak is
+    the paint around it. (Scaling each pixel's paint kept the volume but,
+    where the paint holds more than one colour, made some pigment and
+    destroyed some: up to a fifth of a band.)
+
+    Where all the pixels that change hold the same paint, it is scaled as
+    before: with one composition, scaling each channel by the factors that
+    keep the volume keeps every channel too, and it is exact, cheap and
+    leaves a single-colour mark as it always was."""
+    y0, y1, x0, x1 = _changing(own, fac)
+    if y0 >= y1:
+        return
+    t = top[y0:y1, x0:x1]
+    o = own[y0:y1, x0:x1]
+    f = fac[y0:y1, x0:x1]
+    if _uniform(t, o, f):
+        _scale_own(t, o, f)
+        return
+    loss, gain = _falls_and_rises(t, o, f)
+    n = int(math.ceil(PULL_REACH * sigma)) + 1
+    g = np.empty(n)
+    for k in range(n):
+        g[k] = math.exp(-0.5 * (k / sigma) ** 2)
+    a, b, kb = _balance(loss, gain, g, PULL_PASSES)
+    got, pool = _pulled(t, o, f, loss, a, b, kb, g)
+    _settle_pulled(t, f, gain, got, pool)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _scale_own(top, own, fac):
+    """Each own pixel's paint scaled by its factor (in single precision, as
+    numpy scaled it)."""
+    for y in range(fac.shape[0]):
+        for x in range(fac.shape[1]):
+            if own[y, x] and fac[y, x] != 1.0:
+                f = np.float32(fac[y, x])
+                for c in range(PACKED):
+                    top[y, x, c] = top[y, x, c] * f
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _changing(own, fac):
+    """The box (y0, y1, x0, x1) round the own pixels whose factor isn't 1
+    (empty: none)."""
+    h, w = fac.shape
+    y0, y1, x0, x1 = h, 0, w, 0
+    for y in range(h):
+        for x in range(w):
+            if own[y, x] and fac[y, x] != 1.0:
+                y0, y1 = min(y0, y), max(y1, y + 1)
+                x0, x1 = min(x0, x), max(x1, x + 1)
+    return y0, y1, x0, x1
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _uniform(top, own, fac):
+    """Whether the own pixels whose factor isn't 1 all hold the same paint,
+    as same_paint decides it for a brush's columns."""
+    n = 0
+    for y in range(fac.shape[0]):
+        for x in range(fac.shape[1]):
+            if own[y, x] and fac[y, x] != 1.0:
+                n += 1
+    rows = np.empty((n, PACKED))
+    i = 0
+    for y in range(fac.shape[0]):
+        for x in range(fac.shape[1]):
+            if own[y, x] and fac[y, x] != 1.0:
+                for c in range(PACKED):
+                    rows[i, c] = top[y, x, c]
+                i += 1
+    return same_paint(rows)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _falls_and_rises(top, own, fac):
+    """The volume each own pixel is to give up (h, w) and to take in."""
+    h, w = fac.shape
+    loss = np.zeros((h, w))
+    gain = np.zeros((h, w))
+    for y in range(h):
+        for x in range(w):
+            if own[y, x]:
+                v = np.float64(top[y, x, IV])
+                f = fac[y, x]
+                if f < 1.0:
+                    loss[y, x] = v * (1.0 - f)
+                elif f > 1.0:
+                    gain[y, x] = v * (f - 1.0)
+    return loss, gain
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _blur(src, g, tmp, out):
+    """``src`` (h, w) blurred by the symmetric kernel ``g`` (g[0] the centre,
+    g[k] k px out) along rows, then columns, cut off at the edges, into
+    ``out`` (``tmp``: room for the rows). (Symmetric: the sum of x times
+    blur(y) is the sum of blur(x) times y, which is what keeps the paint.)"""
+    h, w = src.shape
+    n = g.shape[0]
+    tmp[:] = 0.0
+    for y in range(h):
+        for x in range(w):
+            s = src[y, x]
+            if s == 0.0:
+                continue
+            tmp[y, x] += g[0] * s
+            for k in range(1, min(n, max(x, w - 1 - x) + 1)):
+                if x - k >= 0:
+                    tmp[y, x - k] += g[k] * s
+                if x + k < w:
+                    tmp[y, x + k] += g[k] * s
+    out[:] = 0.0
+    for y in range(h):
+        for x in range(w):
+            s = tmp[y, x]
+            if s == 0.0:
+                continue
+            out[y, x] += g[0] * s
+            for k in range(1, min(n, max(y, h - 1 - y) + 1)):
+                if y - k >= 0:
+                    out[y - k, x] += g[k] * s
+                if y + k < h:
+                    out[y + k, x] += g[k] * s
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _share(want, got):
+    """want / got where got holds anything, else 0."""
+    out = np.zeros(want.shape)
+    for y in range(want.shape[0]):
+        for x in range(want.shape[1]):
+            if want[y, x] > 0.0 and got[y, x] > 1e-300:
+                out[y, x] = want[y, x] / got[y, x]
+    return out
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _balance(loss, gain, g, passes):
+    """The Sinkhorn factors (a over the pixels that give, b over those that
+    take) of the plan a_i K_ij b_j between them, and K b: each giver gives
+    exactly ``loss`` (where any taker is within reach), each taker gets
+    about ``gain``."""
+    h, w = loss.shape
+    b = np.zeros((h, w))
+    for y in range(h):
+        for x in range(w):
+            if gain[y, x] > 0.0:
+                b[y, x] = 1.0
+    tmp = np.empty((h, w))
+    kb = np.empty((h, w))
+    ka = np.empty((h, w))
+    _blur(b, g, tmp, kb)
+    a = _share(loss, kb)
+    for _ in range(passes):
+        _blur(a, g, tmp, ka)
+        nb = _share(gain, ka)
+        for y in range(h):
+            for x in range(w):
+                if nb[y, x] > 0.0:
+                    b[y, x] = nb[y, x]
+        _blur(b, g, tmp, kb)
+        a = _share(loss, kb)
+    return a, b, kb
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _pulled(top, own, fac, loss, a, b, kb, g):
+    """What each pixel that rises takes in along the plan (h, w, PACKED),
+    and the pool (PACKED) of what had no taker within reach. Those that
+    fall are left with ``fac`` of their paint."""
+    h, w = loss.shape
+    got = np.zeros((h, w, PACKED))
+    pool = np.zeros(PACKED)
+    src = np.zeros((h, w))
+    tmp = np.empty((h, w))
+    out = np.empty((h, w))
+    for c in range(PACKED):
+        for y in range(h):
+            for x in range(w):
+                src[y, x] = 0.0
+                if loss[y, x] > 0.0:
+                    # (what is in a unit of this pixel's paint)
+                    unit = np.float64(top[y, x, c]) / np.float64(top[y, x, IV])
+                    if kb[y, x] > 1e-300 and a[y, x] > 0.0:
+                        src[y, x] = unit * a[y, x]
+                    else:
+                        pool[c] += unit * loss[y, x]
+        _blur(src, g, tmp, out)
+        for y in range(h):
+            for x in range(w):
+                if b[y, x] > 0.0:
+                    got[y, x, c] = b[y, x] * out[y, x]
+    for y in range(h):
+        for x in range(w):
+            if own[y, x] and fac[y, x] < 1.0:
+                f = np.float32(fac[y, x])
+                for c in range(PACKED):
+                    top[y, x, c] = top[y, x, c] * f
+    return got, pool
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _settle_pulled(top, fac, gain, got, pool):
+    """Those that took in more than their gain give the rest back to the
+    pool; the pool goes to those short of theirs, in proportion to what they
+    lack (or to their gain, if none lacks any); then each pixel that rises
+    keeps its paint and adds what it took in."""
+    h, w = gain.shape
+    short = np.zeros((h, w))
+    lacking, gaining = 0.0, 0.0
+    for y in range(h):
+        for x in range(w):
+            if gain[y, x] <= 0.0:
+                continue
+            gaining += gain[y, x]
+            v = got[y, x, IV]
+            if v > gain[y, x]:
+                back = (v - gain[y, x]) / v
+                for c in range(PACKED):
+                    p = got[y, x, c] * back
+                    pool[c] += p
+                    got[y, x, c] -= p
+            else:
+                short[y, x] = gain[y, x] - v
+                lacking += short[y, x]
+    for y in range(h):
+        for x in range(w):
+            if gain[y, x] <= 0.0:
+                continue
+            part = short[y, x] / lacking if lacking > 0.0 else gain[y, x] / gaining
+            for c in range(PACKED):
+                got[y, x, c] += pool[c] * part
+            _take_in(top, y, x, fac[y, x], got)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _take_in(top, y, x, f, got):
+    """A pixel that rises: its paint scaled by ``f``, as scaling it would,
+    and what it took in in place of the share of its own paint that scaling
+    adds (the same paint, to rounding, where it took in its own colour)."""
+    f32 = np.float32(f)
+    for c in range(PACKED):
+        added = np.float64(top[y, x, c]) * (f - 1.0)
+        top[y, x, c] = top[y, x, c] * f32 + np.float32(got[y, x, c] - added)

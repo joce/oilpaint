@@ -822,10 +822,18 @@ def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
         )
 
 
+# How far (in crest cells) the paint pulled up into a knife's crests comes
+# from (a Gaussian's sigma, see _engine.pull_up): crests lie about a cell
+# apart across the pull, so a crest is made of the paint beside it.
+KNIFE_PULL = 1.0
+
+
 def _lift_off(canvas, sl, under, amp, cell, direction, rng, stroke_id):
     """The stroke's own paint under a tool lifted off it is pulled up into
-    torn crests and peaks, stretched along the way the tool was moving
-    (volume-conserving; other strokes' paint is left as it is)."""
+    torn crests and peaks, stretched along the way the tool was moving: the
+    crests are made of the paint between them, which falls (see
+    _engine.pull_up), so nothing is made or lost, pigment by pigment; other
+    strokes' paint is left as it is."""
     if amp <= 0 or not under.any():
         return
     top = canvas.top[sl]
@@ -841,9 +849,5 @@ def _lift_off(canvas, sl, under, amp, cell, direction, rng, stroke_id):
     m = (wv * crest).sum() / wv.sum()
     fac = np.clip(1.0 + 2.0 * amp * under * (crest - m), 0.05, None)
     fac *= V.sum() / max((V * fac).sum(), 1e-12)
-    # (scaling each pixel's paint: where the stroke's own paint holds more
-    # than one colour, that makes some pigment and destroys some, up to a few
-    # percent of it; moving paint between pixels instead either mixes the
-    # colours together or, between neighbours only, hardly piles it up)
     fac = np.where(own, fac, 1.0)
-    top *= fac.astype(np.float32)[..., None]
+    eng.pull_up(top, own, fac, KNIFE_PULL * cell)

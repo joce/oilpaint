@@ -241,10 +241,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bristle with what is in it, round a round's bundle the short way. Where
   every bristle holds the same paint (to a millionth) it is scaled as
   before: a single dab of one paint on a clean canvas is unchanged bit for
-  bit, as are most stipples of one paint. The peak a loaded dab pulls up
-  as it lifts off is still made by scaling its paint pixel by pixel, which
-  keeps the volume but not each pigment where the mound holds several
-  colours (up to a few percent on a three-colour dab).
+  bit, as are most stipples of one paint.
+- The peaks a loaded dab, or a knife, pulls up as it lifts off keep every
+  pigment. They were made by scaling the mark's paint pixel by pixel, which
+  kept the volume but, where the paint held several colours, made and
+  destroyed pigment (up to a fifth of a band on a three-colour dab, 0.3% on
+  a knife); paint now moves into a peak from the paint around it. A mark of
+  one paint on a clean canvas is unchanged bit for bit.
 - A brush dragged hard over wet paint no longer moves more of a pixel's paint
   than is there: `drag` near 1 at high pressure (or a slick surface such as
   glass or copper under a stiff brush pressed fully down) left negative paint
