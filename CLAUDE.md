@@ -96,6 +96,7 @@ python tools/bench.py --compare DIR   # compare byte for byte with a kept state
 
 - Kernels are `@njit(cache=True, error_model="numpy")`, without `fastmath` and without `parallel` in the stroke path, so that results repeat exactly.
 - A change that should not alter the picture must leave `tools/bench.py --compare` identical on all scenes. A change that is meant to alter it is judged by measurements and amplified difference images, not by looking at two renders side by side.
+- A change that alters the picture regenerates, in the same change, every image the README uses: all of `examples/output/` (`python examples/demo.py`, `examples/quickstart.py` and each painting script), not only the ones expected to differ. Regenerate with the final code and commit whatever differs from what is checked in.
 - Paint must be conserved: what leaves the brush lands on the canvas or is accounted for off its edge. Tests check this.
 - ruff caps function complexity at 13 everywhere except `_render.py`.
 - Constants that the kernels use live in `_engine.py`.
