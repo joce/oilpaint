@@ -221,7 +221,13 @@ StrokeConsts = namedtuple(
         "ring",
         "rigid",
         "deposits",
+        # how far out (px) past the footprint the paint it pushes out lies as
+        # a rule (each step's ridges are worked out over its window with this
+        # much around it), and how far a brush's side ridges may reach at
+        # most: one holding more paint than fits in the first is wider, up to
+        # the second (see lay_ridges_off; the stroke reserves that much room)
         "margin",
+        "room",
         "tooth_w",
         "drag",
         "pickup",
@@ -348,7 +354,8 @@ Pending = namedtuple(
 # whether anything is held at all (0: a knife's, which holds nothing); the
 # box on the canvas (y0, x0, h, w); the rows and columns of it where any is
 # held (row0..row1, col0..col1); and those where any old paint is to fold up
-# (see fold_pending)
+# (see fold_pending); and how far out past the footprint (px) the ridges
+# reached where they reached past K.margin (0: nowhere, see lay_ridges_off)
 (
     PEND_ON,
     PEND_Y0,
@@ -363,7 +370,8 @@ Pending = namedtuple(
     PEND_FOLD_ROW1,
     PEND_FOLD_COL0,
     PEND_FOLD_COL1,
-) = range(13)
+    PEND_REACH,
+) = range(14)
 
 #: Which bristle columns are above each pixel (see bristle_taps): for pixel q
 #: (row-major), ``ntap[q]`` columns ``cols[q, :]`` with weights ``wts[q, :]``.
@@ -2507,15 +2515,29 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
     behind it and at its sides (the brush then moves on over the front of
     it), lumpy where the bristle clumps pressed it out (``hair``, see
     hair_field). A dab, pressed straight down and lifted, leaves a rim all
-    round."""
+    round.
+
+    A brush's side ridges are as wide as the paint in them makes them, up to
+    ``K.room``. As a rule they lie within ``K.margin`` px of the footprint; a
+    step whose side ridges reach further works them out over a window that
+    much wider across the stroke, and first records what the stroke meets
+    there (see _meet, _room_taken)."""
     ring, left, right = ridges.ring, ridges.left, ridges.right
     if not (ring[IV] > 0 or left[IV] > 0 or right[IV] > 0):
         return
     H, W = cv.top.shape[0], cv.top.shape[1]
-    win, box = _ridge_window(st, K.margin, H, W, lose_off)
+    widths = (_side_width(K, st, left), _side_width(K, st, right))
+    # how far past the footprint the side ridges reach (px)
+    reach = K.margin
+    for k in range(2):
+        if (left if k == 0 else right)[IV] > 0:
+            reach = max(reach, min(widths[k] + 1.0, K.room))
+    win, box = _ridge_window(st, _ridge_pads(st, K.margin, reach), H, W, lose_off)
     oy0, ox0, oy1, ox1 = box
     if oy0 >= oy1 or ox0 >= ox1:
         return
+    if reach > K.margin:
+        _room_taken(cv, K, pend, win, reach)
     geo = _window_geometry(st, win)
     e_along, e_lat, e_r = geo
     # a soft tool's paint fades out before its outline: the squeezed-out paint
@@ -2527,23 +2549,13 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
         _ring_weights(K, st, ring[IV], geo, (grid, c_tab, h_tab), hair, inset, weights)
         _spread_ridge(cv, pend, br, K, ring, weights, win, box, lose_off)
     if left[IV] > 0 or right[IV] > 0:
-        # scales with the mark's width
-        w = clip(0.24 * st.hold.r * st.hold.lmax, 0.6, K.margin - 1.0)
         # soft-ended, so that the ridges laid at successive steps run together smoothly
         ramp = 0.5 * st.motion.ds + 0.7
         for k in range(2):
             pk = left if k == 0 else right
             if pk[IV] <= 0:
                 continue
-            if not K.rigid:
-                # a brush's ridge is as wide as the paint in it makes it (about as
-                # high as it is wide: 1 unit of paint ~ 0.6 px), from the paint
-                # pushed out per px of travel
-                w = clip(
-                    1.2 * math.sqrt(pk[IV] / max(st.motion.ds, 0.5)),
-                    0.8,
-                    K.margin - 1.0,
-                )
+            w = widths[k]
             for y in range(e_lat.shape[0]):
                 for x in range(e_lat.shape[1]):
                     lat = e_lat[y, x]
@@ -2567,24 +2579,69 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _ridge_window(st, margin, H, W, lose_off):
+def _side_width(K, st, pk):
+    """How wide (px) the ridge of the paint ``pk`` a step pushes out to one
+    side lies. A brush's is as wide as the paint in it makes it (about as
+    high as it is wide: 1 unit of paint ~ 0.6 px), from the paint pushed out
+    per px of travel, up to the room the stroke has (K.room); a knife's
+    scales with the mark's width, within the margin."""
+    if K.rigid:
+        return clip(0.24 * st.hold.r * st.hold.lmax, 0.6, K.margin - 1.0)
+    return clip(1.2 * math.sqrt(pk[IV] / max(st.motion.ds, 0.5)), 0.8, K.room - 1.0)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _ridge_pads(st, margin, reach):
+    """How many px the ridge window of a step reaches past the step's
+    window, down and across the canvas: ``margin`` all round, and as far as
+    side ridges reaching ``reach`` px past the footprint need across the
+    stroke."""
+    if reach <= margin:
+        m = int(math.ceil(margin))
+        return m, m
+    more = reach - margin
+    pad_y = margin + more * abs(st.motion.tx)
+    pad_x = margin + more * abs(st.motion.ty)
+    return int(math.ceil(pad_y)), int(math.ceil(pad_x))
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _room_taken(cv, K, pend, win, reach):
+    """A brush's side ridges reach ``reach`` px past its footprint, further
+    than K.margin, over the window ``win`` (ey0, ex0, ey1, ex1): record what
+    the stroke meets there before they land on it (see _meet, whose band
+    reaches K.margin), and how far out they reached (PEND_REACH: the stroke
+    settles as far, see stroke._Run.bounds)."""
+    where = pend.where
+    if where[PEND_ON] == 0:
+        return
+    where[PEND_REACH] = max(where[PEND_REACH], int(math.ceil(reach)))
+    if K.dig > 0 or K.is_dab or not K.ploughs:
+        return
+    ey0, ex0, ey1, ex1 = win
+    _meet_box(cv, K, pend, ey0, ey1, ex0, ex1)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _ridge_window(st, pads, H, W, lose_off):
     """The window the ridges of a step are worked out on: the step's window
-    with a ``margin`` around it (the ridges lie just outside the footprint),
-    the part of it on the canvas, or all of it with ``lose_off``. Returns the
-    window (ey0, ex0, ey1, ex1: rows and columns in canvas coordinates; with
-    ``lose_off`` it may reach past the canvas), and the block of it on the
-    canvas (oy0, ox0, oy1, ox1, in the window; empty: none)."""
+    with ``pads`` (px down, px across the canvas) around it (the ridges lie
+    just outside the footprint), the part of it on the canvas, or all of it
+    with ``lose_off``. Returns the window (ey0, ex0, ey1, ex1: rows and
+    columns in canvas coordinates; with ``lose_off`` it may reach past the
+    canvas), and the block of it on the canvas (oy0, ox0, oy1, ox1, in the
+    window; empty: none)."""
     win = st.win
-    m_px = int(math.ceil(margin))
-    ey0, ex0 = max(win.y0 - m_px, 0), max(win.x0 - m_px, 0)
-    ey1, ex1 = min(win.y0 + win.hh + m_px, H), min(win.x0 + win.ww + m_px, W)
+    my, mx = pads
+    ey0, ex0 = max(win.y0 - my, 0), max(win.x0 - mx, 0)
+    ey1, ex1 = min(win.y0 + win.hh + my, H), min(win.x0 + win.ww + mx, W)
     oy0, ox0, oy1, ox1 = 0, 0, ey1 - ey0, ex1 - ex0
     if lose_off:
         # (the whole window, off the canvas too)
-        fy0, fx0 = win.y0 - m_px, win.x0 - m_px
+        fy0, fx0 = win.y0 - my, win.x0 - mx
         oy0, ox0, oy1, ox1 = ey0 - fy0, ex0 - fx0, ey1 - fy0, ex1 - fx0
         ey0, ex0 = fy0, fx0
-        ey1, ex1 = win.y0 + win.hh + m_px, win.x0 + win.ww + m_px
+        ey1, ex1 = win.y0 + win.hh + my, win.x0 + win.ww + mx
     return (ey0, ex0, ey1, ex1), (oy0, ox0, oy1, ox1)
 
 
@@ -3188,19 +3245,35 @@ def _meet(cv, st, K, pend):
     """Record how far the wet paint the brush is about to meet can be
     ploughed (see _met), at each pixel of the step's window on the canvas and
     all round it as far as the brush moves in the step or lays the paint it
-    pushes out to its sides (``K.margin``), whichever is further: before
+    pushes out to its sides as a rule (``K.margin``; further out, see
+    _room_taken), whichever is further: before
     what it pushes ahead or aside lands there. It records a pixel the first
     time it comes there, however lightly pressed (and the pixel holds none
     of the stroke's own paint): what the stroke met there, not what it left
     of it, stirred into it or pushed onto it. (Not yet recorded: below 0.)"""
-    ids = cv.top_id
-    met, where = pend.met, pend.where
     win = st.win
     m = int(math.ceil(max(st.motion.ds, K.margin))) + 1
+    # (the window, so much bigger)
+    _meet_box(
+        cv,
+        K,
+        pend,
+        win.cy0 - m,
+        win.cy0 + win.ch + m,
+        win.cx0 - m,
+        win.cx0 + win.cw + m,
+    )
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _meet_box(cv, K, pend, y0, y1, x0, x1):
+    """:func:`_meet` over the rows ``y0``..``y1`` and columns ``x0``..``x1``
+    of the canvas, as far as they lie within the box the stroke can reach."""
+    ids = cv.top_id
+    met, where = pend.met, pend.where
     by0, bx0 = where[PEND_Y0], where[PEND_X0]
-    # (the window, so much bigger, within the box the stroke can reach)
-    y0, y1 = max(win.cy0 - m, by0), min(win.cy0 + win.ch + m, by0 + where[PEND_H])
-    x0, x1 = max(win.cx0 - m, bx0), min(win.cx0 + win.cw + m, bx0 + where[PEND_W])
+    y0, y1 = max(y0, by0), min(y1, by0 + where[PEND_H])
+    x0, x1 = max(x0, bx0), min(x1, bx0 + where[PEND_W])
     for Y in range(y0, y1):
         for X in range(x0, x1):
             if met[Y - by0, X - bx0] < 0 and ids[Y, X] != K.stroke_id:
