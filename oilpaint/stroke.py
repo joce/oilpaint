@@ -1164,14 +1164,14 @@ class _Run:
         )
         return _Step(st, F, tables, taps)
 
-    def bounds(self, margin: float | None = None):
+    def bounds(self, ridges: float | None = None):
         """(y0, y1, x0, x1): the part of the canvas the stroke can reach,
-        its ridges reaching ``margin`` px past the mark (by default as far as
+        its ridges reaching ``ridges`` px past the mark (by default as far as
         they may: its room)."""
         canvas, pts = self.canvas, self.pts
         H, W = canvas.height, canvas.width
-        room = self.room if margin is None else margin
-        pad = float(self.radii.max()) * self.reach + room + 2.0
+        out = self.room if ridges is None else ridges
+        pad = float(self.radii.max()) * self.reach + out + 2.0
         bx0, by0 = (
             int(max(np.floor(pts[:, 0].min() - pad), 0)),
             int(max(np.floor(pts[:, 1].min() - pad), 0)),

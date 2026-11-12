@@ -2529,9 +2529,10 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
     widths = (_side_width(K, st, left), _side_width(K, st, right))
     # how far past the footprint the side ridges reach (px)
     reach = K.margin
-    for k in range(2):
-        if (left if k == 0 else right)[IV] > 0:
-            reach = max(reach, min(widths[k] + 1.0, K.room))
+    if left[IV] > 0:
+        reach = max(reach, widths[0] + 1.0)
+    if right[IV] > 0:
+        reach = max(reach, widths[1] + 1.0)
     win, box = _ridge_window(st, _ridge_pads(st, K.margin, reach), H, W, lose_off)
     oy0, ox0, oy1, ox1 = box
     if oy0 >= oy1 or ox0 >= ox1:
@@ -2596,10 +2597,7 @@ def _ridge_pads(st, margin, reach):
     window, down and across the canvas: ``margin`` all round, and as far as
     side ridges reaching ``reach`` px past the footprint need across the
     stroke."""
-    if reach <= margin:
-        m = int(math.ceil(margin))
-        return m, m
-    more = reach - margin
+    more = max(reach - margin, 0.0)
     pad_y = margin + more * abs(st.motion.tx)
     pad_x = margin + more * abs(st.motion.ty)
     return int(math.ceil(pad_y)), int(math.ceil(pad_x))
@@ -2611,12 +2609,12 @@ def _room_taken(cv, K, pend, win, reach):
     than K.margin, over the window ``win`` (ey0, ex0, ey1, ex1): record what
     the stroke meets there before they land on it (see _meet, whose band
     reaches K.margin), and how far out they reached (PEND_REACH: the stroke
-    settles as far, see stroke._Run.bounds)."""
+    settles as far, see stroke._Run.settle)."""
     where = pend.where
     if where[PEND_ON] == 0:
         return
     where[PEND_REACH] = max(where[PEND_REACH], int(math.ceil(reach)))
-    if K.dig > 0 or K.is_dab or not K.ploughs:
+    if not _meets(K):
         return
     ey0, ex0, ey1, ex1 = win
     _meet_box(cv, K, pend, ey0, ey1, ex0, ex1)
@@ -3198,7 +3196,7 @@ def _ploughs(cv, F, st, K, pend):
     win = st.win
     press = smoothstep(PLOUGH_P0, PLOUGH_P1, st.hold.p)
     nowhere = np.zeros((1, 1))
-    if K.dig > 0 or K.is_dab or not K.ploughs or pend.where[PEND_ON] == 0:
+    if not _meets(K) or pend.where[PEND_ON] == 0:
         return nowhere, False, nowhere
     # (what the stroke meets is recorded however lightly it is pressed: it
     # may come back over it harder, after a light pass has laid its paint
@@ -3241,13 +3239,21 @@ def _any_above(a, y0, y1, x0, x1):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
+def _meets(K):
+    """Whether a stroke records what it meets (see _meet): one with bristles
+    that may plough (a point cuts instead, a dab or a drop of spatter only
+    presses, see StrokeConsts.ploughs)."""
+    return not (K.dig > 0 or K.is_dab or not K.ploughs)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
 def _meet(cv, st, K, pend):
     """Record how far the wet paint the brush is about to meet can be
     ploughed (see _met), at each pixel of the step's window on the canvas and
     all round it as far as the brush moves in the step or lays the paint it
     pushes out to its sides as a rule (``K.margin``; further out, see
-    _room_taken), whichever is further: before
-    what it pushes ahead or aside lands there. It records a pixel the first
+    _room_taken), whichever is further: before what it pushes ahead or aside
+    lands there. It records a pixel the first
     time it comes there, however lightly pressed (and the pixel holds none
     of the stroke's own paint): what the stroke met there, not what it left
     of it, stirred into it or pushed onto it. (Not yet recorded: below 0.)"""
