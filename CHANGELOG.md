@@ -49,6 +49,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The Bob Ross example paints its clouds the way he did. Titanium white is
+  scrubbed straight onto the wet sky with little circles, along the top of
+  each billow first and then down into the body; a clean, dry brush blends
+  the base into the blue, fluffs it, and is drawn once across. A cloud is
+  several such masses, the farthest first, so the bright top of one stands
+  against the blended base of the one behind. (They were one long stroke of
+  white each, over sky lifted beforehand with a clean brush, on a ruled
+  base, and never blended: flat white from top to bottom.) Measured on the
+  big cloud, where 1 is clean white and 0 the sky beside it: the white now
+  falls from 0.85 near the top to 0.58 near the base instead of 0.95 to
+  0.88; the base melts into the sky over 36 px (from 20% to 80%) instead of
+  7, the top edge over 3 px instead of 2. The script only; the engine is
+  unchanged.
 - A wide brush pressed hard through thick paint no longer throws the paint
   under its middle out to its sides. Under a plate the paint has to travel
   to an edge to get out, and the further in the slower: now only paint
