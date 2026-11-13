@@ -842,6 +842,9 @@ class _Run:
         self.chatter, self.blade_tilt = tex.chatter, tex.blade_tilt
         nominal, radii = _radii(smp, tex.wobble, bt)
         self.radii = radii
+        # the widest the footprint reaches across the stroke, either side of
+        # its centre (px): the largest r * lmax over its steps (see _step)
+        self.lateral = 0.0
         self.lift_reach, self._lift_from = _lift_reach(bt, eff, smp, arc, radii)
         if bt.rigid:
             pad = float(radii.max()) * shape.reach + 3.0
@@ -1019,6 +1022,7 @@ class _Run:
             tables = (grid, c_tab, h_tab)
             sf = _signed_floor(math.cos(seg.phi), self.aspect)
             across, uscale = abs(sf), side / sf
+        self.lateral = max(self.lateral, r * lmax)
         # On a thin brush one pixel spans several bristle columns: sample across
         # it so that every column reaches the canvas (else paint in the columns
         # between pixel centres would only come out by diffusion, and thin
@@ -1235,6 +1239,25 @@ class _Run:
             eng.clear_negative(canvas.top, canvas.und, by0, by1, bx0, bx1)
             eng.fix_coverage(
                 canvas.top, canvas.und, canvas.top_a, canvas.und_a, by0, by1, bx0, bx1
+            )
+            self._cover_ramps(by0, by1, bx0, bx1)
+
+    def _cover_ramps(self, by0: int, by1: int, bx0: int, bx1: int) -> None:
+        """Where a wide brush's own paint ends in a slope, the last pixel
+        covers as the slope says (see _engine.cover_ramps): by how wide its
+        footprint reached across the stroke (``lateral``, see RAMP_FROM)."""
+        if self.bt.rigid:
+            return
+        ramps = float(eng.smoothstep(eng.RAMP_FROM, eng.EDGE_FREE, self.lateral))
+        if ramps > 0:
+            canvas = self.canvas
+            eng.cover_ramps(
+                canvas.top,
+                canvas.top_a,
+                canvas.top_id,
+                self.stroke_id,
+                (by0, by1, bx0, bx1),
+                ramps,
             )
 
 
