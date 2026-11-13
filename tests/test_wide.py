@@ -215,10 +215,16 @@ def test_a_wide_brush_s_set_down_bead_is_no_wall(bed):
     instead of 21.2 to 23.3); it stood 5.9 to 7.1 times as high, a wall
     against the light. And no more than 1.8 times its side ridges (0.79 to
     1.17 times down the bed, 1.12 to 1.72 on bare canvas, over those six
-    sets)."""
+    sets). Since that 36 px bead is now lower, a 120 px bead back at its
+    old height would still pass those; so down the bed its own height is
+    bound too, below 21.0 units: 19.26 over 30 strokes, and five of them
+    chosen at random reach 21.0 in none of 20 000 draws; its old height,
+    22.35 over the same 30, does in 99.9% of them."""
     b120, b36 = bead(120, bed), bead(36, bed)
     assert b120 < (4.5 if bed else 3.8) * b36
     assert b120 < 1.8 * ridges(120, bed)[0]
+    if bed:
+        assert b120 < 21.0
 
 
 def _notch(w, bed):
@@ -752,7 +758,8 @@ def test_a_ridge_s_cover_reaches_its_paint_by_the_footprint_s_width(w, angle):
     centre: 0.442 of the way). Read where its share is whole along the
     step, 0.1 px past w: it covers 0.4 of that pixel on the 120 px flat,
     0.121 on the 32 px one, none of it on the 120 px flat dragged edge-on
-    (28 px across)."""
+    (28 px across). Inside the footprint it covers from 0.3 w in, as it
+    always has (not 0.3 times as far as it reaches)."""
     run, st, tables = _step_tables(w=w, angle=angle, i=3)
     K, hold = run.K, st.hold
     half = hold.r * hold.lmax
@@ -775,6 +782,9 @@ def test_a_ridge_s_cover_reaches_its_paint_by_the_footprint_s_width(w, angle):
     whole = cover(wd - 2.0)
     assert whole > 0.2
     assert cover(wd + 0.1) / whole == pytest.approx(want[w, angle], abs=1e-9)
+    # inside the footprint its cover starts 0.3 w in, whatever its reach
+    assert cover(-0.3 * wd + 0.05) == pytest.approx(whole, rel=1e-9)
+    assert cover(-0.3 * wd - 0.05) == 0.0
 
 
 def test_a_clean_wide_brush_picks_up_and_leaves_the_rest_under_it():

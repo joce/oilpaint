@@ -114,27 +114,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not at all up to 28 px (there a side ridge's cover is as before), fully
   from 40 px.
 - A brush's side ridges start where it is set down and join the bead
-  there, at every width, on bare canvas and down wet paint. They used to
-  start a step late: everything the brush squeezed out and ploughed aside
-  as it was set down went into the bead, so there was a notch at each
-  corner. Now what any step would squeeze out and plough aside goes to its
-  sides along the way it moves in that first step, and only what setting
-  it down adds goes into the bead. Hard flats pressed at 0.9, loaded 45 w /
+  there. They used to start a step late: everything the brush squeezed out
+  and ploughed aside as it was set down went into the bead, so there was a
+  notch at each corner. Now what any step would squeeze out and plough
+  aside goes to its sides along the way it moves in that first step, and
+  only what setting it down adds goes into the bead. On bare canvas this
+  changes only a brush loaded beyond what its hair holds as it is set
+  down: heavy loads from about 16 px (a hard 10 px flat loaded 45 w / 36,
+  and ordinary loads at any width, are painted exactly as before; 60
+  units on a 10 px brush is enough to change it); down wet
+  paint it changes every stroke, ordinary loads included, at any size.
+  There a small brush's stroke now starts flush, without a bead: the wet
+  paint heaped where it was set down was what a step would have pushed
+  aside. Heavily loaded hard flats down 5 units of wet blue (five strokes):
+  the bead stands 0.02 units instead of 1.19 at 10 px (the paint added
+  where it was set down, the mean across the middle of the mark, -2.35
+  instead of -1.42: the brush takes up some of the blue there), 0.88
+  instead of 2.03 at 16 px; the end still reads as an end, with a light
+  top edge and its corners filled. Hard flats pressed at 0.9, loaded 45 w /
   36 (30 strokes each): just past the bead their side ridges stood 0.79,
   0.55 and 0.56 of their height further on at 36, 70 and 120 px on bare
   canvas and stand 1.05, 1.02 and 0.99 now; down 5 units of wet blue 0.17,
   0.34 and 0.46, now 0.84, 0.99 and 1.02. The bead comes out lower, most
   down wet paint at small sizes (the mean of five strokes, the range over
-  six sets of five): down the wet blue 2.7 to 2.8 units instead of 5.0 to
-  5.2 at 24 px, 5.0 to 5.3 instead of 8.2 to 9.0 at 36, 5.6 to 5.9 instead
+  up to six sets of five): down the wet blue 0.02 units instead of 1.19 at
+  10 px, 0.88 instead of 2.03 at 16, 2.7 to 2.8 instead of 5.0 to 5.2 at
+  24 px, 5.0 to 5.3 instead of 8.2 to 9.0 at 36, 5.6 to 5.9 instead
   of 9.0 at 40, 10.5 to 11.0 instead of 13.6 to 14.2 at 70 and 18.6 to 20.0
   instead of 21.2 to 23.3 at 120; on bare canvas 3.9 to 4.0 instead of 4.8
   at 24 px, 6.5 to 7.0 instead of 7.9 to 8.1 at 40, 11.9 to 12.7 instead
   of 13.3 to 13.9 at 70 and 19.3 to 21.7 instead of 20.6 to 23.2 at 120. A
   120 px flat's bead stands 0.79 to 1.17 times as high as the side ridges
   beside it down the bed (0.91 to 1.36 before) and 1.12 to 1.72 times on
-  bare canvas (1.23 to 1.84). Strokes of 10 px with ordinary loads on bare
-  canvas, knives, dabs and stipples are painted exactly as before.
+  bare canvas (1.23 to 1.84). Knives, dabs and stipples are painted
+  exactly as before.
 - Where a wide brush's own paint at the edge of its stroke ends in a slope,
   the last pixel of it (if it holds at least `MIN_FILM`) covers as much of
   itself as the slope carried on says, instead of as little as the thicker
