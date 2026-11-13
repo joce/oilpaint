@@ -140,14 +140,16 @@ BEAD_REACH = 1.3
 # Where the stroke's own paint at its edge ends in a slope, its last pixel
 # covers at least as much as the slope carried on says (see cover_ramps),
 # not as little as the films beside it would: a pixel holding 2 units next
-# to 3 and 4.4 covered a third of itself, pale in a solid edge. On a 120 px
-# flat's level edge, heavily loaded (five strokes, mean and range), the
-# outer pixels holding over a unit that come out more than 4 levels pale:
-# 45% (18 to 84%) without it, 12% (3 to 19%) with it; 25% (15 to 41%) and
-# 4% (0 to 10%) for a 70 px flat. The palest stay as pale (up to 138
-# levels): see RAMP_EVEN. By how wide the stroke's footprint reached across it (the most
-# of r * lmax over its steps): fully from more than 2 EDGE_FREE px, not at
-# all up to 2 RAMP_FROM, smoothly in between (no step where it starts).
+# to 3 and 4.4 covered a third of itself, pale in a solid edge. The paint
+# that settles at the foot of a slope after the brush has passed (see level,
+# soften) does not change its coverage. On the level edges of heavily loaded
+# red 120 px and 70 px flats (seeds 1 to 5, and 1 to 10), the outer pixels
+# holding over a unit come out 25 and 22 levels paler than the stroke on
+# average with it, 87 and 73 without it (a pale fringe all along the edge,
+# even with RIDGE_COVER). By how wide the stroke's footprint reached across
+# it (the most of r * lmax over its steps): fully from more than 2 EDGE_FREE
+# px, not at all up to 2 RAMP_FROM, smoothly in between (no step where it
+# starts).
 RAMP_FROM = 14.0
 # ... and only on a slope: as far as the film two pixels in is thicker than
 # the one next to it (relative to the thicker), from none at RAMP_RISE[0]
@@ -164,9 +166,24 @@ RAMP_SOLID = 0.95
 # of 240 columns crossing the edge of a heavy black stroke (120 units, five
 # canvases) 168 to 210 kept an in-between pixel at 50 to 140 px, against
 # 208 to 240 with no slope cover at all; with it, as with none (one column
-# in 12 000 differs), for a 120 px flat's level edge 12% pale instead of
-# 9%.
+# in 12 000 differs) (measured before RIDGE_COVER).
 RAMP_EVEN = 0.15
+# A brush's side ridge (see _ridge) holds paint half a px further out than
+# _geo(e, w) covers, so its last pixel took paint that covered nothing:
+# right after the steps of a heavy 70 px stroke a foot held 0.82 units over
+# 0.17 of itself, a film 4.8 thick beside one of 2.1, and the paint that
+# settled into it later made it thicker still: pale feet along a level edge,
+# a notch at each step of a slanting one. On a wide brush its cover reaches
+# RIDGE_COVER px further, as far as its paint, by how wide the footprint is
+# across the stroke (as cover_ramps: smoothly from RAMP_FROM to EDGE_FREE).
+# Heavily loaded red 70 px and 120 px flats (seeds 1 to 10, and 1 to 5):
+# their level edges' position wavers from column to column (the mean of its
+# second difference) by 0.113 and 0.123 px instead of 0.169 and 0.165;
+# black 50 px strokes loaded 120 keep an in-between pixel in 236 of 240
+# columns across a slanting edge instead of 199. Narrower footprints keep
+# their cover: there it took up to 4 of 120 such columns from a heavily
+# loaded 10 px stroke and widened what shows of it by up to half a px.
+RIDGE_COVER = 0.5
 # Paint thinner than this can't form a continuous film (the renderer, see
 # canvas.MIN_FILM, counts it by the same measure).
 MIN_FILM = 0.15
@@ -2541,8 +2558,22 @@ def squeeze_out(br, K, st, col_vol, col_load, hold, ridges, col_u):
     if st.hold.lift_len > 0:
         # (lifting off, the clumps press less and less out at the edges)
         rate *= clip((K.arc_end - st.motion.arc_i) / st.hold.lift_len, 0.0, 1.0)
+    # As a brush is set down it squeezes much more out (set_down): into the
+    # bead all round where it landed. What it squeezes out as any step does
+    # goes to its sides along the way it moves in this step, as at the steps
+    # after it: its side ridges start where it was set down and join the
+    # bead. (They used to start a step late: hard flats pressed at 0.9 and
+    # loaded 45 w / 36, down 5 units of wet blue, had their side crest fall
+    # just past the bead to 0.18 of its height further on at 36 px, 0.28 at
+    # 70 and 0.55 at 120; now 0.49, 0.68 and 0.88; on bare canvas 0.82, 0.66
+    # and 0.55, now 1.05, 1.09 and 0.97. Seeds 1 to 5.) A knife's and a
+    # dab's all go into the rim round them, as before: a dab doesn't move,
+    # and a knife lays no bead (its rim is the slab's edge all round).
+    aside = 1.0
     if st.motion.touchdown:
-        rate += 0.03 * (0.3 + p)
+        set_down = 0.03 * (0.3 + p)
+        aside = 0.0 if (K.rigid or K.is_dab) else rate / (rate + set_down)
+        rate += set_down
     wide = _wide(K, st)
     # (the footprint reaches half px either side of its centre across the
     # stroke; a column at u across the bristles lies |u| r / |uscale| px from
@@ -2562,11 +2593,10 @@ def squeeze_out(br, K, st, col_vol, col_load, hold, ridges, col_u):
             out = (tip[b, c] + belly[b, c]) * frac
             tip[b, c] -= tip[b, c] * frac
             belly[b, c] -= belly[b, c] * frac
-            if st.motion.touchdown:
-                ring[c] += out
-            else:
-                right[c] += out * w_right
-                left[c] += out * (1.0 - w_right)
+            side = out * aside
+            ring[c] += out - side
+            right[c] += side * w_right
+            left[c] += side * (1.0 - w_right)
 
 
 @njit(cache=True, error_model="numpy")
@@ -2825,9 +2855,15 @@ def _ring_width(K, st, vol):
     footprint's narrow side allows; where a brush is set down, a bead about
     as high (1 unit of paint ~ 0.6 px) as it is wide (its outer edge
     reaching BEAD_REACH times as far); both within the margin, the window a
-    step's ridges are worked out over (a wide brush's bead stays narrower
-    than its side ridges may grow: what a wide brush can't push out from
-    under its middle doesn't reach it, see EDGE_FREE)."""
+    step's ridges are worked out over. (A wide brush's bead is held to a
+    narrower w than its side ridges may have, but its cross-section is not
+    theirs: a parabola 2 w wide, as wide at half height as a side ridge
+    nearly twice as wide (see _ridge). A 120 px flat's bead is as wide at
+    half height as its side ridges, 11.4 px against 11.2 down 5 units of wet
+    blue and 12.1 against 12.3 on bare canvas, and as high against those
+    beside it as a 36 px flat's (0.89 times, 1.20 on bare canvas, against
+    0.83 and 1.67: seeds 1 to 5). Held to K.room, it came out twice as wide
+    at half height as they are, a broad pale cap.)"""
     lmax = st.hold.lmax
     if K.is_dab or K.rigid:
         return clip(
@@ -2881,7 +2917,12 @@ def _side_weight(K, st, lat, along, r, w, ramp, inset, c_tab, hair):
         lump = (0.3 + 1.4 * hv) * smoothstep(
             0.55 - st.hold.p, 0.75 - st.hold.p, hv + 0.3
         )
-        return _ridge(e_side, w) * box * lump, _geo(e_side, w) * box
+        # (its paint reaches half a px past where _geo(e, w) stops covering;
+        # a wide brush's covers as far, see RIDGE_COVER)
+        reach = w + RIDGE_COVER * smoothstep(
+            RAMP_FROM, EDGE_FREE, st.hold.r * st.hold.lmax
+        )
+        return _ridge(e_side, w) * box * lump, _geo(e_side, reach) * box
     return _tent(e_side, w) * box, _geo(e_side, w) * box
 
 

@@ -65,7 +65,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Their steepest outward fall, the median over the rows, is 2.1 units a px
   instead of 5.0 (3.0 to 3.9 at the steepest row instead of 7.1 to 9.7);
   the middle of the stroke stays 10.0 units thick instead of 7.7, furrowed
-  by the hair; the bead where it was set down stands 23 units high instead
+  by the hair; the bead where it was set down stands 21 units high instead
   of 54. On bare canvas its ridges stand 13 to 15 units high instead of 29
   to 33. So a wide, heavily loaded stroke no longer has dark rails along
   its sides and a black bar where it was set down. A clean or nearly dry
@@ -79,18 +79,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before: a flat up to 37 to 39 px, a round or filbert up to 30 to 52 px
   depending on its hair and how hard it is pressed (a sable round pressed
   hard, up to 26 px).
+- The edges of a wide brush's stroke are anti-aliased where they were
+  notched. The last pixel of a side ridge held paint it didn't cover: a
+  film several times as thick as the paint beside it, which came out pale,
+  so that wherever the edge of a heavy stroke stepped out by a pixel (its
+  width wobbles: a "level" edge is a gentle curve) there was a pale notch,
+  and the edge of a slanting stroke was a sawtooth. Now a side ridge covers
+  as far as its paint reaches. On the edges of heavily loaded strokes of 70
+  and 120 px flats, the edge's position wavers from column to column by
+  0.113 and 0.123 px on average instead of 0.169 and 0.165; across the
+  slanting edge of a heavily loaded black 50 px stroke, 236 of 240 columns
+  keep an in-between pixel instead of 199. More of the pixels along such
+  an edge are partly covered, as the edge runs through them: more pixels
+  come out a little paler than the stroke and fewer a lot. It goes by how
+  wide the footprint is across the stroke, as the slope cover below: not
+  at all up to 28 px (narrower strokes are painted exactly as before),
+  fully from 40 px.
+- A brush's side ridges start where it is set down and join the bead
+  there. They used to start a step late, everything squeezed out as the
+  brush was set down going into the bead, so there was a notch at each
+  corner. Hard flats pressed at 0.9, loaded 45 w / 36, down 5 units of wet
+  blue: just past the bead their side ridges stood 0.18, 0.28 and 0.55 of
+  their height further on at 36, 70 and 120 px, and stand 0.49, 0.68 and
+  0.88 now (0.82, 0.66 and 0.55 on bare canvas, now 1.05, 1.09 and 0.97).
+  The bead comes out a little lower (a 120 px flat's 19.7 units instead of
+  21.6 down the wet blue, 19.3 instead of 21.1 on bare canvas: 0.89 and
+  1.20 times its side ridges beside it, a 36 px flat's 0.83 and 1.67). Any
+  brush stroke; dabs and knives as before.
 - Where a wide brush's own paint at the edge of its stroke ends in a slope,
   the last pixel of it (if it holds at least `MIN_FILM`) covers as much of
   itself as the slope carried on says, instead of as little as the thicker
-  paint beside it would. On the level edge of a heavy stroke of a 120 px
-  flat on bare canvas, the outer pixels holding over a unit that come out
-  more than 4 levels paler than the stroke fall to 3 to 19% over five
-  strokes (12% on average), from 15 to 66% over the same five (36%); for a
-  70 px flat, over five strokes, to 0 to 10% (4%), from 3 to 13% (8%).
-  Now and then a stroke bulges at its edge and comes out far paler, as
-  before (over ten 70 px strokes, 0 to 69% against 0 to 71%; pooled, 8.3%
-  against 16.7%). The palest pixels stay as pale as before (up to about
-  135 levels). Other strokes' paint, the lower layer and
+  paint beside it would: the paint that settles there once the brush has
+  passed no longer leaves a pale fringe along the edge. On the level edges
+  of heavy strokes of 120 px and 70 px flats on bare canvas, the outer
+  pixels holding over a unit come out 25 and 22 levels paler than the
+  stroke on average (five strokes, and ten), against 87 and 73 without
+  this. Other strokes' paint, the lower layer and
   thinner traces keep their coverage, and so does a foot whose neighbours
   along the edge hold paint more than 15% unlike: the steps of a slanting
   edge's staircase keep their anti-aliasing (a heavily loaded wide stroke's
