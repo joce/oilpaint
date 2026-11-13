@@ -667,7 +667,8 @@ the canvas, and the tools push it around:
   lasts a brush width or two, merges with its neighbour, splits or fades,
   and the edges of the stroke are ragged rather than ruled.
 * **Setting down and lifting off.** An overloaded brush set down squeezes a
-  lumpy bead of paint out behind and beside where it landed. At the end a
+  lumpy bead of paint out behind and beside where it landed, and its side
+  ridges start there, joining the bead at its corners. At the end a
   stiff brush leaves the paint one clump after another (a ragged end, over a
   stretch set by how far its bristle tips travel as it comes up: barely
   longer on a wide brush, and different on every stroke), and each clump
