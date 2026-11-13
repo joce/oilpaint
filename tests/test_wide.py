@@ -206,26 +206,19 @@ def test_the_paint_held_back_stays_under_a_wide_brush():
 def test_a_wide_brush_s_set_down_bead_is_no_wall(bed):
     """Where a 120 px flat is set down, it squeezes not much more out behind
     it, for its size, than a 36 px flat does: its bead stands no more than
-    3.3 times as high (2.7 and 2.9 down the bed, seeds 1 to 5 and 6 to 10;
-    2.9 and 3.1 on bare canvas; it stood 5.9 to 7.1 times as high, a wall
-    against the light), and no more than 1.8 times its side ridges (0.89
-    and 0.89 times down the bed, 1.20 and 1.17 on bare canvas)."""
+    3.8 times as high on bare canvas (3.08 over five of 30 strokes chosen
+    at random, at most 3.72 in 20 000 draws) and 4.5 times down 5 units of
+    wet blue (3.71, at most 4.27: since both
+    plough aside what any step would as they are set down, the 36 px
+    flat's bead there is lower than it was, 5.0 to 5.3 units over six sets
+    of five seeds instead of 8.2 to 9.0, the 120 px one's 18.6 to 20.0
+    instead of 21.2 to 23.3); it stood 5.9 to 7.1 times as high, a wall
+    against the light. And no more than 1.8 times its side ridges (0.79 to
+    1.17 times down the bed, 1.12 to 1.72 on bare canvas, over those six
+    sets)."""
     b120, b36 = bead(120, bed), bead(36, bed)
-    assert b120 < 3.3 * b36
+    assert b120 < (4.5 if bed else 3.8) * b36
     assert b120 < 1.8 * ridges(120, bed)[0]
-
-
-@pytest.mark.parametrize("bed", [True, False])
-def test_a_wide_brush_s_bead_is_no_taller_against_its_side_ridges(bed):
-    """The bead where a 120 px flat is set down stands, against its side
-    ridges (both the mean over SEEDS), less than 0.88 times as high down the
-    bed and 1.18 times on bare canvas (0.83 and 1.14 over seeds 1 to 5; 0.85
-    and 1.11 over 6 to 10), lower than before its side ridges started where
-    it was set down (0.91 and 1.25; 0.95 and 1.22), a 36 px flat's being
-    0.82 and 1.60 (0.97 and 1.86 before). What it squeezes out as any step
-    does now goes to its side ridges from the first step on, not into the
-    bead."""
-    assert bead(120, bed) < (0.88 if bed else 1.18) * ridges(120, bed)[0]
 
 
 def _notch(w, bed):
@@ -233,8 +226,8 @@ def _notch(w, bed):
     side ridges' crest (the highest paint just outside the mark's edge, both
     sides) row by row, the mean over SEEDS, from its height at the end of
     the bead (its highest at or before the row it was set down at) to where
-    it runs steady: its least there, against its mean over the 35 rows from
-    15 rows on."""
+    it runs steady: its least and its most there, against its mean over the
+    35 rows from 15 rows on."""
     rows = []
     for seed in SEEDS:
         c, before, x, _, _ = _stroke(w, bed, seed=seed)
@@ -249,31 +242,35 @@ def _notch(w, bed):
         rows.append(crest)
     p = np.mean(rows, axis=0)
     k0 = int(np.argmax(p[:16]))
-    return p[k0:30].min() / p[30:].mean()
+    steady = p[30:].mean()
+    return p[k0:30].min() / steady, p[k0 + 1 : 30].max() / steady
 
 
 @pytest.mark.parametrize(
     ("w", "bed", "least"),
     [
-        (36, True, 0.32),
-        (36, False, 0.85),
-        (70, True, 0.45),
-        (70, False, 0.78),
-        (120, True, 0.7),
+        (36, True, 0.6),
+        (36, False, 0.8),
+        (70, True, 0.7),
+        (70, False, 0.7),
+        (120, True, 0.8),
         (120, False, 0.7),
     ],
 )
 def test_a_brush_s_side_ridges_start_where_it_is_set_down(w, bed, least):
-    """The side ridges of a hard stroke join its bead: just past the bead
-    their crest stands at least ``least`` of its height further on (seeds 1
-    to 5, and 6 to 10: down the bed 0.49 (0.44) at 36 px, 0.68 (0.63) at 70
-    and 0.88 (0.90) at 120; on bare canvas 1.05 (0.95), 1.09 (0.89) and
-    0.97 (0.77)). They used to start a step late, everything the brush
-    squeezed out as it was set down going into the bead: a notch at each
-    corner, down to 0.18 (0.17), 0.28 (0.23) and 0.55 (0.50) of their height
-    down the bed, 0.82 (0.71), 0.66 (0.50) and 0.55 (0.51) on bare
-    canvas."""
-    assert _notch(w, bed) > least
+    """The side ridges of a hard stroke join its bead, down wet paint as on
+    bare canvas: just past the bead their crest stands at least ``least`` of
+    its height further on, and less than 1.6 times it (no lump at the
+    corner). Over 30 strokes: down the bed 0.84 at 36 px, 0.99 at 70 and
+    1.02 at 120; on bare canvas 1.05, 1.02 and 0.99; five of them chosen at
+    random fall short of a bound in none of 20 000 draws. They used to
+    start a step late, all the brush squeezed out and ploughed aside as it
+    was set down going into the bead: a notch at each corner, 0.17, 0.34
+    and 0.46 down the bed, 0.79, 0.55 and 0.56 on bare canvas, and five of
+    them clear the bounds down the bed in none of 20 000 draws."""
+    low, high = _notch(w, bed)
+    assert low > least
+    assert high < 1.6
 
 
 @pytest.mark.parametrize("bed", [True, False])
@@ -282,8 +279,8 @@ def test_a_brush_set_down_across_the_canvas_edge_loses_only_what_goes_off(bed):
     the top of the canvas, a hard 120 px flat leaves at most what there was
     on the canvas and the brush, channel by channel. On bare canvas, what is
     gone is no more than what the same stroke lays past that edge on a
-    canvas large enough to hold it (0.61 of it: some of what would land
-    there settles back onto the canvas, as before)."""
+    canvas large enough to hold it (0.61 of it, 0.60 before: some of what
+    would land there settles back onto the canvas, as before)."""
     left = []
     for pad in (0, 200):
         c = _canvas(240 + 2 * pad, bed, height=330 + 2 * pad)
@@ -359,18 +356,23 @@ def test_other_strokes_paint_beyond_its_reach_is_untouched():
 
 
 _LEVEL = {}
+LEVEL_SEEDS = tuple(range(1, 11))
 
 
-def _edge_roughness(w, seed):
+def _level_edge(w, seed):
     """A heavily loaded red stroke of a ``w`` px flat on bare canvas, level
-    (stroke ``seed``): how much the position of its edges wavers from column
-    to column. Each column's edge position is the sum, over the 25 rows
-    around the edge, of how dark each pixel is against the stroke's full
-    paint (unlit luma, 0 to 1): it moves smoothly along an edge that is
-    anti-aliased, wherever the edge runs, and jumps at a notch, a bite or
-    a jagged step. The measure is the mean of the absolute second
-    difference of that position along the edge (px), both edges, over the
-    middle of the stroke."""
+    (stroke ``seed``), its two edges over the middle of the stroke, seen by
+    how dark each pixel is against the stroke's full paint (unlit luma, 0 to
+    1): (how much the edge's position wavers from column to column, how dark
+    the outermost row of paint is).
+
+    Each column's edge position is the sum of that darkness over the 25 rows
+    around the edge: it moves smoothly along an edge that is anti-aliased,
+    wherever the edge runs, and jumps at a notch, a bite or a jagged step.
+    Its waver is the mean of the absolute second difference of that position
+    along the edge (px), both edges. A pale band all along the edge doesn't
+    show in that; it shows in the darkness of each column's outermost pixel
+    holding paint, the mean over both edges."""
     if (w, seed) not in _LEVEL:
         s = 2 * w + 100
         c = Canvas(s, s, seed=2)
@@ -383,41 +385,60 @@ def _edge_roughness(w, seed):
         )
         lum = 255.0 * (c.render(lighting=False) @ np.array([0.2126, 0.7152, 0.0722]))
         dark = lum[2, 2] - lum
-        full = dark[s // 2, 60 : s - 60].mean()
+        t = dark / dark[s // 2, 60 : s - 60].mean()
         painted = np.nonzero(c.top[:, s // 2, IV] > 1e-3)[0]
         rough = []
         for edge in (painted.min(), painted.max()):
-            band = dark[edge - 12 : edge + 13, 60 : s - 60] / full
-            e = np.clip(band, 0, 1).sum(axis=0)
+            e = np.clip(t[edge - 12 : edge + 13, 60 : s - 60], 0, 1).sum(axis=0)
             rough.append(np.abs(e[2:] - 2 * e[1:-1] + e[:-2]).mean())
-        _LEVEL[w, seed] = float(np.mean(rough))
+        outer = []
+        for x in range(60, s - 60):
+            col = np.nonzero(c.top[:, x, IV] > 1e-3)[0]
+            outer += [t[col.min(), x], t[col.max(), x]]
+        _LEVEL[w, seed] = (float(np.mean(rough)), float(np.mean(outer)))
     return _LEVEL[w, seed]
 
 
 def test_the_level_edge_of_a_wide_heavy_stroke_is_smooth():
     """The edges of a heavy stroke of a 70 or 120 px flat are anti-aliased
-    where they run: they waver from column to column by less than 0.145 px
-    (see _edge_roughness), the mean over seeds 1 to 5 at both widths: 0.126
-    (0.104 over seeds 6 to 10). Before (RIDGE_COVER), 0.163 (0.187): each
+    where they run: they waver from column to column (see _level_edge) by
+    less than 0.135 px, the mean over ten strokes at each width. Over 30
+    strokes 0.113; ten chosen at random reach the bound in 0.6% of draws.
+    Before RIDGE_COVER, 0.156, and ten of them pass in 8% of draws: each
     step of an edge that bulges a little (the brush's width wobbles) was a
     notch, its foot pale where the side ridge's last pixel held paint that
     covered nothing."""
-    rough = [_edge_roughness(w, seed) for w in (70, 120) for seed in SEEDS]
-    assert np.mean(rough) < 0.145
+    rough = [_level_edge(w, seed)[0] for w in (70, 120) for seed in LEVEL_SEEDS]
+    assert np.mean(rough) < 0.135
 
 
-def _fresh_ridges(cover):
-    """Side ridges of a hard 120 px flat's third step laid on bare canvas,
-    with nothing else: (the canvas, its volume and coverage, and which
-    pixels lie more than a px outside the step's footprint)."""
+def test_the_level_edge_of_a_wide_heavy_stroke_has_no_pale_band():
+    """The outermost row of paint along the edges of those strokes is on
+    average more than 0.58 as dark as the stroke: 0.68 over 30 strokes (0.84
+    before RIDGE_COVER: the edge is softer, its last pixel graded), and ten
+    of them fall short in none of 20 000 draws. Without the slope cover
+    (see cover_ramps) the paint that settles at the foot of the edge leaves
+    a pale band all along it: 0.43, and no draw of ten reaches 0.5."""
+    outer = [_level_edge(w, seed)[1] for w in (70, 120) for seed in LEVEL_SEEDS]
+    assert np.mean(outer) > 0.58
+
+
+def _fresh_ridges(volume, offset, angle=0.0):
+    """Side ridges holding ``volume`` units each, of a hard 120 px flat's
+    third step (turned ``angle`` degrees to its path, its centre ``offset``
+    px off a pixel's edge), laid on bare canvas with nothing else: their
+    volume, their coverage, each column's place across the step from its
+    centre, and how far the footprint reaches either side of it."""
     c = _canvas(400, False)
     stroke = Stroke(
-        [(200, 100), (200, 250)],
+        [(200 + offset, 100), (200 + offset, 250)],
         P.TITANIUM_WHITE,
         amount=150,
         brush=brushes.FLAT_HOG.sized(120),
         pressure=0.9,
         seed=1,
+        angle=angle,
+        follow_path=True,
     )
     run = sm._Run.begin(c, stroke)
     got = run.step(3)
@@ -426,26 +447,58 @@ def _fresh_ridges(cover):
     assert not st.motion.touchdown
     b = Brush(brushes.FLAT_HOG).load(P.TITANIUM_WHITE, 20)
     pk = (b.reservoir.sum(axis=0) + b.tip.sum(axis=0)).astype(np.float64)
-    pk *= cover / pk[IV]
+    pk *= volume / pk[IV]
     ridges = eng.Ridges(np.zeros(eng.PACKED), pk.copy(), pk.copy())
     eng.lay_ridges(run.cv, run.pend, run.br, run.K, st, ridges, *tables, run.tex2)
-    half = st.hold.r * st.hold.lmax
-    out = np.abs(np.arange(c.width) + 0.5 - st.motion.cx) > half + 1.0
-    return c, c.top_v.astype(np.float64), c.top_a, np.broadcast_to(out, c.top_a.shape)
+    lat = np.arange(c.width) + 0.5 - st.motion.cx
+    return c.top_v.astype(np.float64), c.top_a, lat, st.hold.r * st.hold.lmax
 
 
-@pytest.mark.parametrize("volume", [200.0, 2000.0])
-def test_a_wide_brush_s_ridge_covers_as_far_as_its_paint_reaches(volume):
-    """Every pixel a wide brush's side ridge lays paint on, it covers in
-    part at least; and it covers no pixel it lays nothing on (outside the
-    footprint). Its paint used to reach half a px past its cover: its last
-    pixel held paint over nothing, a film as thick as the coverage there was
-    small (RIDGE_COVER)."""
-    _, v, a, out = _fresh_ridges(volume)
-    painted = out & (v > 1e-4)
-    assert painted.sum() > 100
-    assert a[painted].min() > 0
-    assert not np.any(out & (a > 0.01) & (v < 1e-4))
+_VOLUMES = (200.0, 400.0, 600.0, 900.0, 1400.0, 2000.0)
+_OFFSETS = (0.0, 0.25, 0.5, 0.75)
+
+
+@pytest.mark.parametrize("offset", _OFFSETS)
+def test_a_wide_brush_s_ridge_covers_as_far_as_its_paint_reaches(offset):
+    """Every pixel a wide brush's side ridge lays paint on (outside its
+    footprint) it covers in part at least, wherever the ridge's end falls in
+    its last pixel (ridges of six volumes, the stroke at four sub-pixel
+    offsets): its paint used to reach half a px past its cover, and its last
+    pixel held paint over nothing in 16 of these 24 (17 to 34 such pixels
+    each). And its cover reaches no further than its paint: the last
+    pixel's film (volume over coverage) is at least 0.2 as thick as the one
+    inside it on the same row (0.31 at least; covering a px further than
+    the paint, down to 0.005)."""
+    for volume in _VOLUMES:
+        v, a, lat, half = _fresh_ridges(volume, offset)
+        n = 0
+        for y in range(v.shape[0]):
+            for side in (-1, 1):
+                cols = np.nonzero((v[y] > 1e-4) & (side * lat > half + 1.0))[0]
+                if cols.size == 0:
+                    continue
+                n += cols.size
+                assert a[y, cols].min() > 0
+                last = cols.max() if side > 0 else cols.min()
+                if v[y, last] > 1e-3:
+                    inner = last - side
+                    film = v[y, last] / a[y, last]
+                    assert film >= 0.2 * v[y, inner] / a[y, inner]
+        assert n > 100
+
+
+def test_a_narrow_footprint_s_ridge_covers_as_before():
+    """A 120 px flat dragged edge-on paints a mark 28 px wide: its side
+    ridges cover as far as they always did (RIDGE_COVER is not for it), so
+    their paint still reaches past their cover somewhere."""
+    uncovered = 0
+    for offset in _OFFSETS:
+        for volume in _VOLUMES:
+            v, a, lat, half = _fresh_ridges(volume, offset, angle=90.0)
+            assert half <= eng.RAMP_FROM
+            out = (np.abs(lat) > half + 1.0)[None, :] & (v > 1e-4)
+            uncovered += int((out & (a == 0)).sum())
+    assert uncovered > 0
 
 
 @pytest.mark.parametrize(
@@ -580,21 +633,59 @@ def test_only_what_goes_aside_is_held_back(pick):
             assert np.all(side[0] == 1.0)
 
 
-def test_paint_shifted_where_a_wide_brush_is_set_down_all_goes_into_the_bead():
-    """As a wide brush is set down, all the wet paint it shifts (and doesn't
-    pick up) goes all round into the bead: none to its sides, none lost."""
-    run, st = _step(i=1, angle=0.0, bed=True)
+def test_paint_shifted_where_a_brush_is_set_down_goes_aside_or_into_the_bead():
+    """As a brush is set down, of the wet paint its bristles shift (and
+    don't pick up) the share a step under way would push aside goes to its
+    sides, the rest all round into the bead: none lost."""
+    _, st = _step(i=1, angle=0.0, bed=True)
     assert st.motion.touchdown
     win = st.win
     moved = np.ones((win.ch, win.cw, eng.PACKED))
     lat = np.linspace(-80, 80, win.cw)[None, :].repeat(win.ch, 0)
-    side = np.full((win.ch, win.cw), 0.3)
+    share = np.full((win.ch, win.cw), 0.3)
     ridges = eng.Ridges(
         np.zeros(eng.PACKED), np.zeros(eng.PACKED), np.zeros(eng.PACKED)
     )
-    eng._to_sides_or_ahead(run.cv, run.pend, st, run.K, ridges, moved, lat, side)
-    assert ridges.left[IV] == 0 and ridges.right[IV] == 0
-    assert ridges.ring[IV] == pytest.approx(win.ch * win.cw, rel=1e-12)
+    eng._into_bead(ridges, moved, lat, share)
+    n = win.ch * win.cw
+    assert ridges.left[IV] + ridges.right[IV] == pytest.approx(0.3 * n, rel=1e-12)
+    assert ridges.ring[IV] == pytest.approx(0.7 * n, rel=1e-12)
+    assert ridges.left[IV] > 0 and ridges.right[IV] > 0
+
+
+def _ploughed(w, touchdown, dab=False):
+    """What eng._plough shifts out of 5 units of wet blue under the first
+    step of a hard ``w`` px flat (as it is set down, with ``touchdown``, or
+    as a step under way; as a dab's, with ``dab``): (to the sides, into the
+    bead)."""
+    run, st, tables = _step_tables(w=w, angle=0.0, i=1, bed=True)
+    st = st._replace(motion=st.motion._replace(touchdown=touchdown))
+    K = run.K._replace(is_dab=dab)
+    F, _ = eng.footprint(st, K, run.tex, run.tex2, *tables)
+    ploughing = eng._ploughs(run.cv, F, st, K, run.pend)
+    ridges = eng.Ridges(
+        np.zeros(eng.PACKED), np.zeros(eng.PACKED), np.zeros(eng.PACKED)
+    )
+    eng._plough(run.cv, run.aux, run.pend, run.br, F, st, K, 1.0, ridges, ploughing)
+    return ridges.left[IV] + ridges.right[IV], ridges.ring[IV]
+
+
+def test_a_brush_set_down_ploughs_aside_as_any_step_does():
+    """As a brush is set down on wet paint, it ploughs out to its sides as
+    much as the same step under way would (a 36 px flat 238 units, a 120 px
+    one 529: of a wide one's, only what gets out from under it, see
+    _held_back), and the rest of what it shifts, which a step under way
+    pushes ahead, into the bead (343 and 762 units); a dab, all of it into
+    its rim."""
+    for w in (36, 120):
+        sides, bead = _ploughed(w, True)
+        moving, ahead_bead = _ploughed(w, False)
+        assert sides == pytest.approx(moving, rel=1e-6)
+        assert bead > 0.5 * sides > 0
+        assert ahead_bead == 0
+    for w in (36, 120):
+        sides, bead = _ploughed(w, True, dab=True)
+        assert sides == 0 and bead > 0
 
 
 def _squeezed(run, st, touchdown, K=None):
@@ -658,8 +749,10 @@ def test_a_ridge_s_cover_reaches_its_paint_by_the_footprint_s_width(w, angle):
     lies against; on a footprint wider than 2 EDGE_FREE across the stroke it
     covers as far (RIDGE_COVER), on one no wider than 2 RAMP_FROM as far as
     w, in between smoothly (a 32 px flat flat on: 16.8 px either side of its
-    centre). Read where its share is whole along the step, 0.1 px past w:
-    it covers 0.4 of that pixel fully, none of it up to 28 px."""
+    centre: 0.442 of the way). Read where its share is whole along the
+    step, 0.1 px past w: it covers 0.4 of that pixel on the 120 px flat,
+    0.121 on the 32 px one, none of it on the 120 px flat dragged edge-on
+    (28 px across)."""
     run, st, tables = _step_tables(w=w, angle=angle, i=3)
     K, hold = run.K, st.hold
     half = hold.r * hold.lmax
@@ -676,12 +769,12 @@ def test_a_ridge_s_cover_reaches_its_paint_by_the_footprint_s_width(w, angle):
             1
         ]
 
-    g = eng.smoothstep(eng.RAMP_FROM, eng.EDGE_FREE, half)
+    want = {(120, 0.0): 0.4, (32, 0.0): 0.12120598562597296, (120, 90.0): 0.0}
+    halves = {(120, 0.0): 61.72, (32, 0.0): 16.77, (120, 90.0): 13.6}
+    assert half == pytest.approx(halves[w, angle], abs=0.01)
     whole = cover(wd - 2.0)
     assert whole > 0.2
-    assert cover(wd + 0.1) / whole == pytest.approx(
-        max(eng.RIDGE_COVER * g - 0.1, 0.0), abs=1e-9
-    )
+    assert cover(wd + 0.1) / whole == pytest.approx(want[w, angle], abs=1e-9)
 
 
 def test_a_clean_wide_brush_picks_up_and_leaves_the_rest_under_it():

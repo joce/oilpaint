@@ -78,7 +78,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Their steepest outward fall, the median over the rows, is 2.1 units a px
   instead of 5.0 (3.0 to 3.9 at the steepest row instead of 7.1 to 9.7);
   the middle of the stroke stays 10.0 units thick instead of 7.7, furrowed
-  by the hair; the bead where it was set down stands 21 units high instead
+  by the hair; the bead where it was set down stands 20 units high instead
   of 54. On bare canvas its ridges stand 13 to 15 units high instead of 29
   to 33. So a wide, heavily loaded stroke no longer has dark rails along
   its sides and a black bar where it was set down. A clean or nearly dry
@@ -99,35 +99,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   width wobbles: a "level" edge is a gentle curve) there was a pale notch,
   and the edge of a slanting stroke was a sawtooth. Now a side ridge covers
   as far as its paint reaches. On the edges of heavily loaded strokes of 70
-  and 120 px flats, the edge's position wavers from column to column by
-  0.113 and 0.123 px on average instead of 0.169 and 0.165; across the
-  slanting edge of a heavily loaded black 50 px stroke, 236 of 240 columns
-  keep an in-between pixel instead of 199. More of the pixels along such
-  an edge are partly covered, as the edge runs through them: more pixels
-  come out a little paler than the stroke and fewer a lot. It goes by how
-  wide the footprint is across the stroke, as the slope cover below: not
-  at all up to 28 px (narrower strokes are painted exactly as before),
-  fully from 40 px.
+  and 120 px flats (30 strokes each), the edge's position wavers from
+  column to column by 0.119 and 0.106 px on average instead of 0.179 and
+  0.132; across the slanting edge of a heavily loaded black 50 px stroke,
+  237 of 240 columns keep an in-between pixel instead of 204 (ten strokes).
+  The edge is softer, not paler along its length: the darkness summed
+  across it is the same as before (2.03 and 2.02 rows' worth), but its
+  last pixels are graded where they were either solid or notched, so many
+  more of them come out somewhat paler than the stroke. Of the outer pixels
+  holding over a unit, 23% and 27% come out more than 4 levels paler
+  instead of 10% and 9%, 820 and 1707 more than 64 levels instead of 355
+  and 633, 108 and 156 more than 128 levels instead of 93 and 100. It goes
+  by how wide the footprint is across the stroke, as the slope cover below:
+  not at all up to 28 px (there a side ridge's cover is as before), fully
+  from 40 px.
 - A brush's side ridges start where it is set down and join the bead
-  there. They used to start a step late, everything squeezed out as the
-  brush was set down going into the bead, so there was a notch at each
-  corner. Hard flats pressed at 0.9, loaded 45 w / 36, down 5 units of wet
-  blue: just past the bead their side ridges stood 0.18, 0.28 and 0.55 of
-  their height further on at 36, 70 and 120 px, and stand 0.49, 0.68 and
-  0.88 now (0.82, 0.66 and 0.55 on bare canvas, now 1.05, 1.09 and 0.97).
-  The bead comes out a little lower (a 120 px flat's 19.7 units instead of
-  21.6 down the wet blue, 19.3 instead of 21.1 on bare canvas: 0.89 and
-  1.20 times its side ridges beside it, a 36 px flat's 0.83 and 1.67). Any
-  brush stroke; dabs and knives as before.
+  there, at every width, on bare canvas and down wet paint. They used to
+  start a step late: everything the brush squeezed out and ploughed aside
+  as it was set down went into the bead, so there was a notch at each
+  corner. Now what any step would squeeze out and plough aside goes to its
+  sides along the way it moves in that first step, and only what setting
+  it down adds goes into the bead. Hard flats pressed at 0.9, loaded 45 w /
+  36 (30 strokes each): just past the bead their side ridges stood 0.79,
+  0.55 and 0.56 of their height further on at 36, 70 and 120 px on bare
+  canvas and stand 1.05, 1.02 and 0.99 now; down 5 units of wet blue 0.17,
+  0.34 and 0.46, now 0.84, 0.99 and 1.02. The bead comes out lower, most
+  down wet paint at small sizes (the mean of five strokes, the range over
+  six sets of five): down the wet blue 2.7 to 2.8 units instead of 5.0 to
+  5.2 at 24 px, 5.0 to 5.3 instead of 8.2 to 9.0 at 36, 5.6 to 5.9 instead
+  of 9.0 at 40, 10.5 to 11.0 instead of 13.6 to 14.2 at 70 and 18.6 to 20.0
+  instead of 21.2 to 23.3 at 120; on bare canvas 3.9 to 4.0 instead of 4.8
+  at 24 px, 6.5 to 7.0 instead of 7.9 to 8.1 at 40, 11.9 to 12.7 instead
+  of 13.3 to 13.9 at 70 and 19.3 to 21.7 instead of 20.6 to 23.2 at 120. A
+  120 px flat's bead stands 0.79 to 1.17 times as high as the side ridges
+  beside it down the bed (0.91 to 1.36 before) and 1.12 to 1.72 times on
+  bare canvas (1.23 to 1.84). Strokes of 10 px with ordinary loads on bare
+  canvas, knives, dabs and stipples are painted exactly as before.
 - Where a wide brush's own paint at the edge of its stroke ends in a slope,
   the last pixel of it (if it holds at least `MIN_FILM`) covers as much of
   itself as the slope carried on says, instead of as little as the thicker
   paint beside it would: the paint that settles there once the brush has
-  passed no longer leaves a pale fringe along the edge. On the level edges
+  passed no longer leaves a pale band along the edge. On the level edges
   of heavy strokes of 120 px and 70 px flats on bare canvas, the outer
-  pixels holding over a unit come out 25 and 22 levels paler than the
-  stroke on average (five strokes, and ten), against 87 and 73 without
-  this. Other strokes' paint, the lower layer and
+  pixels holding over a unit come out 22 and 21 levels paler than the
+  stroke on average (30 strokes), against 86 and 72 without this (ten
+  strokes) and 8.5 and 10.3 before the side ridges' cover reached as far
+  as their paint (see above: the edges are graded now). Other strokes'
+  paint, the lower layer and
   thinner traces keep their coverage, and so does a foot whose neighbours
   along the edge hold paint more than 15% unlike: the steps of a slanting
   edge's staircase keep their anti-aliasing (a heavily loaded wide stroke's
