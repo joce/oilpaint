@@ -120,10 +120,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   aside goes to its sides along the way it moves in that first step, and
   only what setting it down adds goes into the bead. On bare canvas this
   changes only a brush loaded beyond what its hair holds as it is set
-  down: heavy loads from about 16 px (a hard 10 px flat loaded 45 w / 36,
-  and ordinary loads at any width, are painted exactly as before; 60
-  units on a 10 px brush is enough to change it); down wet
-  paint it changes every stroke, ordinary loads included, at any size.
+  down. A load of 12 units at the default pressure (0.5) is painted
+  exactly as before at any width from 10 to 120 px (hog flat, round and
+  filbert), and so is a hard 10 px flat loaded 45 w / 36; pressed at 0.9,
+  12 units changes rounds and filberts from 24 px; 20 units changes
+  rounds from 16 px, and flats and filberts from 24 px (from 16 px pressed
+  at 0.9); 60 units changes a 10 px brush too. Down wet paint it changes
+  every stroke, whatever its load, at any size.
   There a small brush's stroke now starts flush, without a bead: the wet
   paint heaped where it was set down was what a step would have pushed
   aside. Heavily loaded hard flats down 5 units of wet blue (five strokes):
