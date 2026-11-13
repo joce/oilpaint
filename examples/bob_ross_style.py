@@ -6,8 +6,8 @@ one sitting, everything wet:
 * the canvas coated with a thin film of Liquid White, so every colour after
   it blends softly;
 * the sky in criss-cross strokes with a two-inch brush; clouds scrubbed in
-  with little circles, their puffs bright on top, their bases melting into
-  the blue;
+  with little circles of white, then their bases blended into the blue with
+  a clean, dry brush, one mass of cloud in front of another;
 * the mountain cut in with the palette knife, its snow laid on with almost
   no pressure so it breaks over the dark paint, and mist tapped in at its base;
 * distant trees tapped in with a fan brush, evergreens built from the top
@@ -21,7 +21,6 @@ Every mark is a ``canvas.stroke(...)``; numpy only decides where they go.
 """
 
 import itertools
-import operator
 import os
 import sys
 import time
@@ -303,18 +302,33 @@ def paint_sky():
         )
 
 
-def cloud_top(puffs, base):
-    """The top edge of a cloud: round puffs (x, y, radius) heaped on a flat base."""
+def cloud_top(billows):
+    """The top edge of a mass of cloud: round billows (x, y, radius) heaped together."""
 
     def top(x):
         x = np.asarray(x, float)
         t = np.full(x.shape, np.inf)
-        for px, py, pr in puffs:
+        for px, py, pr in billows:
             d = pr**2 - (x - px) ** 2
             t = np.where(d > 0, np.minimum(t, py - np.sqrt(np.clip(d, 0, None))), t)
         return t
 
     return top
+
+
+def cloud_base(billows, xs, drop):
+    """How far down the white of a mass of cloud is carried, at each of ``xs``:
+    ``drop`` radii below the middles of its billows, an uneven line, rising to
+    meet the top at both ends, where the cloud is thinner."""
+    base = np.full(xs.shape, -np.inf)
+    for px, py, pr in billows:
+        base = np.where(np.abs(xs - px) < pr, np.maximum(base, py + drop * pr), base)
+    known = np.isfinite(base)
+    base = np.interp(xs, xs[known], base[known])
+    base = np.convolve(np.pad(base, 20, mode="edge"), np.ones(41) / 41, "valid")
+    ends = np.minimum(xs - xs[0], xs[-1] - xs)
+    r_end = min(billows[0][2], billows[-1][2])
+    return base - 0.8 * drop * r_end * np.clip(1 - ends / (1.2 * r_end), 0, 1) ** 2
 
 
 def scrub_path(a, b, rr, advance, r):
@@ -328,42 +342,58 @@ def scrub_path(a, b, rr, advance, r):
     return c + np.stack([rr * np.cos(t + phase), rr * 0.8 * np.sin(t + phase)], 1)
 
 
-def scrub_rows(top, x0, x1, y_from, y_to, size, r, inset=0.48, ragged=0.0, base=None):
-    """Scrub the inside of a cloud row after row, from ``y_from`` to ``y_to``,
-    back and forth. ``ragged`` wobbles the rows near the base so it isn't ruled."""
-    xs = np.arange(x0, x1, 2.0)
-    step = size * 0.45
-    pts, flip = [], False
-    for y in np.arange(y_from, y_to, step if y_to > y_from else -step):
-        y += r.normal(0, step * 0.1)
-        inside = top(xs) + size * inset <= y
-        if not inside.any():
-            continue
+def scrub_along(pts, rr, advance, r):
+    """Little scrubbing circles travelling along the line through ``pts``."""
+    path = []
+    for p, q in itertools.pairwise(pts):
+        path.extend(scrub_path(p, q, rr, advance, r))
+    return np.array(path)
+
+
+def cloud_rim(billows, inset):
+    """The line a brush follows to draw the top edge of a mass of cloud: over
+    the top of each billow in turn, from left to right, ``inset`` inside it."""
+    pts = []
+    for k, (px, py, pr) in enumerate(billows):
+        others = [b for j, b in enumerate(billows) if j != k]
+        rr = max(pr - inset, 1.0)
+        for a in np.linspace(np.pi, 2 * np.pi, max(4, int(np.pi * rr / 8))):
+            x, y = px + rr * np.cos(a), py + rr * np.sin(a)
+            if all(
+                np.hypot(x - ox, y - oy) > max(orr - inset, 1.0)
+                for ox, oy, orr in others
+            ):
+                pts.append((x, y))
+    return np.array(pts)
+
+
+def scrub_rows(billows, base, xs, size, r):
+    """The path of the brush that scrubs in a mass of cloud: along its top edge
+    first, billow by billow, then the inside, row after row down to the base,
+    back and forth."""
+    inset = size * 0.42  # the brush's middle stays this far inside the top edge
+    upper, lower = cloud_top(billows)(xs), base(xs)
+    pts, flip = (
+        list(scrub_along(cloud_rim(billows, inset), size * 0.18, size * 0.32, r)),
+        True,
+    )
+    for y in np.arange(upper.min() + inset + size * 0.42, lower.max(), size * 0.42):
+        y += r.normal(0, size * 0.04)
+        inside = (upper + inset <= y) & (y <= lower)
         edges = np.flatnonzero(np.diff(np.r_[0, inside.astype(int), 0]))
         runs = [
-            (xs[s] + size * inset * 0.3, xs[e - 1] - size * inset * 0.3)
-            for s, e in zip(edges[::2], edges[1::2], strict=False)
+            (xs[s] + size * 0.12, xs[e - 1] - size * 0.12)
+            for s, e in zip(edges[::2], edges[1::2], strict=True)
+            if xs[e - 1] - xs[s] > size * 0.3
         ]
         if flip:
             runs = [(b, a) for a, b in runs[::-1]]
-        wob = (
-            ragged * size * np.clip(1 - (base - y) / size, 0, 1)
-            if base is not None
-            else 0.0
-        )
         for a, b in runs:
             knots = np.linspace(a, b, max(2, int(abs(b - a) / size) + 1))
-            ys = y + r.normal(0, wob + 1e-9, len(knots))
-            for k in range(len(knots) - 1):
-                pts.extend(
-                    scrub_path(
-                        (knots[k], ys[k]),
-                        (knots[k + 1], ys[k + 1]),
-                        size * 0.2,
-                        size * 0.35,
-                        r,
-                    )
-                )
+            ys = y + r.normal(0, size * 0.05, len(knots))
+            pts.extend(
+                scrub_along(np.stack([knots, ys], 1), size * 0.18, size * 0.32, r)
+            )
         flip = not flip
     return np.array(pts)
 
@@ -372,80 +402,82 @@ def path_length(pts):
     return float(np.linalg.norm(np.diff(pts, axis=0), axis=1).sum())
 
 
-def cloud(puffs, base, size=50, seed=0):
-    """A cumulus, the way he builds one: puffs of clean white with bright tops,
-    heaped on a flat base that melts into the sky.
+def cloud_white(path, size):
+    """Scrub the white of a cloud in along ``path``, straight onto the wet sky:
+    a full brush, barely pressed, so that it lays the white on the blue more
+    than it stirs it in; reloaded every few widths, fullest at the top, where
+    the cloud is brightest, and running thin towards the base."""
+    along = np.r_[0, np.cumsum(np.linalg.norm(np.diff(path, axis=0), axis=1))] / size
+    y_top, y_base = path[:, 1].min(), path[:, 1].max()
+    reload_every = 7.0  # brush widths of scrubbing
+    for k in range(int(along[-1] // reload_every) + 1):
+        go = (along >= k * reload_every - 0.3) & (along < (k + 1) * reload_every)
+        if go.sum() < 3:
+            continue
+        part = path[go]
+        depth = (part[:, 1] - y_top) / max(1.0, y_base - y_top)
+        amount = 2.6 * (1 - 0.55 * depth.mean()) * path_length(part) / size
+        b = loaded(CLOUD_BRUSH.sized(size), thin(TITANIUM_WHITE), amount)
+        st(part, None, brush=b, pressure=list(0.15 - 0.03 * depth))
 
-    Wet-on-wet, white scrubbed into the blue turns blue. So first he lifts
-    some of the wet blue where the bright puffs will go, with a clean brush
-    (wiped after every few circles). Then the white is scrubbed in with little
-    circles in one long go, top down: where the blue was lifted it stays white;
-    lower down, pressed a little harder into the blue, it turns a soft blue-grey
-    and the base dissolves. Last, each puff's sunlit top is laid in with clean
-    white, the ones at the back first, so each puff in front stands out
-    against the shadowed underside of the one behind it."""
+
+def cloud(billows, size=40, seed=0, drop=1.0):
+    """One mass of cloud, the way he paints one.
+
+    Titanium white on the corner of a brush, scrubbed straight onto the wet
+    sky with tiny circles: first the top, where the billows (x, y, radius) give
+    it its shape, then down into the body with what is left on the brush.
+    Then a clean, dry brush blends the base: little circles along the bottom,
+    again a little higher and lighter each time, never touching the top edge,
+    so the white there is worked into the wet blue and melts away, a soft
+    blue-grey. It is fluffed, with short strokes lifted up from the base,
+    barely touching, and last brushed once across, very lightly.
+
+    A cloud is several such masses, the farthest first: each is finished
+    before the next goes in, so the bright top of the one in front stands
+    against the blended base of the one behind."""
     r = np.random.default_rng(seed)
-    top = cloud_top(puffs, base)
-    x0 = min(px - pr for px, py, pr in puffs) - 10
-    x1 = max(px + pr for px, py, pr in puffs) + 10
-    y_top = min(py - pr for px, py, pr in puffs)
-    # just below the lowest puff's middle
-    lift_to = max(py for px, py, pr in puffs) + size * 0.3
-    # lift the blue: three passes, a clean brush every few circles
-    for _ in range(3):
-        path = scrub_rows(top, x0, x1, y_top, lift_to, size * 0.89, r, inset=0.34)
-        for chunk in np.array_split(path, max(1, len(path) // 21)):
-            if len(chunk) > 2:
-                st(
-                    chunk,
-                    None,
-                    brush=Brush(CLOUD_BRUSH.sized(size * 0.8)),
-                    pressure=0.9,
-                    pickup=1.0,
-                )
-    # the body: one long scrub from the top down. (One stroke, so the brush works
-    # into its own wet white; a new stroke over it would leave a seam at its soft edge.)
-    path = scrub_rows(
-        top,
-        x0,
-        x1,
-        y_top + size * 0.3,
-        base - size * 0.2,
-        size,
-        r,
-        ragged=0.25,
-        base=base,
+    xs = np.arange(
+        min(px - pr for px, py, pr in billows),
+        max(px + pr for px, py, pr in billows),
+        2.0,
     )
-    below = np.clip((path[:, 1] - lift_to) / (base - lift_to), 0, 1)
-    pressure = (0.35 + 0.25 * below**1.5) * (
-        1 + 0.1 * np.sin(np.arange(len(path)) * 2 * np.pi / 14)
+    base = cloud_base(billows, xs, drop)
+    cloud_white(
+        scrub_rows(billows, lambda x: np.interp(x, xs, base), xs, size, r), size
     )
-    total = 0.3 * path_length(path) / size
-    b = Brush(CLOUD_BRUSH.sized(size)).load(thin(TITANIUM_WHITE), min(total, 12))
-    if total > 12:  # more than the hair holds: the rest is worked up into the heel
-        # (pressing squeezes it out as he goes)
-        b.load(thin(TITANIUM_WHITE), total - 12, depth="heel")
-    st(path, None, brush=b, pressure=list(pressure), pickup=0.05)
-    # the sunlit tops: each puff filled from its rim inwards with clean white,
-    # with a firmer brush, so the tops stay crisp; the puffs at the back first
-    w = size * 0.6
-    for px, py, pr in sorted(puffs, key=operator.itemgetter(1)):
-        path = []
-        for k, R in enumerate(np.arange(pr - w * 0.45, pr * 0.35, -w * 0.35)):
-            span = 0.8 * np.sqrt(R / pr)
-            angles = np.linspace(np.pi * (1.5 - span / 2), np.pi * (1.5 + span / 2), 7)[
-                :: 1 if k % 2 == 0 else -1
-            ]
-            arc = [(px + R * np.cos(a), py + R * np.sin(a)) for a in angles]
-            for p, q in itertools.pairwise(arc):
-                path.extend(scrub_path(p, q, w * 0.15, w * 0.3, r))
-        path = np.array(path)
-        b = loaded(
-            CLOUD_BRUSH.sized(w).with_(softness=0.1),
-            thin(TITANIUM_WHITE),
-            1.6 * path_length(path) / w,
+    # blending churns the white into the wet blue and lifts nothing off
+    blender = MIST_BRUSH.sized(size * 1.3)
+    w = blender.width
+    along = np.stack([xs[::8], base[::8]], 1)
+    for k, (below, pressure) in enumerate(((0.3, 0.4), (0.0, 0.32), (-0.35, 0.2))):
+        line = along + [0, below * w] + r.normal(0, [0, 2], along.shape)
+        st(
+            scrub_along(line[:: -1 if k % 2 else 1], w * 0.2, w * 0.3, r),
+            None,
+            brush=Brush(blender),
+            pressure=pressure,
+            mixing=1.0,
+            pickup=0.0,
         )
-        st(path, None, brush=b, pressure=0.3, pickup=0.03)
+    for x, y in along[:: max(1, int(w * 0.4 / 16))]:  # fluff it
+        st(
+            [(x, y + w * 0.3), (x + r.normal(0, 4), y - w * 0.45)],
+            None,
+            brush=Brush(blender),
+            pressure=[0.2, 0.04],
+            mixing=1.0,
+            pickup=0.0,
+        )
+    y = float(base.mean())
+    st(
+        [(xs[0] - 10, y + 6), ((xs[0] + xs[-1]) / 2, y + 2), (xs[-1] + 10, y + 6)],
+        None,
+        brush=Brush(blender.sized(w * 1.5)),
+        pressure=0.1,
+        mixing=1.0,
+        pickup=0.0,
+    )
 
 
 def wisp(x0, x1, y, width, seed=0):
@@ -479,30 +511,34 @@ def wisp(x0, x1, y, width, seed=0):
 
 
 # puffs (x, y, radius) of each cloud, and its base
-BIG_CLOUD = (
-    [
-        (690, 182, 44),
-        (748, 146, 56),
-        (812, 112, 64),
-        (880, 100, 62),
-        (948, 126, 58),
-        (1012, 156, 50),
-        (1064, 188, 38),
-    ],
-    228,
-)
-LEFT_CLOUD = (
-    [(205, 152, 38), (262, 126, 50), (325, 112, 54), (388, 130, 46), (436, 156, 30)],
-    186,
-)
-SMALL_CLOUD = ([(345, 284, 22), (378, 274, 28), (412, 288, 18)], 302)
+# the masses of each cloud, the farthest first: its billows (x, y, radius) from
+# left to right, and the size of the brush
+BIG_CLOUD = [
+    ([(814, 115, 59), (888, 86, 71), (961, 103, 59), (1025, 136, 47)], 48),
+    ([(1074, 185, 35), (1121, 202, 26)], 33),
+    (
+        [
+            (666, 183, 40),
+            (725, 152, 54),
+            (800, 162, 59),
+            (871, 183, 47),
+            (930, 200, 33),
+        ],
+        44,
+    ),
+]
+LEFT_CLOUD = [
+    ([(253, 119, 48), (322, 99, 60), (391, 122, 48), (444, 149, 30)], 44),
+    ([(187, 165, 34), (237, 152, 41), (297, 168, 34)], 37),
+]
+SMALL_CLOUD = [([(345, 284, 20), (378, 272, 27), (412, 286, 18)], 26)]
 
 
 def paint_clouds():
     stage("clouds")
-    cloud(*BIG_CLOUD, size=50, seed=1)
-    cloud(*LEFT_CLOUD, size=42, seed=2)
-    cloud(*SMALL_CLOUD, size=28, seed=3)
+    masses = itertools.chain(BIG_CLOUD, LEFT_CLOUD, SMALL_CLOUD)
+    for seed, (billows, size) in enumerate(masses, start=1):
+        cloud(billows, size, seed=seed)
     # and a few thin streaks low in the sky, just above the far mountains
     wisp(740, 970, 290, 82, seed=4)
     wisp(850, 1040, 262, 60, seed=5)
