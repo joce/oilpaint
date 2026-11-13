@@ -49,6 +49,56 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A wide brush pressed hard through thick paint no longer throws the paint
+  under its middle out to its sides. Under a plate the paint has to travel
+  to an edge to get out, and the further in the slower: now only paint
+  within 20 px of the nearer edge of the brush's footprint gets out
+  freely, and from d px in only the share 1 / (1 + ((d - 20) / 3)^2) of
+  it. The rest stays under the brush: what it was to squeeze out of its
+  hair stays on it, and goes on as a thicker stroke; wet paint it was to
+  plough aside stays where it was, in its own layer. A white 120 px hog
+  flat pressed at 0.9 down 5 units of wet blue, loaded 45 w / 36, now
+  leaves side ridges 17 to 20 units high instead of 40 to 47 (five
+  strokes, the median over each one's rows), still about 11 px wide at
+  half height: about as high in px (1 unit ~ 0.6 px) as they are wide, as
+  a 36 px flat's are, where they stood more than twice as high as wide.
+  Their steepest outward fall, the median over the rows, is 2.1 units a px
+  instead of 5.0 (3.0 to 3.9 at the steepest row instead of 7.1 to 9.7);
+  the middle of the stroke stays 10.0 units thick instead of 7.7, furrowed
+  by the hair; the bead where it was set down stands 23 units high instead
+  of 54. On bare canvas its ridges stand 13 to 15 units high instead of 29
+  to 33. So a wide, heavily loaded stroke no longer has dark rails along
+  its sides and a black bar where it was set down. A clean or nearly dry
+  wide brush dragged through wet paint takes up its share of what it moves
+  as before, step by step, and leaves more of the wet paint under its
+  middle (a clean 120 px hog flat drawn hard down 5 units of wet blue
+  leaves 2.3 units of it there in the lower layer instead of 1.0, and,
+  meeting it again, picks up a third more over the stroke). Wide dabs and
+  stipples squeeze a little less out round their rims. A brush whose
+  footprint is no more than 40 px across the stroke squeezes and ploughs as
+  before: a flat up to 37 to 39 px, a round or filbert up to 30 to 52 px
+  depending on its hair and how hard it is pressed (a sable round pressed
+  hard, up to 26 px).
+- Where a wide brush's own paint at the edge of its stroke ends in a slope,
+  the last pixel of it (if it holds at least `MIN_FILM`) covers as much of
+  itself as the slope carried on says, instead of as little as the thicker
+  paint beside it would. On the level edge of a heavy stroke of a 120 px
+  flat on bare canvas, the outer pixels holding over a unit that come out
+  more than 4 levels paler than the stroke fall to 3 to 19% over five
+  strokes (12% on average), from 15 to 66% over the same five (36%); for a
+  70 px flat, over five strokes, to 0 to 10% (4%), from 3 to 13% (8%).
+  Now and then a stroke bulges at its edge and comes out far paler, as
+  before (over ten 70 px strokes, 0 to 69% against 0 to 71%; pooled, 8.3%
+  against 16.7%). The palest pixels stay as pale as before (up to about
+  135 levels). Other strokes' paint, the lower layer and
+  thinner traces keep their coverage, and so does a foot whose neighbours
+  along the edge hold paint more than 15% unlike: the steps of a slanting
+  edge's staircase keep their anti-aliasing (a heavily loaded wide stroke's
+  slanting edge keeps as many in-between pixels as it would without this).
+  Doing it again changes nothing. It goes by how wide the stroke's
+  footprint reached across it: not at all up to 28 px (a flat up to 26 or
+  27 px, a round or filbert up to 18 to 36 px depending on its hair and the
+  pressure), fully from 40 px, smoothly in between.
 - Scumbling over dried impasto: a lightly pressed brush carrying little
   paint now leaves broken paint on the crests of the dried relief, with the
   hollows showing through, and carries what it does not lay further along;
@@ -210,9 +260,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the brush at every width; it stopped growing at 7 px, so that a wide brush
   pressed hard through thick wet paint pushed it up into a narrow wall that
   read as a dark line along the lit stroke. A white 120 px hog flat pressed
-  at 0.9 down 5 units of wet blue now leaves ridges 41 units high and 12 px
-  wide at half height, from 43 and 9 (the set-up of `tests/test_ridges.py`,
-  three seeds). A brush whose limit stays under 7 px (a hog flat up to
+  at 0.9 down 5 units of wet blue now leaves ridges 12 px wide at half
+  height, from 9 (the set-up of `tests/test_ridges.py`, three seeds; 11
+  px in the set-up of the entry above, which measures each row and takes
+  the median; see that entry too for how much paint a wide brush pushes
+  out at all). A brush whose limit stays under 7 px (a hog flat up to
   about 55 px, a round up to 33 to 43 px depending on its hair), and a wider
   one whose ridges stay that narrow, paints exactly as before.
 - A stroke that runs partly or wholly off the canvas paints what is on the

@@ -28,6 +28,7 @@ It takes about 5 minutes; ``REMBRANDT_SCALE=0.5`` paints a half-size version in
 about half the time.
 """
 
+import itertools
 import os
 import sys
 import time
@@ -530,6 +531,18 @@ def lay_in():
     canvas.dry()
 
 
+def _all_over(where, pts, step=3.0):
+    """Whether every point of the path ``pts`` (and every ``step`` px between
+    them) lies where ``where`` is true (off the canvas counts as true)."""
+    for (xa, ya), (xb, yb) in itertools.pairwise(pts):
+        n = int(np.hypot(xb - xa, yb - ya) / step) + 1
+        for t in np.linspace(0.0, 1.0, n + 1):
+            x, y = xa + (xb - xa) * t, ya + (yb - ya) * t
+            if 0 <= x < W and 0 <= y < H and not where[int(y), int(x)]:
+                return False
+    return True
+
+
 def soften(where):
     """Go over the wet background with a big, soft, clean brush, barely
     touching, so the strokes melt into one another (the brush is wiped now
@@ -553,6 +566,21 @@ def soften(where):
                     (x0 + d[0] * 0.1, y0 + d[1] * 0.1 + rng.normal(0, 3 * S)),
                     (x0 + d[0], y0 + d[1]),
                 ]
+                # the whole of what the mop presses stays over the background
+                # (its centreline, and the lines either side of it as far out
+                # as it presses at this light touch, about 0.3 of its size):
+                # one centred in a gap beside the head would drag the flesh
+                # paint over the beret. (This script's own random numbers are
+                # drawn as before; the canvas's, which seed the strokes, run
+                # on differently once a sweep is skipped.)
+                side = np.array([-d[1], d[0]]) / np.hypot(d[0], d[1])
+                if not all(
+                    _all_over(
+                        where, [(px + k * side[0], py + k * side[1]) for px, py in pts]
+                    )
+                    for k in (0.0, -0.3 * size, 0.3 * size)
+                ):
+                    continue
                 canvas.stroke(
                     pts, brush=Brush(brushes.MOP.sized(size)), pressure=[0.0, 0.14, 0.0]
                 )

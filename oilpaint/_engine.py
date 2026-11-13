@@ -111,6 +111,62 @@ IMPASTO = 0.12
 TIP_DEPTH = 6.0
 # Share of an overload squeezed out at the edges per width of travel (knife, brush).
 SQUEEZE_KNIFE, SQUEEZE_BRUSH = 0.03, 0.04
+# Paint a brush pushes aside (squeezed out of its hair, or ploughed out of
+# the wet paint under it) gets out to its side ridges freely from within
+# EDGE_FREE px of the nearer edge of its footprint; from d px in, only the
+# share 1 / (1 + ((d - EDGE_FREE) / EDGE_SQUEEZE) ** 2) of it: under a plate
+# the paint has to travel to an edge, and the rate a pressure thins it falls
+# as 1 / width^2 (a squeeze film), so under a wide brush the paint in the
+# middle stays. What doesn't get out stays under the brush: on it (its
+# column stays loaded and lays thicker) or where it was (not ploughed). See
+# escapes. A footprint no more than 2 EDGE_FREE px across the stroke is not
+# affected (a hog flat 36 px wide pressed at 0.9 spreads to about 38 px),
+# and the share is 1 at d = EDGE_FREE: no step where it starts. Measured on
+# a white hog flat pressed at 0.9 down 5 units of wet blue, loaded 45 w /
+# 36, five strokes, the medians over their rows (ratio of the ridges' width
+# at half height to their height, 1 unit ~ 0.6 px; height, units; paint a
+# side, units x px; a 36 px flat: 0.93, 10, 69):
+#   no limit:      70 px 0.62, 21, 172;  120 px 0.43, 42, 473
+#   EDGE_FREE 14:  70 px 1.05, 12, 96;   120 px 1.20, 15, 166 (and 36 px
+#                  changes: 0.98, 9.6, 65)
+#   EDGE_FREE 20:  70 px 0.84, 15, 123;  120 px 1.02, 18, 208
+#   EDGE_FREE 28:  70 px 0.67, 19, 156;  120 px 0.78, 23, 269
+# 20 is the least that leaves a 36 px flat as it was. EDGE_SQUEEZE 3: with 6,
+# the 120 px flat's ratio was 0.88 (the tail lets more out).
+EDGE_FREE, EDGE_SQUEEZE = 20.0, 3.0
+# A brush's set-down bead reaches this many times its width past the
+# footprint (see _ring_weights: its cross-section falls to nothing there).
+BEAD_REACH = 1.3
+# Where the stroke's own paint at its edge ends in a slope, its last pixel
+# covers at least as much as the slope carried on says (see cover_ramps),
+# not as little as the films beside it would: a pixel holding 2 units next
+# to 3 and 4.4 covered a third of itself, pale in a solid edge. On a 120 px
+# flat's level edge, heavily loaded (five strokes, mean and range), the
+# outer pixels holding over a unit that come out more than 4 levels pale:
+# 45% (18 to 84%) without it, 12% (3 to 19%) with it; 25% (15 to 41%) and
+# 4% (0 to 10%) for a 70 px flat. The palest stay as pale (up to 138
+# levels): see RAMP_EVEN. By how wide the stroke's footprint reached across it (the most
+# of r * lmax over its steps): fully from more than 2 EDGE_FREE px, not at
+# all up to 2 RAMP_FROM, smoothly in between (no step where it starts).
+RAMP_FROM = 14.0
+# ... and only on a slope: as far as the film two pixels in is thicker than
+# the one next to it (relative to the thicker), from none at RAMP_RISE[0]
+# to all at RAMP_RISE[1] (0.3 at the foot of a heavy 120 px flat's edge;
+# 0.06 at the edge of a plateau).
+RAMP_RISE = (0.1, 0.25)
+# Only the films of the stroke's own pixels covered at least this much (and
+# not at its edge) say how the slope runs: a partly covered pixel beside
+# the foot, along a slanting edge, is that edge's anti-aliasing.
+RAMP_SOLID = 0.95
+# A foot whose two neighbours along the edge hold paint more unlike than this
+# (relative to the more) is where a slanting edge's staircase climbs from
+# pixel to pixel: left as it is, its anti-aliasing. Without this check,
+# of 240 columns crossing the edge of a heavy black stroke (120 units, five
+# canvases) 168 to 210 kept an in-between pixel at 50 to 140 px, against
+# 208 to 240 with no slope cover at all; with it, as with none (one column
+# in 12 000 differs), for a 120 px flat's level edge 12% pale instead of
+# 9%.
+RAMP_EVEN = 0.15
 # Paint thinner than this can't form a continuous film (the renderer, see
 # canvas.MIN_FILM, counts it by the same measure).
 MIN_FILM = 0.15
@@ -2437,11 +2493,31 @@ def add_sides(ridges, moved, lat, scale):
                 side[c] += scale * moved[y, x, c]
 
 
+@njit(cache=True, error_model="numpy", inline="always")
+def escapes(d):
+    """The share of the paint a brush pushes aside ``d`` px in from the
+    nearer edge of its footprint that gets out to the side (see
+    EDGE_FREE)."""
+    if d <= EDGE_FREE:
+        return 1.0
+    t = (d - EDGE_FREE) / EDGE_SQUEEZE
+    return 1.0 / (1.0 + t * t)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _wide(K, st):
+    """Whether a brush's footprint is wide enough that
+    paint under its middle can't all get out (see EDGE_FREE)."""
+    return not K.rigid and st.hold.r * st.hold.lmax > EDGE_FREE
+
+
 @njit(cache=True, error_model="numpy")
 def squeeze_out(br, K, st, col_vol, col_load, hold, ridges, col_u):
     """An overloaded tool pressed down squeezes paint out at its edges,
     unevenly: the lips along a stroke swell and break. Only the paint under a
-    knife's blade gets squeezed, not the whole glob riding on it."""
+    knife's blade gets squeezed, not the whole glob riding on it; a wide
+    brush squeezes out little of what its columns deep under it hold (see
+    EDGE_FREE): that stays on them."""
     tip, belly = br.tip, br.belly
     ring, left, right = ridges.ring, ridges.left, ridges.right
     over = np.empty(COLUMNS)
@@ -2467,8 +2543,19 @@ def squeeze_out(br, K, st, col_vol, col_load, hold, ridges, col_u):
         rate *= clip((K.arc_end - st.motion.arc_i) / st.hold.lift_len, 0.0, 1.0)
     if st.motion.touchdown:
         rate += 0.03 * (0.3 + p)
+    wide = _wide(K, st)
+    # (the footprint reaches half px either side of its centre across the
+    # stroke; a column at u across the bristles lies |u| r / |uscale| px from
+    # it: on a flat turned to the stroke, closer in than u says)
+    half = st.hold.r * st.hold.lmax
+    col_px = st.hold.r / abs(st.hold.uscale)
     for b in range(COLUMNS):
-        tk = min(over[b] * (st.hold.Wn * st.hold.Wn / COLUMNS) * rate, col_vol[b])
+        rate_b = rate
+        if wide:
+            # a column deep under a wide brush squeezes out less: the rest
+            # stays on it
+            rate_b = rate * escapes(half - abs(col_u[b]) * col_px)
+        tk = min(over[b] * (st.hold.Wn * st.hold.Wn / COLUMNS) * rate_b, col_vol[b])
         frac = tk / max(col_vol[b], 1e-30) if col_vol[b] > 0 else 0.0
         w_right = smoothstep(-0.3, 0.3, col_u[b] * st.hold.side)
         for c in range(PACKED):
@@ -2550,12 +2637,7 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
         return
     H, W = cv.top.shape[0], cv.top.shape[1]
     widths = (_side_width(K, st, left), _side_width(K, st, right))
-    # how far past the footprint the side ridges reach (px)
-    reach = K.margin
-    if left[IV] > 0:
-        reach = max(reach, widths[0] + 1.0)
-    if right[IV] > 0:
-        reach = max(reach, widths[1] + 1.0)
+    reach = _ridge_reach(K, ridges, widths)
     win, box = _ridge_window(st, _ridge_pads(st, K.margin, reach), H, W, lose_off)
     oy0, ox0, oy1, ox1 = box
     if oy0 >= oy1 or ox0 >= ox1:
@@ -2600,6 +2682,18 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
                         w_t[y, x] = 0.0
                         w_g[y, x] = 0.0
             _spread_ridge(cv, pend, br, K, pk, weights, win, box, lose_off)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _ridge_reach(K, ridges, widths):
+    """How far past the footprint (px) the side ridges of a step reach: its
+    margin, or as far as they (``widths``) and a px."""
+    reach = K.margin
+    if ridges.left[IV] > 0:
+        reach = max(reach, widths[0] + 1.0)
+    if ridges.right[IV] > 0:
+        reach = max(reach, widths[1] + 1.0)
+    return reach
 
 
 @njit(cache=True, error_model="numpy", inline="always")
@@ -2700,24 +2794,12 @@ def _ring_weights(K, st, vol, geo, tables, hair, inset, weights):
     e_along, e_lat, e_r = geo
     grid, c_tab, h_tab = tables
     w_t, w_g = weights
-    lmax, margin = st.hold.lmax, K.margin
     bead = not (K.is_dab or K.rigid)
-    w = clip(
-        0.24 * st.hold.r * min(lmax, 1.0 if K.circle else st.hold.h_tab_max),
-        0.6,
-        margin - 1.0,
-    )
+    w = _ring_width(K, st, vol)
     set_down, hb = 0.0, 1.0
     if bead:
         # around where the brush landed, at the start of this first step
         set_down = st.motion.ds
-        # the length of the back and the sides of the footprint
-        if K.circle:
-            rim_len = 2.0 * math.pi * st.hold.r * 0.75
-        else:
-            rim_len = 2.0 * st.hold.r * (lmax + 2.0 * st.hold.h_tab_max)
-        # about as high (1 unit of paint ~ 0.6 px) as it is wide
-        w = clip(1.4 * math.sqrt(vol / max(rim_len, 1e-6)), 1.5, margin - 1.0)
         hb = max(0.5 * st.hold.r * (1.0 if K.circle else st.hold.h_tab_max), 1.0)
     eh, ew = e_along.shape
     for y in range(eh):
@@ -2730,10 +2812,35 @@ def _ring_weights(K, st, vol, geo, tables, hair, inset, weights):
                 back = smoothstep(hb, -hb, ea)
                 lump = 0.35 + 1.3 * hair_at(hair, st, K, e_along[y, x], e_lat[y, x])
                 w_t[y, x] = max(1.0 - t * t, 0.0) * (0.03 + 0.97 * back) * lump
-                w_g[y, x] = _geo(e + inset, 1.3 * w)
+                w_g[y, x] = _geo(e + inset, BEAD_REACH * w)
             else:
                 w_t[y, x] = _tent(e + inset, w)
                 w_g[y, x] = _geo(e + inset, w)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _ring_width(K, st, vol):
+    """How wide (px) the paint ``vol`` squeezed out all around the footprint
+    lies (see _ring_weights). All around a dab or a knife, as wide as the
+    footprint's narrow side allows; where a brush is set down, a bead about
+    as high (1 unit of paint ~ 0.6 px) as it is wide (its outer edge
+    reaching BEAD_REACH times as far); both within the margin, the window a
+    step's ridges are worked out over (a wide brush's bead stays narrower
+    than its side ridges may grow: what a wide brush can't push out from
+    under its middle doesn't reach it, see EDGE_FREE)."""
+    lmax = st.hold.lmax
+    if K.is_dab or K.rigid:
+        return clip(
+            0.24 * st.hold.r * min(lmax, 1.0 if K.circle else st.hold.h_tab_max),
+            0.6,
+            K.margin - 1.0,
+        )
+    # the length of the back and the sides of the footprint
+    if K.circle:
+        rim_len = 2.0 * math.pi * st.hold.r * 0.75
+    else:
+        rim_len = 2.0 * st.hold.r * (lmax + 2.0 * st.hold.h_tab_max)
+    return clip(1.4 * math.sqrt(vol / max(rim_len, 1e-6)), 1.5, K.margin - 1.0)
 
 
 @njit(cache=True, error_model="numpy", inline="always")
@@ -3396,14 +3503,16 @@ def _plough(cv, aux, pend, br, F, st, K, thick, ridges, ploughing):
     """The bristles of a brush laying paint ``thick`` comb through the thick
     wet paint already there (over all of the step's window on the canvas):
     what stands above them is shifted, partly onto the brush, partly out to
-    the sides (into ``ridges``), the rest pushed ahead. A point (``K.dig``)
+    the sides (into ``ridges``), the rest pushed ahead; under a wide brush,
+    what would go aside from deep under it mostly isn't shifted at all (see
+    EDGE_FREE, _held_back). A point (``K.dig``)
     cuts a groove through a share of all of it. Where they plough
     (``ploughing``: how far at each pixel of the window on the canvas, and
     whether anywhere; see _ploughs), they go down through the paint they
     carry and cut into the paint below (see GAP)."""
     win = st.win
     top, und = cv.top, cv.und
-    plough, ploughs = ploughing[0], ploughing[1]
+    ploughs = ploughing[1]
     p = st.hold.p
     gap = _gap(p, K.stiffness)
     hb = max(1.25 * thick, gap)
@@ -3418,10 +3527,35 @@ def _plough(cv, aux, pend, br, F, st, K, thick, ridges, ploughing):
     tv, wet_h, excess, emax = _excess(cv, aux, F, st, K, (hb, gap), ploughing)
     if not emax > 1e-3:
         return
-    moved = take(top, und, win.cy0, win.cx0, excess, tv)
     share_pick = 0.5 * min(K.pickup, 1.0)
+    wy0, wx0 = win.wy0, win.wx0
+    lat = np.ascontiguousarray(F[F_LAT, wy0 : wy0 + win.ch, wx0 : wx0 + win.cw])
+    if _wide(K, st) and not digging:
+        # paint deep under a wide brush that can't get out to its sides is
+        # not shifted at all: it stays where it is (see _held_back)
+        s_side = _side_shares(st, K, ploughing, share_pick)
+        picks = _held_back(excess, s_side, lat, st.hold.r * st.hold.lmax, share_pick)
+        moved = take(top, und, win.cy0, win.cx0, excess, tv)
+        _onto_brush_each(br, moved, wet_h, F, st, K, picks)
+        _to_sides_or_ahead(cv, pend, st, K, ridges, moved, lat, s_side)
+        return
+    moved = take(top, und, win.cy0, win.cx0, excess, tv)
     _onto_brush(br, moved, wet_h, F, st, K, share_pick)
     moved *= 1.0 - share_pick
+    _aside_and_ahead(cv, pend, st, K, ridges, moved, lat, ploughing, share_pick)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _aside_and_ahead(cv, pend, st, K, ridges, moved, lat, ploughing, share_pick):
+    """What the bristles of a brush no wider than 2 EDGE_FREE (or a point)
+    shifted (``moved``, per pixel of the step's window on the canvas, less
+    what went onto the brush): all of it into the bead as the brush is set
+    down; else a share out to its sides, the rest pushed ahead (see
+    _plough)."""
+    win = st.win
+    plough, ploughs = ploughing[0], ploughing[1]
+    p = st.hold.p
+    digging = K.dig > 0
     if st.motion.touchdown:
         ring = ridges.ring
         for y in range(win.ch):
@@ -3431,8 +3565,6 @@ def _plough(cv, aux, pend, br, F, st, K, thick, ridges, ploughing):
         return
     # a point pushes it all aside
     to_side = 1.0 if digging else SIDE_SHARE / (1.0 - share_pick)
-    wy0, wx0 = win.wy0, win.wx0
-    lat = np.ascontiguousarray(F[F_LAT, wy0 : wy0 + win.ch, wx0 : wx0 + win.cw])
     if ploughs:
         # ploughing, the harder and the more it cuts, the more it pushes out
         # to the sides
@@ -3443,6 +3575,127 @@ def _plough(cv, aux, pend, br, F, st, K, thick, ridges, ploughing):
         if to_side < 1.0:
             moved *= 1.0 - to_side
     if to_side < 1.0:
+        ds = st.motion.ds
+        place(
+            cv,
+            pend,
+            moved,
+            win.cx0,
+            win.cy0,
+            st.motion.tx * ds,
+            st.motion.ty * ds,
+            K.stroke_id,
+        )
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _side_shares(st, K, ploughing, share_pick):
+    """The share of the paint the bristles shift at each pixel of the step's
+    window on the canvas (what is left of it once the brush has picked up
+    its share ``share_pick``) that a brush pushes out to its sides: all of
+    it as the brush is set down (into the bead), else SIDE_SHARE, and more
+    where it ploughs (see _plough), all of it at most."""
+    win = st.win
+    s_side = np.ones((win.ch, win.cw))
+    if st.motion.touchdown:
+        return s_side
+    plough, ploughs = ploughing[0], ploughing[1]
+    to_side = SIDE_SHARE / (1.0 - share_pick)
+    more = SIDE_PLOUGH * st.hold.p * _bite(K) / (1.0 - share_pick)
+    for y in range(win.ch):
+        for x in range(win.cw):
+            m = more * plough[y, x] if ploughs else 0.0
+            s_side[y, x] = min(max(to_side + m, 0.0), 1.0)
+    return s_side
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _held_back(excess, s_side, lat, half, share_pick):
+    """What a wide brush shifts at each pixel of its step's window on the
+    canvas, deep under its footprint (``half`` px each side of its centre;
+    ``lat``: px across it). Of the paint E its bristles would shift there,
+    the brush picks up ``share_pick`` as everywhere, and of the rest the
+    share ``s_side`` would go aside (see _side_shares), the rest ahead; but
+    of what would go aside only the share f that escapes from that deep
+    (see escapes) does, and the rest of it is not shifted at all. So, with
+    stay = s_side (1 - f), it shifts only E (1 - (1 - share_pick) stay):
+    ``excess`` is cut to that; ``s_side`` becomes the share of what is left
+    of it once the brush has picked up its own that goes aside, s_side f /
+    ((1 - s_side) + s_side f); and the share of it the brush picks up,
+    share_pick / (1 - (1 - share_pick) stay), is returned per pixel. The
+    brush gets
+    share_pick E, the sides s_side f (1 - share_pick) E and ahead goes
+    (1 - s_side) (1 - share_pick) E, as without the limit, and s_side (1 -
+    f) (1 - share_pick) E stays where it was."""
+    hh, ww = lat.shape
+    picks = np.full((hh, ww), share_pick)
+    for y in range(hh):
+        for x in range(ww):
+            f = escapes(half - abs(lat[y, x]))
+            if f >= 1.0:
+                continue
+            s = s_side[y, x]
+            stay = s * (1.0 - f)
+            kept = 1.0 - (1.0 - share_pick) * stay
+            excess[y, x] *= kept
+            picks[y, x] = share_pick / kept
+            # (written so that it is exactly 1 for s = 1: 1 - (1 - f) is not
+            # always f in floating point)
+            rest = (1.0 - s) + s * f
+            s_side[y, x] = s * f / rest if rest > 0.0 else 1.0
+    return picks
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _onto_brush_each(br, moved, wet_h, F, st, K, picks):
+    """:func:`_onto_brush` with the share the brush picks up given per pixel
+    (``picks``, see _held_back); ``moved`` keeps the rest."""
+    win = st.win
+    tip, belly = br.tip, br.belly
+    ch, cw, wy0, wx0 = win.ch, win.cw, win.wy0, win.wx0
+    u = np.ascontiguousarray(F[F_U, wy0 : wy0 + ch, wx0 : wx0 + cw])
+    taps = bristle_taps(u, st.hold.span, st.hold.nsub, K.ring, st.hold.rho)
+    cols, wts, ntap = taps.cols, taps.wts, taps.ntap
+    for y in range(ch):
+        for x in range(cw):
+            q = y * cw + x
+            deep = past_tips(wet_h[y, x], st.hold.p, K)
+            for t in range(ntap[q]):
+                b, wt = cols[q, t], wts[q, t] * picks[y, x]
+                for c in range(PACKED):
+                    m = wt * moved[y, x, c]
+                    tip[b, c] += (1.0 - deep) * m
+                    belly[b, c] += deep * m
+            for c in range(PACKED):
+                moved[y, x, c] *= 1.0 - picks[y, x]
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _to_sides_or_ahead(cv, pend, st, K, ridges, moved, lat, s_side):
+    """The paint the bristles of a wide brush shifted (``moved``, per pixel
+    of the step's window on the canvas, less what went onto the brush): all
+    of it all round into the bead as the brush is set down; else the share
+    ``s_side`` of it out to the sides, the rest pushed ahead (see
+    _plough)."""
+    win = st.win
+    left, right, ring = ridges.left, ridges.right, ridges.ring
+    if st.motion.touchdown:
+        for y in range(win.ch):
+            for x in range(win.cw):
+                for c in range(PACKED):
+                    ring[c] += moved[y, x, c]
+        return
+    ahead = False
+    for y in range(win.ch):
+        for x in range(win.cw):
+            sh = s_side[y, x]
+            side = right if lat[y, x] > 0 else left
+            for c in range(PACKED):
+                m = moved[y, x, c]
+                side[c] += sh * m
+                moved[y, x, c] = (1.0 - sh) * m
+            ahead = ahead or sh < 1.0
+    if ahead:
         ds = st.motion.ds
         place(
             cv,
@@ -4562,6 +4815,110 @@ def _film_cover(v, inside, reliable, y, x):
     if nb < FILM_KNOWN:
         need *= smoothstep(EMPTY, FILM_KNOWN, nb)
     return need
+
+
+@njit(cache=True, error_model="numpy")
+def cover_ramps(top, top_a, ids, stroke_id, region, ramps):
+    """Where the paint the stroke ``stroke_id`` laid on top ends in a slope
+    (a wide brush's ridge, or its heavy paint slumped to its edge), the last
+    pixel covers at least as much as the slope says, not as little as the
+    films beside it would (see _film_cover: a pixel holding 2 units next to
+    3 and 4.4 covered a third of itself, pale in a solid edge), times
+    ``ramps`` (0 to 1), over the ``region`` (ry0, ry1, rx0, rx1).
+
+    Only the stroke's own paint on top, at the edge of it (a pixel beside
+    one holding less than MIN_FILM of it) and holding at least MIN_FILM:
+    other strokes' paint, the lower layer and thinner traces keep the
+    coverage fix_coverage gave them. The slope is read only from the
+    stroke's own pixels that it covers (RAMP_SOLID) and that are not at the
+    edge themselves, so a pixel this covers more never tells the slope:
+    running it again changes nothing."""
+    ry0, ry1, rx0, rx1 = region
+    H, W = ry1 - ry0, rx1 - rx0
+    if H <= 0 or W <= 0:
+        return
+    own = np.zeros((H, W), np.float32)
+    for y in range(H):
+        for x in range(W):
+            if ids[ry0 + y, rx0 + x] == stroke_id:
+                own[y, x] = top[ry0 + y, rx0 + x, IV]
+    solid = np.zeros((H, W), np.float32)
+    for y in range(H):
+        for x in range(W):
+            a = top_a[ry0 + y, rx0 + x]
+            if a >= RAMP_SOLID and own[y, x] > EMPTY and not _at_edge(own, y, x):
+                solid[y, x] = own[y, x] / a
+    for y in range(H):
+        for x in range(W):
+            a = top_a[ry0 + y, rx0 + x]
+            v = own[y, x]
+            if not (v >= MIN_FILM and a < RAMP_SOLID and _at_edge(own, y, x)):
+                continue
+            need = ramps * _ramp_cover(v, solid, own, y, x)
+            if need > a:
+                top_a[ry0 + y, rx0 + x] = need
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _at_edge(own, y, x):
+    """Whether pixel (y, x) of the region has a neighbour (left, right, above
+    or below, within the region) holding less than MIN_FILM of the stroke's
+    own paint (``own``)."""
+    H, W = own.shape
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        yy, xx = y + dy, x + dx
+        if 0 <= yy < H and 0 <= xx < W and own[yy, xx] < MIN_FILM:
+            return True
+    return False
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _along(own, y, x, dy, dx):
+    """Whether both neighbours of pixel (y, x) along the edge (across the
+    direction (dy, dx) it rises inward in) hold at least MIN_FILM of the
+    stroke's own paint, and much alike (within RAMP_EVEN): a run of a level
+    edge, not a step of a slanting edge's staircase (whose partly covered
+    pixels are its anti-aliasing)."""
+    H, W = own.shape
+    for k in (1, -1):
+        yy, xx = y + k * dx, x + k * dy
+        if not (0 <= yy < H and 0 <= xx < W and own[yy, xx] >= MIN_FILM):
+            return False
+    # (along a level edge the edge pixels hold much alike; along a slanting
+    # one, what they hold climbs from pixel to pixel of each run of its
+    # staircase. Their paint, not their coverage: the pass changes that)
+    v1, v2 = own[y + dx, x + dy], own[y - dx, x - dy]
+    return abs(v1 - v2) <= RAMP_EVEN * max(v1, v2)
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _ramp_cover(v, solid, own, y, x):
+    """How much of pixel (y, x) of the region paint of volume ``v`` covers at
+    the foot of a slope, at least (0: nothing to say): as much as makes it
+    as thick as the films of the two pixels inward of it (left, right, above
+    or below, both read from ``solid``, see cover_ramps) carried on one pixel
+    (at least a quarter of the nearer one), where they rise inward: fully
+    where the inner one is at least RAMP_RISE[1] thicker than the nearer
+    (relative to the inner), not at all below RAMP_RISE[0] (the plateau of a
+    stroke's edge keeps its anti-aliasing), in proportion between; up the
+    steepest of the four directions (the way inward: along a slanting edge,
+    the pixels beside it on its own row rise too, more gently), along a run
+    of the edge (see _along). It depends on nothing it changes: the result
+    of cover_ramps doesn't either."""
+    H, W = solid.shape
+    rise, r1, r2 = 0.0, 0.0, 0.0
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        y1, x1, y2, x2 = y + dy, x + dx, y + 2 * dy, x + 2 * dx
+        if not (0 <= y2 < H and 0 <= x2 < W):
+            continue
+        f1, f2 = solid[y1, x1], solid[y2, x2]
+        if f1 > 0 and f2 - f1 > rise and _along(own, y, x, dy, dx):
+            rise, r1, r2 = f2 - f1, f1, f2
+    if not rise > 0:
+        return 0.0
+    g = smoothstep(RAMP_RISE[0], RAMP_RISE[1], rise / r2)
+    film = max(2.0 * r1 - r2, 0.25 * r1)
+    return g * min(v / film, 1.0)
 
 
 @njit(cache=True, error_model="numpy")
