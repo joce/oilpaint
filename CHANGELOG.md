@@ -82,19 +82,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Where a wide brush's own paint at the edge of its stroke ends in a slope,
   the last pixel of it (if it holds at least `MIN_FILM`) covers as much of
   itself as the slope carried on says, instead of as little as the thicker
-  paint beside it would: on the level edge of a heavy stroke of a 120 px
-  flat on bare canvas, the outer pixels holding over a unit that came out
-  more than 4 levels paler than the stroke fall from 51% to 13% (and by at
-  most 80 levels instead of 135). Other strokes' paint, the lower layer and
-  thinner traces keep their coverage, the steps of a slanting edge's
-  staircase keep their anti-aliasing, and doing it again changes nothing.
-  It goes by how wide the stroke's footprint reached across it: not at all
-  up to 28 px (a flat up to 26 or 27 px, a round or filbert up to 18 to
-  36 px depending on its hair and the pressure), fully from 40 px, smoothly in
-  between. A heavily loaded wide stroke's slanting edge is harder for it:
-  of 240 columns crossing such an edge (black, 120 units), 182 keep an
-  in-between pixel at 50 px (208 before), 113 at 90 px (198), 208 at
-  120 px (236).
+  paint beside it would. On the level edge of a heavy stroke of a 120 px
+  flat on bare canvas, the outer pixels holding over a unit that come out
+  more than 4 levels paler than the stroke fall to 3 to 19% over five
+  strokes (12% on average), from 15 to 66% (36%); for a 70 px flat to 0 to
+  10% (4%), from 3 to 13% (8%). The palest of them stay as pale as before
+  (up to about 135 levels). Other strokes' paint, the lower layer and
+  thinner traces keep their coverage, and so does a foot whose neighbours
+  along the edge hold paint more than 15% unlike: the steps of a slanting
+  edge's staircase keep their anti-aliasing (a heavily loaded wide stroke's
+  slanting edge keeps as many in-between pixels as it would without this).
+  Doing it again changes nothing. It goes by how wide the stroke's
+  footprint reached across it: not at all up to 28 px (a flat up to 26 or
+  27 px, a round or filbert up to 18 to 36 px depending on its hair and the
+  pressure), fully from 40 px, smoothly in between.
 - Scumbling over dried impasto: a lightly pressed brush carrying little
   paint now leaves broken paint on the crests of the dried relief, with the
   hollows showing through, and carries what it does not lay further along;

@@ -682,11 +682,11 @@ the canvas, and the tools push it around:
   the stroke, swelling and breaking where the clumps at the brush's edge
   pushed them out. Light pressure leaves a thick deposit; heavy pressure
   spreads it thin and pushes the excess aside. Only paint near the edges of
-  the brush gets out, though: under a brush wider than about 40 px, paint
-  more than 20 px in from the nearer edge mostly stays where it is, so a
-  wide, heavily loaded stroke stays thick and furrowed in the middle, and
-  its ridges and the bead where it was set down stand no taller for its size
-  than a small brush's.
+  the brush gets out, though: under a brush whose footprint is more than
+  about 40 px across the stroke, paint more than 20 px in from the nearer
+  edge mostly stays where it is, so a wide, heavily loaded stroke stays
+  thick and furrowed in the middle, and its ridges and the bead where it was
+  set down stand no taller for its size than a small brush's.
 * **Ploughing.** Dragging a tool through thick wet paint pushes the paint above
   it aside into ridges and ahead of it, and leaves a pile where it lifts.
   Pressed hard (from a pressure of about 0.4, fully from 0.6) through wet paint

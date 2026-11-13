@@ -566,10 +566,20 @@ def soften(where):
                     (x0 + d[0] * 0.1, y0 + d[1] * 0.1 + rng.normal(0, 3 * S)),
                     (x0 + d[0], y0 + d[1]),
                 ]
-                # the whole sweep stays over the background: a mop centred in
-                # a gap beside the head would drag the flesh paint over the
-                # beret (the random numbers are drawn as before either way)
-                if not _all_over(where, pts):
+                # the whole of what the mop presses stays over the background
+                # (its centreline, and the lines either side of it as far out
+                # as it presses at this light touch, about 0.3 of its size):
+                # one centred in a gap beside the head would drag the flesh
+                # paint over the beret. (This script's own random numbers are
+                # drawn as before; the canvas's, which seed the strokes, run
+                # on differently once a sweep is skipped.)
+                side = np.array([-d[1], d[0]]) / np.hypot(d[0], d[1])
+                if not all(
+                    _all_over(
+                        where, [(px + k * side[0], py + k * side[1]) for px, py in pts]
+                    )
+                    for k in (0.0, -0.3 * size, 0.3 * size)
+                ):
                     continue
                 canvas.stroke(
                     pts, brush=Brush(brushes.MOP.sized(size)), pressure=[0.0, 0.14, 0.0]

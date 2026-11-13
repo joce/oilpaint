@@ -140,10 +140,12 @@ BEAD_REACH = 1.3
 # Where the stroke's own paint at its edge ends in a slope, its last pixel
 # covers at least as much as the slope carried on says (see cover_ramps),
 # not as little as the films beside it would: a pixel holding 2 units next
-# to 3 and 4.4 covered a third of itself, pale in a solid edge (on a 120 px
-# flat's level edge, heavily loaded, 51% of the outer pixels holding over a
-# unit came out more than 4 levels pale, by up to 135; 13%, by up to 80,
-# with it). By how wide the stroke's footprint reached across it (the most
+# to 3 and 4.4 covered a third of itself, pale in a solid edge. On a 120 px
+# flat's level edge, heavily loaded (five strokes, mean and range), the
+# outer pixels holding over a unit that come out more than 4 levels pale:
+# 45% (18 to 84%) without it, 12% (3 to 19%) with it; 25% (15 to 41%) and
+# 4% (0 to 10%) for a 70 px flat. The palest stay as pale (up to 138
+# levels): see RAMP_EVEN. By how wide the stroke's footprint reached across it (the most
 # of r * lmax over its steps): fully from more than 2 EDGE_FREE px, not at
 # all up to 2 RAMP_FROM, smoothly in between (no step where it starts).
 RAMP_FROM = 14.0
@@ -156,6 +158,15 @@ RAMP_RISE = (0.1, 0.25)
 # not at its edge) say how the slope runs: a partly covered pixel beside
 # the foot, along a slanting edge, is that edge's anti-aliasing.
 RAMP_SOLID = 0.95
+# A foot whose two neighbours along the edge hold paint more unlike than this
+# (relative to the more) is where a slanting edge's staircase climbs from
+# pixel to pixel: left as it is, its anti-aliasing. Without this check,
+# of 240 columns crossing the edge of a heavy black stroke (120 units, five
+# canvases) 168 to 210 kept an in-between pixel at 50 to 140 px, against
+# 208 to 240 with no slope cover at all; with it, as with none (one column
+# in 12 000 differs), for a 120 px flat's level edge 12% pale instead of
+# 9%.
+RAMP_EVEN = 0.15
 # Paint thinner than this can't form a continuous film (the renderer, see
 # canvas.MIN_FILM, counts it by the same measure).
 MIN_FILM = 0.15
@@ -3610,8 +3621,9 @@ def _held_back(excess, s_side, lat, half, share_pick):
     stay = s_side (1 - f), it shifts only E (1 - (1 - share_pick) stay):
     ``excess`` is cut to that; ``s_side`` becomes the share of what is left
     of it once the brush has picked up its own that goes aside, s_side f /
-    (1 - stay); and the share of it the brush picks up, share_pick / (1 -
-    (1 - share_pick) stay), is returned per pixel. The brush gets
+    ((1 - s_side) + s_side f); and the share of it the brush picks up,
+    share_pick / (1 - (1 - share_pick) stay), is returned per pixel. The
+    brush gets
     share_pick E, the sides s_side f (1 - share_pick) E and ahead goes
     (1 - s_side) (1 - share_pick) E, as without the limit, and s_side (1 -
     f) (1 - share_pick) E stays where it was."""
@@ -3627,7 +3639,10 @@ def _held_back(excess, s_side, lat, half, share_pick):
             kept = 1.0 - (1.0 - share_pick) * stay
             excess[y, x] *= kept
             picks[y, x] = share_pick / kept
-            s_side[y, x] = s * f / (1.0 - stay) if stay < 1.0 else 1.0
+            # (written so that it is exactly 1 for s = 1: 1 - (1 - f) is not
+            # always f in floating point)
+            rest = (1.0 - s) + s * f
+            s_side[y, x] = s * f / rest if rest > 0.0 else 1.0
     return picks
 
 
@@ -4861,14 +4876,19 @@ def _at_edge(own, y, x):
 def _along(own, y, x, dy, dx):
     """Whether both neighbours of pixel (y, x) along the edge (across the
     direction (dy, dx) it rises inward in) hold at least MIN_FILM of the
-    stroke's own paint: a run of the edge, not a step of a slanting edge's
-    staircase (whose partly covered pixels are its anti-aliasing)."""
+    stroke's own paint, and much alike (within RAMP_EVEN): a run of a level
+    edge, not a step of a slanting edge's staircase (whose partly covered
+    pixels are its anti-aliasing)."""
     H, W = own.shape
     for k in (1, -1):
         yy, xx = y + k * dx, x + k * dy
         if not (0 <= yy < H and 0 <= xx < W and own[yy, xx] >= MIN_FILM):
             return False
-    return True
+    # (along a level edge the edge pixels hold much alike; along a slanting
+    # one, what they hold climbs from pixel to pixel of each run of its
+    # staircase. Their paint, not their coverage: the pass changes that)
+    v1, v2 = own[y + dx, x + dy], own[y - dx, x - dy]
+    return abs(v1 - v2) <= RAMP_EVEN * max(v1, v2)
 
 
 @njit(cache=True, error_model="numpy", inline="always")
