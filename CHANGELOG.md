@@ -85,9 +85,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   paint beside it would. On the level edge of a heavy stroke of a 120 px
   flat on bare canvas, the outer pixels holding over a unit that come out
   more than 4 levels paler than the stroke fall to 3 to 19% over five
-  strokes (12% on average), from 15 to 66% (36%); for a 70 px flat to 0 to
-  10% (4%), from 3 to 13% (8%). The palest of them stay as pale as before
-  (up to about 135 levels). Other strokes' paint, the lower layer and
+  strokes (12% on average), from 15 to 66% over the same five (36%); for a
+  70 px flat, over five strokes, to 0 to 10% (4%), from 3 to 13% (8%).
+  Now and then a stroke bulges at its edge and comes out far paler, as
+  before (over ten 70 px strokes, 0 to 69% against 0 to 71%; pooled, 8.3%
+  against 16.7%). The palest pixels stay as pale as before (up to about
+  135 levels). Other strokes' paint, the lower layer and
   thinner traces keep their coverage, and so does a foot whose neighbours
   along the edge hold paint more than 15% unlike: the steps of a slanting
   edge's staircase keep their anti-aliasing (a heavily loaded wide stroke's

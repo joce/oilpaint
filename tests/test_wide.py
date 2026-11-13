@@ -273,8 +273,9 @@ _LEVEL = {}
 
 def _level_edge(w, seed):
     """A heavily loaded red stroke of a ``w`` px flat on bare canvas, level
-    (stroke ``seed``): the share of its outer pixels holding over a unit
-    that are more than 4 levels paler than its full paint (unlit luma)."""
+    (stroke ``seed``): how many of its outer pixels holding over a unit are
+    more than 4 levels paler than its full paint (unlit luma), and how many
+    such pixels there are."""
     if (w, seed) not in _LEVEL:
         s = 2 * w + 100
         c = Canvas(s, s, seed=2)
@@ -296,7 +297,7 @@ def _level_edge(w, seed):
         thick = outer & (v > 1.0)
         # (enough to measure: 45 to 202 at 70 px over seeds 1 to 10)
         assert thick.sum() > 30
-        _LEVEL[w, seed] = float((full - dark[thick] > 4).mean())
+        _LEVEL[w, seed] = (int((full - dark[thick] > 4).sum()), int(thick.sum()))
     return _LEVEL[w, seed]
 
 
@@ -304,24 +305,32 @@ def _pale(w, seeds=SEEDS):
     """The median over ``seeds`` of _level_edge (a stroke now and then bulges
     at its edge and comes out far paler: seed 7 at 70 px, 69%, 71%
     before)."""
-    return float(np.median([_level_edge(w, seed) for seed in seeds]))
+    return float(np.median([np.divide(*_level_edge(w, seed)) for seed in seeds]))
 
 
-def test_the_level_edge_of_heavy_paint_stays_solid_for_a_70_px_brush():
-    """As test_the_level_edge_of_heavy_paint_stays_solid, for a 70 px flat:
-    of the outer pixels of a heavy, level stroke holding over a unit, few
-    are more than 4 levels paler than its paint: at most 8%, the median over
-    ten strokes (seeds 1 to 10: 5.8%; 9.7% before. Over five the median
-    is too spread to tell: 3.8% over seeds 1 to 5, 8.3% over 6 to 10,
-    against 8.7% and 34% before)."""
-    assert _pale(70, range(1, 11)) <= 0.08
+def test_the_slope_cover_is_at_work_on_a_70_px_brush_s_level_edge():
+    """A guard that the slope cover is at work for a 70 px flat, not a
+    comparison with the code before it: of the outer pixels holding over a
+    unit of ten heavy, level strokes (seeds 1 to 10, pooled), no more than
+    20% are more than 4 levels paler than the paint. Measured: 8.3% (109 of
+    1316) now, 31.5% (414 of 1316) without the slope cover, 16.7% before
+    (main). Resampling the ten strokes (bootstrap), the pooled share now
+    has its 95% range at 3.4 to 16.7% and goes over 20% 0.7% of the time;
+    without the slope cover, it stays under 20% 4.5% of the time. (Per
+    stroke the share is 0 to 69%: a stroke now and then bulges at its edge
+    and comes out far paler, as before; a median or a five-stroke figure
+    is too spread to tell anything from.)"""
+    pale, thick = np.sum([_level_edge(70, seed) for seed in range(1, 11)], axis=0)
+    assert pale / thick <= 0.2
 
 
 @pytest.mark.xfail(reason="a 120 px flat's level edge still has pale feet", strict=True)
 def test_the_level_edge_of_heavy_paint_stays_solid_for_a_120_px_brush():
-    """The same for a 120 px flat, at the bound of the original test (2%): it
-    does not hold (13%, the median over seeds 1 to 5): see the bound
-    below."""
+    """As test_the_level_edge_of_heavy_paint_stays_solid, for a 120 px flat:
+    of the outer pixels of a heavy, level stroke holding over a unit, no
+    more than 2% (the original test's bound) more than 4 levels paler than
+    its paint. It does not hold (13%, the median over seeds 1 to 5): see
+    the bound below."""
     assert _pale(120) <= 0.02
 
 
