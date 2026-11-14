@@ -736,11 +736,9 @@ class Canvas:
           highlight (GGX, ROUGH_WET; weaker and a little broader once dry) on
           the crests and lips of thick paint, spread by the curvature inside
           each pixel, and on narrow crests gathered a little way along them
-          (GLOSS_SPAN, CREST_GATE), at a shallow slant over a step of the
-          pixel staircase where the crest runs on (GLOSS_SPAN_MAX, RUN_ON),
-          so that a glint along a slanting crest is a line, not beads or
-          dashes at the steps of the pixels (domes, round dabs and broad
-          slopes keep their own). Only facets near that mirror
+          (GLOSS_SPAN, CREST_GATE), so that a glint along a slanting crest is
+          a line, not beads at the steps of the pixels (domes, round dabs
+          and broad slopes keep their own). Only facets near that mirror
           slope shine (GLOSS_CUT), less what flat paint shows, so paint that
           does not mirror the lamp keeps its colour: no veil of reflected
           light over it. Thin, lean paint barely shines (GLOSS_FILM), paint
@@ -787,9 +785,7 @@ class Canvas:
             dry1=GLOSS_DRY_FILM[1],
             gloss_span=GLOSS_SPAN,
             gloss_taps=GLOSS_TAPS,
-            gloss_span_max=GLOSS_SPAN_MAX,
             crest_gate=CREST_GATE,
-            run_on=tuple(float(np.cos(np.radians(a)) ** 2) for a in RUN_ON),
             out=out,
         )
         return out
@@ -865,36 +861,12 @@ GLOSS_SPAN = 2.0
 #: How many points each side of the pixel the highlight is gathered from
 #: over GLOSS_SPAN (tent-weighted).
 GLOSS_TAPS = 2
-#: Further than GLOSS_SPAN, a highlight is gathered along a crest over one
-#: step of the pixel staircase, 1 / sin of its slant from the rows or
-#: columns, up to this (pixels; GLOSS_SPAN_MAX^2 sin nearer the rows or
-#: columns than asin(1 / GLOSS_SPAN_MAX), 3.6 degrees, down to nothing more
-#: along them), as far as the crest, followed both ways, is surely the same
-#: crest and runs on straight (see RUN_ON). A thin crest's own highlight
-#: swells and fades as it crosses the rows (a level crest of sigma 0.4 px
-#: shines 11 times as bright on a row as between two), so at a shallow
-#: slant its glint is a string of dashes a step apart, too far apart for
-#: GLOSS_SPAN to join. On ridges of paint of sigma 0.6 to 2 px at 5 and 11
-#: degrees the beading (tests/test_render) is 0.023 at worst, against 0.24
-#: without; at 2 degrees, beyond 16 px, 0.22 against 0.29 (sigma 0.6).
-#: (24: more at 1 to 3.6 degrees, but reading further off a crest that
-#: curves; 12: dashes from 4.8 degrees down.)
-GLOSS_SPAN_MAX = 16.0
 #: Where a highlight is gathered: on narrow crests, not on domes, round
 #: dabs or broad slopes. The share of GLOSS_SPAN rises (smoothstep) with
 #: the anisotropy of the curvature, (|k1| - |k2|) / (|k1| + |k2|), from the
 #: first to the second value, and with the curvature across the crest |k1|
 #: (per pixel) from the third to the fourth.
 CREST_GATE = (0.5, 0.75, 0.04, 0.12)
-#: Only as far as the crest runs on: beyond GLOSS_SPAN, the crest is
-#: followed a pixel at a time, and gathered over only as far as, all the
-#: way, it is a crest (CREST_GATE) running within this many degrees of the
-#: direction read where it started (from, to: none to all of the way),
-#: where it was heading, as strongly curved, and straight. Not round a
-#: crossing, a junction, a knob, a bend, a dab's rim or an elongated drop:
-#: a crest bending by 30 degrees is not followed past the bend; (60, 24)
-#: follows it.
-RUN_ON = (20.0, 8.0)
 
 #: Share of the fine relief kept on gently modelled paint, and the local
 #: relief (in units of paint thickness) from which all of it is kept.

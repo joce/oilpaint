@@ -512,15 +512,6 @@ def _near_row(src, r, out):
         out[x] = 1 if last >= x - r else 0
 
 
-@njit(cache=True, error_model="numpy", nogil=True)
-def _tally(row, count, sign):
-    """``count`` += ``sign`` times ``row`` (one row of whether an own
-    highlight lies near), column by column: a running count of the rows
-    with one, as rows come within reach of the row being lit and leave."""
-    for x in range(count.shape[0]):
-        count[x] += sign * row[x]
-
-
 #: Weights of the 5 x 5 pixels whose curvature tells a crest (_crest).
 BINOMIAL = (1 / 16, 4 / 16, 6 / 16, 4 / 16, 1 / 16)
 #: A gathering shorter than this (pixels) is no gathering: the pixel keeps
@@ -546,55 +537,27 @@ def _blur_row(src, out):
 
 
 @njit(cache=True, error_model="numpy", nogil=True)
-def _crest_and_trace(sig, R, H, W, x, y, gate):
+def _crest(sig, R, H, W, x, y, gate):
     """Along which direction, and how far (0..1 of the span), the highlight
     of pixel (x, y) is gathered: along a narrow crest, furrow or lip only.
     From the curvature H of the 5 x 5 pixels around it, BINOMIAL-weighted:
     ``sig`` holds H H^T of each pixel (second differences two pixels apart
-    in x and y, the same span as the cross term's; a crest a few pixels
-    wide reads the same at any slant, a thinner one some degrees nearer 45
-    than it runs: a ridge of sigma 0.6 px, set directly, 1.8, 3.0 and 6.4
-    degrees nearer at 3, 5 and 11; of sigma 1, 1 degree at 3; of sigma 2,
-    0.3 or less), already blurred along the rows, its rows at the row
-    number masked with ``R``. Its larger principal curvature k1 runs across
-    a crest, the smaller k2 along it. The share is a smoothstep of the
+    in x and y, as the cross term's, so that a crest reads the same at any
+    slant), already blurred along the rows, its rows at the row number
+    masked with ``R``. Its larger principal curvature k1 runs across a
+    crest, the smaller k2 along it. The share is a smoothstep of the
     anisotropy (|k1| - |k2|) / (|k1| + |k2|) times one of |k1| (``gate``:
     anisotropy from, to; curvature from, to), so that domes and round dabs
     (k1 ~ k2) and broad, gently curved slopes keep their own highlight. The
-    direction is that of least curvature. And the trace of the blurred H
-    H^T, how strongly curved the paint is, which _cross and _peak find a
-    crest's line by.
+    direction is that of least curvature.
 
     Not within EDGE pixels of the canvas's border, where the stencils run
     off the canvas (clamped, they read a slope as a curvature) and the
-    gathering would.
-
-    The heights a canvas is lit by are smoothed [1, 2, 1] each way
-    (Canvas.surface_height), so a crest is never much under a pixel wide
-    there. At shallow slants its glint still dashes (beading: the glint
-    summed across the crest, standard deviation over mean along it, as in
-    tests/test_render.py), gathered over a step or not, where:
-
-    * the paint is a line one pixel wide, whose height swells and fades
-      along it as it crosses the rows, which reads as curvature along it
-      too: of sigma 0.3, laid as paint, 1.44 and 1.31 at 5 and 11 degrees
-      (the gate is half open at 2 and 5 degrees, shut at 11: anisotropy
-      0.41). A longer view (the curvature averaged further along the
-      crest, or over 9 x 9 pixels) opens it, but opens the canvas weave,
-      dabs, stipple and spatter as well;
-    * the crest is low: a ridge of paint of sigma 0.4 (1.08, 0.85, 0.56 at
-      2, 5 and 11 degrees), under about 0.3 px high once smoothed, which
-      the curvature part of the gate opens only half way (share 0.4), so
-      that the gathering reaches as far less. (This is a smooth ridge of
-      paint; the crests brushes and knives make, liner lines and hog-flat
-      lips included, read the gate at least as open as their anisotropy:
-      share 0.85 to 0.9 on a liner's lit pixels.)
-
-    Heights not smoothed so (set directly, as tests do) of a crest under
-    about 0.5 px are worse: sigma 0.4 at 22.5 degrees reads anisotropy
-    0.43 and is not gathered."""
+    gathering would. And a crest only about one pixel wide at a shallow
+    slant reads too little anisotropy (sigma 0.4 at 22.5 degrees: 0.44) and
+    is not gathered: it still beads."""
     if x < EDGE or y < EDGE or x >= W - EDGE or y >= H - EDGE:
-        return 1.0, 0.0, 0.0, 0.0
+        return 1.0, 0.0, 0.0
     a0, a1, k0, k1 = gate
     sxx = sxy = syy = 0.0
     for j in range(-2, 3):
@@ -609,10 +572,10 @@ def _crest_and_trace(sig, R, H, W, x, y, gate):
     l2 = max(0.5 * (tr - d), 0.0)
     c1, c2 = math.sqrt(l1), math.sqrt(l2)  # rms principal curvatures
     if not c1 > 0.0:
-        return 1.0, 0.0, 0.0, tr
+        return 1.0, 0.0, 0.0
     share = _smoothstep(a0, a1, (c1 - c2) / (c1 + c2)) * _smoothstep(k0, k1, c1)
     if not share > 0.0:
-        return 1.0, 0.0, 0.0, tr
+        return 1.0, 0.0, 0.0
     # the eigenvector of the smaller eigenvalue: along the crest
     if sxx >= syy:
         tx, ty = -sxy, l1 - syy
@@ -620,270 +583,8 @@ def _crest_and_trace(sig, R, H, W, x, y, gate):
         tx, ty = -(l1 - sxx), sxy
     n = math.sqrt(tx * tx + ty * ty)
     if not n > 0.0:
-        return 1.0, 0.0, 0.0, tr
-    return tx / n, ty / n, share, tr
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _crest(sig, R, H, W, x, y, gate):
-    """_crest_and_trace without the trace: (tx, ty, share)."""
-    tx, ty, share, _ = _crest_and_trace(sig, R, H, W, x, y, gate)
-    return tx, ty, share
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _step(tx, ty, span_top):
-    """The step of the pixel staircase along a crest in direction (tx, ty)
-    (pixels): 1 / sin of its slant from the rows or the columns, up to
-    ``span_top``; for slants nearer the rows or columns than that (sin
-    below 1 / span_top: asin(1 / 16) = 3.58 degrees for 16), where the
-    staircase drifts so slowly along the crest that it hardly beads,
-    span_top^2 times that sine: continuous (with a kink there), down to 0
-    for a crest along the rows or columns."""
-    st = min(abs(tx), abs(ty))
-    if st * span_top >= 1.0:
-        return 1.0 / st
-    return span_top * span_top * st
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _crest_at(sig, R, H, W, memo, val, x, y, gate):
-    """_crest_and_trace at pixel (x, y), worked out once: kept in ``val``
-    (tx, ty, share, trace) at the row number masked with ``R``, ``memo``
-    marking which are."""
-    r = y & R
-    if not memo[r, x]:
-        tx, ty, share, tr = _crest_and_trace(sig, R, H, W, x, y, gate)
-        val[r, 0, x] = tx
-        val[r, 1, x] = ty
-        val[r, 2, x] = share
-        val[r, 3, x] = tr
-        memo[r, x] = 1
-    return val[r, 0, x], val[r, 1, x], val[r, 2, x], val[r, 3, x]
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _trace(sig, R, H, W, memo, val, steep, major, minor, gate):
-    """How strongly curved the paint is (_crest_and_trace's trace) at
-    ``minor`` across and ``major`` along: (x, y) = (major, minor), or
-    (minor, major) for a ``steep`` crest."""
-    if steep:
-        return _crest_at(sig, R, H, W, memo, val, minor, major, gate)[3]
-    return _crest_at(sig, R, H, W, memo, val, major, minor, gate)[3]
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _peak(sig, R, H, W, memo, val, steep, major, guess, gate):
-    """Where across, near ``guess``, the crest lies at ``major``: the most
-    curved of the three pixels round it (_trace), and the vertex of a
-    parabola through it and its neighbours (within half a pixel of it).
-    Returns the position and that pixel; the pixel is -1 off the paint
-    _crest reads (EDGE)."""
-    size = W if steep else H
-    c = int(math.floor(guess + 0.5))
-    if c - 2 < EDGE or c + 2 >= size - EDGE:
-        return guess, -1
-    lo = _trace(sig, R, H, W, memo, val, steep, major, c - 1, gate)
-    mid = _trace(sig, R, H, W, memo, val, steep, major, c, gate)
-    hi = _trace(sig, R, H, W, memo, val, steep, major, c + 1, gate)
-    best, top, a, b = c, mid, lo, hi
-    if lo > mid and lo >= hi:
-        best, top, b = c - 1, lo, mid
-        a = _trace(sig, R, H, W, memo, val, steep, major, c - 2, gate)
-    elif hi > mid and hi > lo:
-        best, top, a = c + 1, hi, mid
-        b = _trace(sig, R, H, W, memo, val, steep, major, c + 2, gate)
-    den = a - 2.0 * top + b
-    off = 0.0
-    if den < 0.0:
-        off = min(max(0.5 * (a - b) / den, -0.5), 0.5)
-    return best + off, best
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _side(
-    sig, R, H, W, memo, val, gate, run_on, steep, major0, p0, tr0, slope, e, t, qs, ps,
-    n,
-):  # fmt: skip
-    """Follow the crest from where it crosses ``major0`` (at ``p0``
-    across) one way (``e`` = -1 or 1), a pixel at a time along the rows (a
-    shallow crest: ``major`` is x) or the columns (``steep``), each time to
-    where it is most curved (_peak) near where it was heading (``slope``,
-    then the slope from the start). At each, how surely it is the same
-    crest: _crest's share there, times how near its direction is to ``t``
-    (``run_on``: squared cosines from, to), times how near it is to where
-    it was heading (from a pixel to half a pixel away); ``qs[k]`` becomes
-    the least of these up to k steps, at most, for this side and whatever
-    it held; ``ps[k]`` where it was found k steps on; no further than
-    ``n`` steps (0 beyond). Returns (steps it went with that above 1/2,
-    where it was then)."""
-    size = H if steep else W
-    steps = qs.shape[0] - 1
-    prev, sl, least = p0, slope, 1.0
-    far_k, far_p = 0, p0
-    for k in range(1, steps + 1):
-        major = major0 + e * k
-        if k > n:
-            least = 0.0
-        if least > 0.0:
-            p = 0.0
-            if EDGE <= major < size - EDGE:
-                guess = min(max(prev + e * sl, p0 - k), p0 + k)
-                pos, m = _peak(sig, R, H, W, memo, val, steep, major, guess, gate)
-                if m >= 0 and abs(pos - p0) <= k + 1.0:
-                    if steep:
-                        ux, uy, share, tr = _crest_at(
-                            sig, R, H, W, memo, val, m, major, gate
-                        )
-                    else:
-                        ux, uy, share, tr = _crest_at(
-                            sig, R, H, W, memo, val, major, m, gate
-                        )
-                    c = t[0] * ux + t[1] * uy
-                    p = share * _smoothstep(run_on[0], run_on[1], c * c)
-                    # as strongly curved: not a drop or a lump, tapering off
-                    ratio = min(tr, tr0) / max(tr, tr0, 1e-300)
-                    p *= _smoothstep(SAME[0], SAME[1], ratio)
-                    p *= _smoothstep(1.0, 0.5, abs(pos - guess))
-                    prev = pos
-                    ps[k] = pos
-                    if k >= 2:
-                        sl = (pos - p0) / (e * k)
-            least = min(least, p)
-            if least > 0.5:
-                far_k, far_p = k, prev
-        qs[k] = min(qs[k], least)
-    return far_k, far_p
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _cross(sig, R, H, W, memo, val, steep, major0, minor0, gate):
-    """Where the crest crosses the row (``major0`` = y; or the column,
-    ``steep``) near ``minor0``: of the pixels up to FIND px away more curved
-    (_trace) than both their neighbours, the one most curved for how far
-    it is (its trace over 1 + (distance / 2)^2: the nearer of two alike,
-    the middle of a crest rather than the weaker curve at its foot),
-    refined (_peak). Returns the position across and that pixel (-1 if
-    none)."""
-    size = W if steep else H
-    if not EDGE + FIND + 1 <= minor0 < size - EDGE - FIND - 1:
-        return 0.0, -1
-    best, top = -1, 0.0
-    a = _trace(sig, R, H, W, memo, val, steep, major0, minor0 - FIND - 1, gate)
-    v = _trace(sig, R, H, W, memo, val, steep, major0, minor0 - FIND, gate)
-    for m in range(minor0 - FIND, minor0 + FIND + 1):
-        b = _trace(sig, R, H, W, memo, val, steep, major0, m + 1, gate)
-        if v >= a and v > b:
-            d = (m - minor0) / 2.0
-            score = v / (1.0 + d * d)
-            if score > top:
-                best, top = m, score
-        a, v = v, b
-    if best < 0:
-        return 0.0, -1
-    return _peak(sig, R, H, W, memo, val, steep, major0, best, gate)
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _straight(qs, ps, p0, slope):
-    """``qs[k]`` no more than how near (STRAIGHT) the crest stays, up to k
-    steps either way (where it was found: ``ps``), to the straight line
-    through ``p0`` at ``slope`` that it is gathered along: not on round a
-    bend or a curling rim."""
-    for i in range(2):
-        e = 2 * i - 1
-        worst = 0.0
-        for k in range(1, qs.shape[0]):
-            if not qs[k] > 0.0:
-                break
-            worst = max(worst, abs(ps[i, k] - p0 - slope * e * k))
-            qs[k] = min(qs[k], _smoothstep(STRAIGHT[0], STRAIGHT[1], worst))
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _run(sig, R, H, W, memo, val, gate, run_on, steep, major0, p0, t, tr0, qs, ps):
-    """Follow the crest from where it crosses ``major0`` (at ``p0``
-    across), direction ``t`` as _crest reads it there, both ways (_side):
-    ``qs[k]`` becomes the least sureness up to k steps either way, and no
-    more than how straight it runs (_straight). Returns its slope across
-    per step along: from where it was found well (sureness above 1/2)
-    furthest each way, if 4 steps apart or more (else as _crest reads it):
-    _crest reads a thin crest's direction some degrees nearer 45 than it
-    runs. Only as many steps as the step of the staircase _crest's reading
-    gives, twice over, and 2 (the step the crest really runs at is longer,
-    at most by about half)."""
-    slope = t[0] / t[1] if steep else t[1] / t[0]
-    qs[0] = 1.0
-    qs[1:] = 1.0
-    span = qs.shape[0] - 1
-    n = min(span, int(2.0 * _step(t[0], t[1], span)) + 2)
-    kb, pb = _side(
-        sig, R, H, W, memo, val, gate, run_on, steep, major0, p0, tr0, slope, -1, t,
-        qs, ps[0], n,
-    )  # fmt: skip
-    ka, pa = _side(
-        sig, R, H, W, memo, val, gate, run_on, steep, major0, p0, tr0, slope, 1, t,
-        qs, ps[1], n,
-    )  # fmt: skip
-    if ka + kb >= 4:
-        slope = (pa - pb) / (ka + kb)
-    _straight(qs, ps, p0, slope)
-    return slope
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _follow(
-    sig, R, H, W, memo, val, x, y, tx, ty, gate, run_on, qs, ps, followed, follow_val
-):
-    """Follow the crest near pixel (x, y), direction (tx, ty) as _crest
-    reads it: from where it crosses the pixel's row or column (_cross), as
-    _run does from there with _crest's reading at that pixel (worked out
-    once for each such pixel: ``followed``, ``follow_val`` hold the slope and the
-    sureness, at the row number masked with ``R``); ``qs`` the sureness.
-    Returns how far across (px) the pixel is from where the crest crosses,
-    the crest's direction (cx, cy), and _crest's share there (0, and no
-    sureness, where no crest is found, or one running the other side of 45
-    degrees)."""
-    steep = abs(ty) > abs(tx)
-    if steep:
-        major0, minor0 = y, x
-    else:
-        major0, minor0 = x, y
-    qs[0] = 1.0
-    qs[1:] = 0.0
-    p0, m0 = _cross(sig, R, H, W, memo, val, steep, major0, minor0, gate)
-    if m0 < 0:
-        return 99.0, tx, ty, 0.0
-    xc, yc = (m0, major0) if steep else (major0, m0)
-    ux, uy, share0, tr0 = _crest_at(sig, R, H, W, memo, val, xc, yc, gate)
-    if not share0 > 0.0 or (abs(uy) > abs(ux)) != steep:
-        return 99.0, tx, ty, 0.0
-    r = yc & R
-    if not followed[r, xc]:
-        follow_val[r, xc, 0] = _run(
-            sig, R, H, W, memo, val, gate, run_on, steep, major0, p0, (ux, uy),
-            tr0, qs, ps,
-        )  # fmt: skip
-        follow_val[r, xc, 1:] = qs
-        followed[r, xc] = 1
-    slope = follow_val[r, xc, 0]
-    qs[:] = follow_val[r, xc, 1:]
-    n = math.sqrt(1.0 + slope * slope)
-    if steep:
-        cx, cy = slope / n, 1.0 / n
-    else:
-        cx, cy = 1.0 / n, slope / n
-    if cx * tx + cy * ty < 0.0:
-        cx, cy = -cx, -cy
-    return minor0 - p0, cx, cy, share0
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _at(qs, k):
-    """``qs`` at ``k`` steps (a fraction: between its neighbours)."""
-    i = min(int(k), qs.shape[0] - 2)
-    a = min(k - i, 1.0)
-    return (1.0 - a) * qs[i] + a * qs[i + 1]
+        return 1.0, 0.0, 0.0
+    return tx / n, ty / n, share
 
 
 @njit(cache=True, error_model="numpy", nogil=True)
@@ -912,9 +613,7 @@ def _gather(lob, R, H, W, x, y, tx, ty, reach, taps):
     highlights (_tap) at ``taps`` points each side along (tx, ty) up to
     ``reach`` pixels away, tent-weighted, so that a glint on a crest that
     runs slantwise across the pixels is a line rather than beads at each
-    step. The taps lie reach / taps apart, weighted 1 - k / (taps + 1) at
-    the k-th: a tent falling to 0 at reach (taps + 1) / taps, its
-    half-width. The centre point is the pixel itself."""
+    step. The centre point is the pixel itself."""
     total = 0.0
     weights = 0.0
     for k in range(-taps, taps + 1):
@@ -925,124 +624,6 @@ def _gather(lob, R, H, W, x, y, tx, ty, reach, taps):
         total += w * _tap(lob, R, H, W, fx, fy, tx, ty)
         weights += w
     return total / weights
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _gather_even(lob, R, H, W, x, y, tx, ty, reach):
-    """The highlight of pixel (x, y) gathered along (tx, ty) up to
-    ``reach`` px each way: the own highlights a pixel apart along it,
-    weighted 1 - |o| / (reach + 1) at o px (a tent; the weight of a tap
-    that comes in as the reach grows starts at 0, so the result changes
-    continuously with the reach). Read by bilinear interpolation: each tap at the same
-    distance across the crest as the pixel (_tap's reading along the
-    nearest row would wander up to half a pixel across it and back with
-    the staircase, over so long a reach, and ripple an even line)."""
-    n = int(reach) + 1
-    total = 0.0
-    weights = 0.0
-    for k in range(-n, n + 1):
-        w = 1.0 - abs(k) / (reach + 1.0)
-        if w > 0.0:
-            fx = min(max(x + k * tx, 0.0), W - 1.0)
-            fy = min(max(y + k * ty, 0.0), H - 1.0)
-            i = min(int(fx), W - 2)
-            j = min(int(fy), H - 2)
-            a, b = fx - i, fy - j
-            top = (1.0 - a) * lob[j & R, i] + a * lob[j & R, i + 1]
-            low = (1.0 - a) * lob[(j + 1) & R, i] + a * lob[(j + 1) & R, i + 1]
-            total += w * ((1.0 - b) * top + b * low)
-            weights += w
-    return total / weights
-
-
-#: How far (px) across from a pixel the crest whose highlight it gathers
-#: over a step is looked for (_follow): as far as a glint lies on the
-#: flank of a crest (a ridge of sigma 1 px, 1 px high: 4 px).
-FIND = 4
-
-#: Along a crest followed over a step (_side), how strongly curved it must
-#: stay against where it was found (the less over the more of _crest's
-#: trace there: from, to): an elongated drop or lump, curved most at its
-#: middle, is not followed far.
-SAME = (0.25, 0.5)
-
-#: How far (px) a crest followed over a step may stray from the straight
-#: line it is gathered along (from, to: all of the way to none; _follow).
-STRAIGHT = (0.75, 0.35)
-
-#: A crest that _crest reads as running at a slant whose staircase step
-#: (_step) is no longer than this (px) is not followed: at 45 degrees and
-#: near it (1.41 to 1.5) the step is shorter than GLOSS_SPAN however far
-#: _crest's reading is off, which is never more than about 7 degrees.
-FOLLOW_FROM = 1.5
-
-
-@njit(cache=True, error_model="numpy", nogil=True)
-def _on_a_step(
-    lob,
-    sig,
-    R,
-    H,
-    W,
-    memo,
-    val,
-    x,
-    y,
-    tx,
-    ty,
-    share,
-    gathered,
-    p,
-    qs,
-    ps,
-    followed,
-    follow_val,
-):
-    """The highlight of pixel (x, y), ``gathered`` over ``p``'s span (px
-    each way) along a crest read as running (tx, ty) with ``share``,
-    gathered on over a whole step of the pixel staircase along it where it
-    is a shallow, straight crest that runs on. Only where _crest reads a
-    step longer than FOLLOW_FROM. The crest is followed both ways
-    (_follow): its direction is taken from where it was found, the step
-    from that (_step, up to p's span_top), and the reach on towards it as
-    far as it is surely the same crest, straight, all the way (the
-    sureness at that many steps), times the crest's own share where it
-    crosses the pixel's row (column). Gathered along the followed
-    direction (_gather_even), and blended in as the step grows past the
-    span by half a pixel to by one and a half (no further than 26 degrees
-    from the rows or columns), as the sureness rises to 1/2, and where the pixel
-    lies within FIND px of the crest's line (fading out over the next).
-    ``p``: (span, span_top, gate, run_on)."""
-    span, span_top, gate, run_on = p
-    if not share > 0.0 or _step(tx, ty, span_top) <= FOLLOW_FROM:
-        return gathered
-    off, cx, cy, share0 = _follow(
-        sig,
-        R,
-        H,
-        W,
-        memo,
-        val,
-        x,
-        y,
-        tx,
-        ty,
-        gate,
-        run_on,
-        qs,
-        ps,
-        followed,
-        follow_val,
-    )
-    step = _step(cx, cy, span_top)
-    sure = _at(qs, step * max(abs(cx), abs(cy)))
-    blend = _smoothstep(span + 0.5, span + 1.5, step) * _smoothstep(0.0, 0.5, sure)
-    blend *= _smoothstep(FIND + 0.5, FIND - 0.5, abs(off))
-    if not blend > 0.0:
-        return gathered
-    reach = span * share + (step - span) * share0 * sure
-    far = _gather_even(lob, R, H, W, x, y, cx, cy, reach)
-    return gathered + blend * (far - gathered)
 
 
 @njit(cache=True, error_model="numpy", nogil=True)
@@ -1076,9 +657,7 @@ def shade(
     dry1,
     gloss_span,
     gloss_taps,
-    gloss_span_max,
     crest_gate,
-    run_on,
     out,
 ):
     """Light the height field ``h`` (pixels) and the linear colour ``lin``
@@ -1096,24 +675,15 @@ def shade(
 
     Each pixel's own mirror image of the lamp (_mirror) is gathered along a
     narrow crest (_crest, ``crest_gate``) over ``gloss_span`` pixels each
-    way (_gather, ``gloss_taps`` points each side), and at a shallow slant
-    on over one step of the pixel staircase, up to ``gloss_span_max``, as
-    far as the crest, followed, runs on straight (_on_a_step, ``run_on``);
-    then the pixel's own film (``cover``), the share of the lamp it sees
-    and its mattness apply. Rows are worked out a few ahead of the one
-    being lit and kept in buffers of a few rows (float64, uint8 for whether
-    an own highlight lies near, with a running count per column of the rows
-    within reach that have one, and _crest's work on the pixels it was asked
-    for): no map the size of the canvas. Exact: with ``gloss_span`` 0 or
-    the gate shut, the highlight is each pixel's own; with
-    ``gloss_span_max`` no more than ``gloss_span``, or on a crest whose
-    staircase step, as followed, is no longer than ``gloss_span`` + 0.5
-    (a smooth straight crest along the rows or columns or within about
-    0.6 degrees of them, or one more than about 26 degrees from both, for
-    ``gloss_span`` 2), it is gathered over ``gloss_span`` alone; flat paint,
-    paint gently modelled (beyond the cut-off), ``gloss`` 0 and pixels with
-    no own highlight within ``ceil(max(gloss_span, gloss_span_max)) + 1``
-    pixels are as they would be without gathering."""
+    way (_gather, ``gloss_taps`` points each side); then the pixel's own
+    film (``cover``), the share of the lamp it sees and its mattness apply.
+    Rows are worked out a few ahead of the one being lit and kept in
+    buffers of a few rows (float64, and uint8 for whether an own highlight
+    lies near): no map the size of the canvas. Exact: with ``gloss_span``
+    0 or the gate shut, the highlight is each pixel's own; flat paint, paint
+    gently modelled (beyond the cut-off), ``gloss`` 0 and pixels with no own
+    highlight within ``ceil(gloss_span) + 1`` pixels are as they would be
+    without gathering."""
     H, W = h.shape
     # the half vector between the lamp and the viewer (straight in front)
     hx, hy, hz = lx3, ly3, lz3 + 1.0
@@ -1138,18 +708,10 @@ def shade(
     has_matte = matte.shape[0] > 0
     has_gloss = gloss_wet > 0.0 or gloss_dry > 0.0
     gather = has_gloss and gloss_span > NO_REACH and gloss_taps > 0
-    # the furthest a highlight is gathered
-    span_top = max(gloss_span, gloss_span_max)
-    # rows ahead of the one being lit that the gathering reads, and the rows
-    # kept: as many behind. Following a shallow crest k = ceil(span_top)
-    # steps (_follow) asks _crest at rows up to k + FIND + 3 away: the
-    # crest is found within FIND + 0.5 rows of the pixel, the guess at k
-    # steps lies within k rows of that and is rounded to the nearest row
-    # (FIND + k + 1), and _peak asks the rows either side of the most
-    # curved of the three round it (+ 2); _crest reads 2 rows further
-    # (BINOMIAL): k + FIND + 5. A steep crest, and the taps of the
-    # gathering (k rows away, and the next row interpolated), read less far
-    lag = int(math.ceil(span_top)) + FIND + 5 if gather else 0
+    # rows ahead of the one being lit that the gathering reads (a tap up to
+    # the span away, and the next pixel interpolated with it), and the rows
+    # kept: as many behind
+    lag = int(math.ceil(gloss_span)) + 1 if gather else 0
     # rows are kept in buffers of a power of two rows, R + 1, indexed by the
     # row number masked with R
     R = 1
@@ -1161,23 +723,7 @@ def shade(
     sig = np.zeros((3, W))  # H H^T of each pixel's curvature, this row
     row_sig = np.zeros((R + 1, 3, W))  # the same blurred along the rows
     near = np.zeros((R + 1, W), np.uint8)  # an own highlight within lag in the row
-    # how many of the rows within lag of the one being lit have one (a
-    # running count: what is gathered reads only within that lag-square)
-    nearby = np.zeros(W, np.int64)
-    # _crest_and_trace of the pixels a crest is followed through, each
-    # worked out once (``memo``)
-    memo = np.zeros((R + 1, W), np.uint8)
-    crest_val = np.zeros((R + 1, 4, W))
-    qs = np.ones(int(math.ceil(span_top)) + 1)  # how sure, steps along
-    ps = np.zeros((2, qs.shape[0]))  # where the crest was found, both ways
-    # the slope and sureness of the crest followed from a pixel, each worked
-    # out once (_follow)
-    followed = np.zeros((R + 1, W), np.uint8)
-    follow_val = np.zeros((R + 1, W, qs.shape[0] + 1))
-    gp_far = (gloss_span, span_top, crest_gate, run_on)
     for yy in range(H + lag):
-        if gather and yy > 2 * lag:  # a row leaves the lag-square
-            _tally(near[(yy - 2 * lag - 1) & R], nearby, -1)
         if yy < H:
             y = yy
             r = y & R
@@ -1227,10 +773,7 @@ def shade(
                         f *= 1.0 - MATTE_GLOSS_LOSS * matte[y, x]
                     recv[r, x] = f
             if gather:
-                memo[r] = 0
-                followed[r] = 0
                 _near_row(lob[r], lag, near[r])
-                _tally(near[r], nearby, 1)
                 _blur_row(sig, row_sig[r])
         y = yy - lag
         if y < 0:
@@ -1241,18 +784,18 @@ def shade(
             f = recv[r, x]
             if f > 0.0:
                 own = lob[r, x]
-                # any own highlight within reach (a lag-square)?
-                if gather and nearby[x] > 0:
-                    tx, ty, share, _ = _crest_at(
-                        row_sig, R, H, W, memo, crest_val, x, y, crest_gate
-                    )
-                    reach = gloss_span * share
-                    if reach > NO_REACH:
-                        own = _gather(lob, R, H, W, x, y, tx, ty, reach, gloss_taps)
-                    own = _on_a_step(
-                        lob, row_sig, R, H, W, memo, crest_val, x, y, tx, ty, share,
-                        own, gp_far, qs, ps, followed, follow_val,
-                    )  # fmt: skip
+                if gather:
+                    # any own highlight within reach (a lag-square)?
+                    found = False
+                    for j in range(max(y - lag, 0), min(y + lag, H - 1) + 1):
+                        if near[j & R, x]:
+                            found = True
+                            break
+                    if found:
+                        tx, ty, share = _crest(row_sig, R, H, W, x, y, crest_gate)
+                        reach = gloss_span * share
+                        if reach > NO_REACH:
+                            own = _gather(lob, R, H, W, x, y, tx, ty, reach, gloss_taps)
                 spec = f * own
 
             # colour: the lights roll off to white rather than clip

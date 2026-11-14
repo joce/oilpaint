@@ -49,37 +49,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Glints along ridges, furrows and lips that run at a shallow angle to the
-  rows or columns of pixels are lines where they were dashes. A crest a
-  pixel or two wide shines several times as bright where it runs along a
-  row of pixels as where it runs between two, so at a shallow slant its
-  glint swelled and faded a staircase step apart (11 px at 5 degrees),
-  further than the highlight was gathered along it (2 px). Now the crest
-  is followed both ways, a pixel at a time, and its highlight gathered
-  along it over that step, up to 16 px (`GLOSS_SPAN_MAX`), as far as it is
-  surely the same crest and runs on straight (`RUN_ON`): not on round a
-  crossing, a junction, a knob, a bend, a dab's rim or an elongated drop.
-  How much the glint, summed across the crest, swells and fades along it
-  (standard deviation over mean), at 2, 5 and 11 degrees, for a ridge of
-  paint lit as painted (through `Canvas.surface_height`), before and now:
-  sigma 0.6 px: 0.29, 0.24, 0.19 and 0.22, 0.02, 0.02; sigma 1: 0.07,
-  0.06, 0.03 and 0.05, 0.01, 0.01; sigma 2: 0.07, 0.06, 0.03 and 0.04,
-  0.004, 0.005. Smooth, straight crests along the rows or columns (or
-  within half a degree), or more than 26 degrees from them, light exactly
-  as before, and the light along a crest is kept (within 4%, before the
-  roll-off to white; 7% for the narrowest crests). Domes, round dabs,
-  stipple, spatter and the canvas weave keep their glints within a level
-  (but for a few pixels of a dab, by up to 5 levels).
-  Rendering takes longer where there are many crests: 15 to 30% on a
-  painting of many strokes, 65% on thick impasto. Still
-  dashing: a line of paint a pixel wide (sigma 0.3: 1.44, 1.31 at 5 and
-  11 degrees), and a ridge of paint of sigma 0.4 px (1.08, 0.85, 0.56, from
-  1.09, 0.89, 0.72): once the canvas has smoothed it it is so low that the
-  gate opens only half way. (Heights set directly, as tests do, do
-  better: sigma 0.4, 0.89, 0.72 before and 0.67, 0.16 now at 2 and 5
-  degrees.) A level crest carrying fine furrows that run a degree or two
-  off the rows has those furrows' glints gathered too.
-
 - The Bob Ross example paints its clouds the way he did. Titanium white is
   scrubbed straight onto the wet sky with little circles, along the top of
   each billow first and then down into the body; a clean, dry brush blends
