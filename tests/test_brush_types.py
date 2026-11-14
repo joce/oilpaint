@@ -199,3 +199,26 @@ def test_a_brush_handle_scratches_down_to_the_ground():
     lum = c.render(lighting=False).mean(-1)
     # the dark ground shows in the scratch
     assert lum[60, 150] < lum[60, 120] - 0.2
+
+
+def _flat_stroke(angle):
+    c = Canvas(140, 100, seed=7)
+    brush = Brush(brushes.FLAT_HOG.sized(30)).load(P.CADMIUM_RED, 4)
+    brush.load(P.TITANIUM_WHITE, 4, across="left")
+    c.stroke([(30.0, 50.0), (110.0, 50.0)], brush=brush, angle=angle, seed=4)
+    return c
+
+
+def test_a_brush_turned_by_a_quarter_turn_has_the_same_sides_whatever_the_last_bit():
+    # cos(90 degrees) is 0, and a hair either side of it after rounding:
+    # which side of the brush was its left (the white loaded there, its
+    # hair) followed that hair. A quarter turn is a quarter turn: 90 and
+    # 270 (the same as -90) are half a turn apart and mirror each other.
+    for angle in (90.0, 270.0, -90.0, 450.0):
+        plain = _flat_stroke(angle)
+        for nudged in (np.nextafter(angle, 1e3), np.nextafter(angle, -1e3)):
+            other = _flat_stroke(float(nudged))
+            a, b = plain.top.astype(float), other.top.astype(float)
+            assert np.abs(a - b).max() <= 1e-5 * np.abs(a).max(), (angle, nudged)
+    np.testing.assert_array_equal(_flat_stroke(270.0).top, _flat_stroke(-90.0).top)
+    assert not np.array_equal(_flat_stroke(90.0).top, _flat_stroke(-90.0).top)

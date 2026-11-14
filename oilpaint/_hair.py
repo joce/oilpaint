@@ -73,16 +73,17 @@ def _hair_field(
     )
     # rows every 2 px, further apart on a long stroke, but at least four to the
     # shortest cell along it (and no more samples than _HAIR_SAMPLES)
-    n_x = int(2.0 * x_half / dx) + 2
+    n_x = eng.whole_floor(2.0 * x_half / dx) + 2
     ds = max(2.0, min(length / 1500.0, float(cells[:, 0].min()) / 4.0))
     ds = max(ds, length * n_x / _HAIR_SAMPLES)
-    n_s = int(length / ds) + 2
+    n_s = eng.whole_floor(length / ds) + 2
     span_x, span_s = n_x * dx, n_s * ds
     grids = tuple(
-        rng.random((int(span_s / cs) + 3, int(span_x / cx) + 3)) for cs, cx in cells
+        rng.random((eng.whole_floor(span_s / cs) + 3, eng.whole_floor(span_x / cx) + 3))
+        for cs, cx in cells
     )
     lane_cells = np.array([0.5 * pitch, max(0.2 * pitch, 1.0)])
-    n_lane = int((span_x + 4.0 * wander + 2.0) / lane_cells[1]) + 3
+    n_lane = eng.whole_floor((span_x + 4.0 * wander + 2.0) / lane_cells[1]) + 3
     lanes = rng.random((4, n_lane))
     field = eng.hair_field(n_s, n_x, ds, dx, cells, grids, lanes, lane_cells, wander)
     return _frozen(field), (float(s0), -x_half, float(ds), float(dx))

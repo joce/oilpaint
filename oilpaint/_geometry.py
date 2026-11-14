@@ -98,7 +98,13 @@ def _chord_table_at(shape: str, aspect: float, phi: float):
     a0, a1 = al[None, :], np.roll(al, -1)[None, :]
     den = np.where(np.abs(l1 - l0) < 1e-12, 1e-12, l1 - l0)
     t = (grid[:, None] - l0) / den
-    ok = (t >= 0) & (t <= 1)
+    # (the outermost lines run through the outline's outermost points: one
+    # end of the grid is one of them, the other is too, to rounding, which
+    # could leave it a hair past it, crossing nothing: no chord there, and
+    # its centre 0 rather than at that point. A crossing within ROUND_SHARE
+    # of a segment's ends, as a share of it, is at its end.)
+    ok = (t >= -eng.ROUND_SHARE) & (t <= 1 + eng.ROUND_SHARE)
+    t = np.clip(t, 0.0, 1.0)
     a = a0 + t * (a1 - a0)
     lo = np.where(ok, a, np.inf).min(axis=1)
     hi = np.where(ok, a, -np.inf).max(axis=1)
@@ -110,7 +116,9 @@ def _chord_table_at(shape: str, aspect: float, phi: float):
 
 
 def _signed_floor(x, floor):
-    return math.copysign(max(abs(x), floor), x if x != 0 else 1.0)
+    """``x`` at least ``floor`` from 0, keeping its sign (a cosine within
+    ROUND_ANGLE of 0 counts as +0: see _Run._segment)."""
+    return math.copysign(max(abs(x), floor), 1.0 if x >= -eng.ROUND_ANGLE else -1.0)
 
 
 # (chord tables of a round footprint: not needed)

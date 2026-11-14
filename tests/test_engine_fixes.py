@@ -736,3 +736,77 @@ def test_a_long_knife_stroke_off_the_canvas_keeps_little_memory():
     tracemalloc.stop()
     assert _kernel_signatures() == compiled, "a kernel compiled in the measurement"
     assert peak < 12e6
+
+
+@pytest.mark.parametrize(
+    "x, floor, ceil",
+    [
+        (3.0, 3, 3),
+        (np.nextafter(3.0, 0.0), 3, 3),  # (a whole number, to rounding)
+        (np.nextafter(3.0, 9.0), 3, 3),
+        (3.0 - 4e-7, 3, 3),  # within the slack
+        (3.0 + 4e-7, 3, 3),
+        (3.0 - 2e-6, 2, 3),  # outside it
+        (3.0 + 2e-6, 3, 4),
+        (2.5, 2, 3),  # exact halves are no whole numbers
+        (-2.5, -3, -2),
+        (-2.0, -2, -2),
+        (np.nextafter(-2.0, 0.0), -2, -2),
+        (np.nextafter(-2.0, -9.0), -2, -2),
+        (-2.0 - 2e-6, -3, -2),
+        (-2.0 + 2e-6, -2, -1),
+        (0.0, 0, 0),
+        (-1e-9, 0, 0),
+        (1e-9, 0, 0),
+        (1e6 + 0.5, 1000000, 1000001),
+    ],
+)
+def test_counts_from_ratios_take_a_hair_off_a_whole_number_as_that_number(
+    x, floor, ceil
+):
+    from oilpaint._engine import whole_ceil, whole_floor
+
+    assert whole_floor(float(x)) == floor
+    assert whole_ceil(float(x)) == ceil
+
+
+@pytest.mark.parametrize(
+    "lat, share",
+    [
+        (0.0, 0.5),
+        (5e-11, 0.5),  # (rounding of coordinates a few thousand px out)
+        (-5e-11, 0.5),
+        (1e-7, 1.0),  # (a pixel a ten-millionth of a px off the axis is off it)
+        (-1e-7, 0.0),
+        (0.5, 1.0),
+        (-0.5, 0.0),
+    ],
+)
+def test_a_pixel_centred_on_the_axis_sends_half_its_paint_each_way(lat, share):
+    from oilpaint._engine import right_share
+
+    assert right_share(lat) == share
+
+
+@pytest.mark.parametrize(
+    "turn, side",
+    [
+        (0.0, 1.0),
+        (1e-11, 1.0),  # (a quarter turn, to rounding)
+        (-1e-11, 1.0),
+        (-1e-7, 1.0),  # (just short of a quarter turn)
+        (1e-7, -1.0),  # (just past it)
+    ],
+)
+def test_a_brush_turned_by_a_quarter_turn_to_rounding_keeps_its_sides(turn, side):
+    import math
+
+    from oilpaint import _geometry as geo
+    from oilpaint.stroke import _sides
+
+    assert _sides(math.pi / 2 + turn)[0] == side
+    # half a turn on, its sides are swapped (at -90 degrees, as at 270)
+    assert _sides(-math.pi / 2 + turn)[0] == -side
+    # and the cosine of the folded angle counts as +0 within rounding
+    sign = 1.0 if turn <= 1e-9 else -1.0
+    assert geo._signed_floor(math.cos(math.pi / 2 + turn), 0.2) == 0.2 * sign

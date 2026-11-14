@@ -96,3 +96,64 @@ def test_spatter_flies_the_way_it_is_flicked():
     assert np.average(ys) > 150 and abs(np.average(xs) - 150) < 25
     more = Canvas(400, 300, seed=14).spatter((60, 150), "#000000", amount=3, seed=1)
     assert more > 2 * n
+
+
+def _two_paint_dab(pressure):
+    c = Canvas(120, 120, seed=11)
+    c.stroke(
+        [(60, 60)],
+        [(P.CADMIUM_RED, 4), (P.TITANIUM_WHITE, 2, "left")],
+        brush=brushes.FILBERT_HOG,
+        pressure=pressure,
+        seed=3,
+    )
+    return c
+
+
+def test_a_dab_at_the_default_pressure_prints_as_one_pressed_a_hair_lighter():
+    # Below 0.5 (with no glob of paint) only the longer bristle tips print.
+    # That set in at once at 0.5: the gaps between the tips took half the
+    # paint at 0.5 minus an ulp, all of it at 0.5.
+    at, below = _two_paint_dab(0.5), _two_paint_dab(float(np.nextafter(0.5, 0.0)))
+    a, b = at.top.astype(float), below.top.astype(float)
+    assert np.abs(a - b).max() <= 1e-6 * np.abs(a).max()
+    np.testing.assert_array_equal(at.top_id, below.top_id)
+
+
+def test_tapped_more_lightly_a_dab_lays_less_paint_with_no_step():
+    ps = np.linspace(0.49, 0.51, 21)
+    laid = np.array([_two_paint_dab(float(p)).top[..., -2].sum() for p in ps])
+    assert (np.diff(laid) >= 0).all()
+    # (no step: no rise between neighbouring pressures much over the average)
+    assert np.diff(laid).max() < 4 * np.diff(laid).mean()
+
+
+def test_below_the_band_where_the_tips_fade_in_a_dab_lays_what_it_laid_before():
+    # The gaps between the tips fade in as the pressure falls from 0.5 to 0.41;
+    # tapped more lightly than that, a dab is as it was with no fade at all.
+    # (The volumes were measured with the old, hard-edged formula.)
+    for p, laid in ((0.41, 114.58768062146737), (0.40, 111.15305007198049)):
+        c = _two_paint_dab(p)
+        assert c.thickness.astype(float).sum() == pytest.approx(laid, rel=1e-6)
+
+
+def test_a_dab_exactly_between_two_widths_picks_the_same_pattern_either_way():
+    # A dab's pattern of bristle tips is kept by its width to the nearest px:
+    # 10.5 px is exactly between two, and rounded down at 10.5 and up a hair
+    # above it (to even, as Python rounds). It goes up, whatever its last bit.
+    def dab(width):
+        c = Canvas(120, 120, seed=11)
+        c.stroke(
+            [(60, 60)],
+            P.CADMIUM_RED,
+            amount=6,
+            brush=brushes.ROUND_HOG,
+            width=width,
+            pressure=0.35,
+            seed=3,
+        )
+        return c.top.astype(float)
+
+    plain = dab(10.5)
+    for w in (np.nextafter(10.5, 11.0), np.nextafter(10.5, 10.0)):
+        assert np.abs(dab(float(w)) - plain).max() <= 1e-4 * np.abs(plain).max()

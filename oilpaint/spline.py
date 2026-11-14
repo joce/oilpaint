@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from ._engine import WHOLE_SLACK, whole_ceil, whole_floor
+
 #: A value along a stroke: a number, a sequence, or a function of u in 0..1
 #: (called with the array of all u, or with one u at a time if that fails).
 Profile = (
@@ -66,7 +68,7 @@ class Path:
         if length < 1e-9:
             p = pts[:1]
             return p, np.array([[1.0, 0.0]]), np.zeros(1), knot[:1]
-        n = max(2, int(np.ceil(length / max(spacing, 1e-3))) + 1)
+        n = max(2, whole_ceil(length / max(spacing, 1e-3)) + 1)
         si = np.linspace(0.0, length, n)
         out = np.stack([np.interp(si, s, pts[:, 0]), np.interp(si, s, pts[:, 1])], -1)
         k = np.interp(si, s, knot)
@@ -103,7 +105,10 @@ class CatmullRom(Path):
         # all segments at once: segment i runs from P[i + 1] to P[i + 2]
         p0, p1, p2, p3 = P[:-3], P[1:-2], P[2:-1], P[3:]
         # samples per segment
-        m = np.maximum(8, (np.linalg.norm(p2 - p1, axis=1) / 2).astype(int) + 1)
+        # (a segment a whole even number of px long counts as that, whatever
+        # rounding left of it: see _engine.WHOLE_SLACK)
+        half = np.linalg.norm(p2 - p1, axis=1) / 2
+        m = np.maximum(8, np.floor(half + WHOLE_SLACK).astype(int) + 1)
         seg = np.repeat(np.arange(len(m)), m)
         # 0..1 within each
         t = (np.arange(m.sum()) - np.repeat(np.cumsum(m) - m, m)) * (1.0 / m[seg])
@@ -153,14 +158,14 @@ class Bezier(Path):
         P = self.points
         for i in range(self.n_knots - 1):
             p0, p1, p2, p3 = P[3 * i : 3 * i + 4]
-            approx = (
+            approx = float(
                 np.linalg.norm(p1 - p0)
                 + np.linalg.norm(p2 - p1)
                 + np.linalg.norm(p3 - p2)
             )
-            t = np.linspace(0.0, 1.0, max(8, int(approx / 2) + 1), endpoint=False)[
-                :, None
-            ]
+            t = np.linspace(
+                0.0, 1.0, max(8, whole_floor(approx / 2) + 1), endpoint=False
+            )[:, None]
             mt = 1 - t
             pts.append(
                 mt**3 * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t**3 * p3

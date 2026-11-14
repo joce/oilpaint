@@ -4,8 +4,10 @@ import numpy as np
 import pytest
 
 from oilpaint import Brush, Canvas, Paint, brushes
+from oilpaint import _engine as eng
 from oilpaint import palette as P
-from oilpaint.brush import _VOLUME_PER_AMOUNT
+from oilpaint._engine import PACKED
+from oilpaint.brush import _VOLUME_PER_AMOUNT, _pack
 
 
 def _knife_slab(pressure, **kw):
@@ -404,3 +406,124 @@ def test_a_scraper_leaves_no_outline_on_bare_canvas():
     w = wet[:, 150:400]
     inside = (w > 0.5) & (np.roll(w, 2, 0) > 0.5) & (np.roll(w, -2, 0) > 0.5)
     assert (lum[inside] > 0.6).sum() == 0
+
+
+def _nudged(v, k):
+    for _ in range(abs(k)):
+        v = float(np.nextafter(v, np.inf if k > 0 else -np.inf))
+    return v
+
+
+def test_a_knife_dab_at_a_whole_number_position_presses_out_the_same_paint():
+    # Pressed straight down, the knife's centre lies on a pixel's middle: the
+    # paint pressed out at its ends was smeared along the stroke or not as
+    # rounding left that point a hair before or past the end of the stroke.
+    def dab(x, y):
+        c = Canvas(120, 100, seed=7)
+        knife = Brush(brushes.PALETTE_KNIFE).load(P.CADMIUM_RED, 9)
+        c.stroke([(x, y)], brush=knife, pressure=0.45, width=2.6, seed=3)
+        return c
+
+    plain = dab(60.0, 50.0)
+    for kx, ky in ((-1, -1), (1, 1), (-2, 1), (2, -2)):
+        nudged = dab(_nudged(60.0, kx), _nudged(50.0, ky))
+        a, b = plain.top.astype(float), nudged.top.astype(float)
+        assert np.abs(a - b).max() <= 1e-5 * np.abs(a).max(), (kx, ky)
+
+
+def test_a_narrow_knife_on_a_half_pixel_axis_presses_paint_out_to_both_sides():
+    # Along y = 40.5 a row of pixels is centred on the stroke's axis. The paint
+    # a narrow knife pressed out there went to neither side: it stayed on the
+    # blade, which laid it back along the axis in a stripe.
+    c = Canvas(200, 80, seed=3)
+    knife = Brush(brushes.PALETTE_KNIFE.sized(10)).load(P.TITANIUM_WHITE, 20)
+    held = knife.volume
+    knife = c.stroke(
+        [(40, 40.5), (160, 40.5)], brush=knife, angle=90, pressure=0.5, seed=4
+    )
+    rows = c.thickness[:, 50:150].sum(axis=1)
+    assert rows[40] < 1.08 * max(rows[39], rows[41])  # (it was 1.2 times)
+    assert rows[34] > 5.0 and rows[46] > 5.0  # (they held 2.3 and 2.6)
+    assert c.thickness.sum() + knife.volume == pytest.approx(held, rel=1e-6)
+
+
+def test_a_knife_going_back_over_its_slab_covers_the_same_at_pressure_0_3():
+    # Below 0.3 a knife starts to skim: its bead lays paint, 1e-31 of it a
+    # hair below. Passing back over its own slab it lays nothing else; it
+    # spread its slab over more of each pixel only if it laid any, so the
+    # cover there hung on that 1e-31.
+    def back(p):
+        c = Canvas(160, 120, seed=7)
+        knife = Brush(brushes.PALETTE_KNIFE).load(P.TITANIUM_WHITE, 3.0)
+        c.stroke([(30, 60), (120, 60), (40, 62)], brush=knife, pressure=p, seed=2)
+        return c
+
+    at, below = back(0.3), back(float(np.nextafter(0.3, 0.0)))
+    assert np.abs(at.top_a.astype(float) - below.top_a).max() < 1e-6
+    assert np.abs(at.top_v.astype(float) - below.top_v).max() < 1e-6
+
+
+def test_paint_shoved_onto_its_own_kind_does_not_tie_with_the_film_over_it():
+    # A knife pushes the wet layer below along over a thin film of another
+    # colour: what it shoves is that layer's paint, as alike to the film as
+    # the layer is. It goes on top whichever way rounding tips the two
+    # likenesses (it joined the film, or covered it, as they fell).
+    top = np.zeros((1, 1, PACKED), np.float32)
+    und = np.zeros((1, 1, PACKED), np.float32)
+    # (the film near enough to it in colour for the two to count as much
+    # the same paint: else it would never join the film)
+    film = Paint.mix((P.YELLOW_OCHRE, 4), (P.BURNT_UMBER, 1))
+    top[0, 0] = _pack(film, 0.2)
+    und[0, 0] = _pack(P.YELLOW_OCHRE, 2.0)
+    joined = set()
+    rng = np.random.default_rng(1)
+    for _ in range(24):
+        # (what is shoved is summed from single-precision paint: the same
+        # paint, to rounding in its last bits)
+        noise = 1.0 + rng.uniform(-1, 1, PACKED) * 2.0**-21
+        pk = und[0, 0].astype(np.float64) * 0.37 * noise
+        t = top.copy()
+        joined.add(bool(eng._join_top_if_alike(t, und, pk, 0, 0)))
+    assert joined == {False}
+
+
+def test_a_knife_at_whole_number_positions_rests_on_the_same_pixels():
+    # At whole-number positions the edge of the blade runs through the middle
+    # of a row of pixels: each is half under it, exactly, and was counted
+    # under it (holding it up) or not as rounding left that half.
+    def drag(path, pressure, width):
+        c = Canvas(200, 160, seed=7)
+        for y in (20, 60, 100, 140):
+            c.stroke(
+                [(5, y), (100, y + 6), (195, y)],
+                P.YELLOW_OCHRE,
+                amount=14,
+                brush=brushes.FLAT_HOG.sized(50),
+                pressure=0.6,
+            )
+        c.stroke(
+            path, brush=Brush(brushes.PALETTE_KNIFE), pressure=pressure, width=width
+        )
+        return c
+
+    path, p, w = [(76.0, 114.0), (156.0, 114.0)], 0.78, 39.3
+    plain = drag(path, p, w)
+    for k in (-2, -1, 1, 2):
+        nudged = drag(
+            [(_nudged(x, k), _nudged(y, -k)) for x, y in path], _nudged(p, k), w
+        )
+        a, b = plain.top.astype(float), nudged.top.astype(float)
+        assert np.abs(a - b).max() <= 1e-5 * np.abs(a).max(), k
+        np.testing.assert_array_equal(plain.top_id, nudged.top_id)
+
+
+def test_paint_shoved_with_a_trace_of_the_film_in_it_joins_the_film():
+    # Shoved paint holding a trace of the film (here a thousandth of it,
+    # 1.4e-4 apart from the paint below in likeness, well clear of rounding)
+    # is more like the film than the paint below is: it joins the film.
+    top = np.zeros((1, 1, PACKED), np.float32)
+    und = np.zeros((1, 1, PACKED), np.float32)
+    top[0, 0] = _pack(Paint.mix((P.YELLOW_OCHRE, 4), (P.BURNT_UMBER, 1)), 0.2)
+    und[0, 0] = _pack(P.YELLOW_OCHRE, 2.0)
+    pk = und[0, 0].astype(np.float64) * 0.37 + top[0, 0].astype(np.float64) * 1e-3
+    assert eng._join_top_if_alike(top.copy(), und, pk, 0, 0)

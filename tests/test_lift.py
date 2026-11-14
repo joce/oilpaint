@@ -430,3 +430,40 @@ def test_pull_up_pools_paint_that_has_no_taker_within_reach():
     # (differences of single-precision paint: rounding of the larger)
     np.testing.assert_allclose(taken, given, rtol=1e-5)
     np.testing.assert_allclose(given / given[IV], top[0, 0] / top[0, 0, IV], rtol=1e-5)
+
+
+def test_factors_of_one_to_rounding_leave_their_pixels_alone():
+    # The callers scale their factors to keep the volume, which leaves the
+    # pixels nothing is to happen to at 1 or a hair from it. A hair from it,
+    # each of them gave or took 1e-16 of its paint, and which pixels took
+    # part decided whether the paint moved as one or pigment by pigment.
+    top = np.zeros((6, 8, PACKED), np.float32)
+    top[..., IV] = 1.0
+    for eps in (0.0, 2.0**-52, -(2.0**-53)):
+        fac = np.full((6, 8), 1.0 + eps)
+        fac[2:4, 2:4] = (1.4, 0.6)
+        box = eng._changing(fac)
+        assert tuple(box) == (2, 4, 2, 4), eps
+        loss, gain = eng._falls_and_rises(top, fac)
+        assert (loss > 0).sum() == 2 and (gain > 0).sum() == 2, eps
+
+
+@pytest.mark.parametrize("eps, still", [(1e-13, True), (-1e-13, True), (1e-10, False)])
+def test_a_factor_is_one_to_rounding_or_it_is_a_factor(eps, still):
+    # (the normalised factors of untouched pixels come out within 1.3e-14
+    # of 1; a pixel asked to give or take 1e-10 of its paint is asked to)
+    fac = np.ones((4, 4))
+    fac[1, 1] = 1.0 + eps
+    assert (tuple(eng._changing(fac)) == (4, 0, 4, 0)) == still
+
+
+def test_a_speck_of_dust_neither_gives_nor_takes():
+    # A lift leaves the stroke's own pixels it wasn't over at 0 or a speck
+    # (1e-30) as rounding falls; giving or taking that, the speck changed
+    # how the rest of the paint moved.
+    top = np.zeros((2, 2, PACKED), np.float32)
+    top[..., IV] = ((1.0, 1e-30), (0.5e-6, 2.0))
+    fac = np.full((2, 2), 0.5)
+    loss, gain = eng._falls_and_rises(top, fac)
+    assert loss[0, 0] > 0 and loss[1, 1] > 0
+    assert loss[0, 1] == 0 and loss[1, 0] == 0 and not gain.any()

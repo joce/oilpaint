@@ -49,6 +49,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Where rounding used to decide (see Fixed), the outcome is now the one
+  exact arithmetic gives, so pictures with such marks differ in their
+  texture from before, as a different throw of the dice: strokes whose
+  length is a whole number of steps, curves with a segment a whole even
+  number of pixels long, strokes along a half-pixel or 45-degree axis,
+  multi-paint dabs at the default pressure, brushes turned by 90 degrees,
+  knives at whole-number positions and pressure 0.3, and footprints at some
+  angles. All example images are regenerated. In particular:
+  - a brush's sides are swapped when it is turned from the stroke's cross
+    direction by more than 90 and at most 270 degrees; exactly edge-on, it
+    keeps its sides at 90 and swaps them at 270. With `follow_path=True`,
+    `angle=90`, 270, 450 and 630 draw as before; `-90` now draws as 270 and
+    `-270` as 90 (they drew as 90 and as 270). With `follow_path=False`, a
+    brush whose long side lies along the stroke has its sides swapped where
+    they differed: `angle=0` on a level stroke drawn left to right, and
+    `angle=90`, `-90` and `-270` on an upright one drawn downwards (90 and
+    450 now agree, as do -90, 270 and 630);
+  - a pixel centred on the stroke's axis sends half its paint to each side
+    ridge (it sent all of it to one; the paint a narrow knife pressed out
+    there went to neither side, and stayed on the blade);
+  - a dab tapped a little more lightly than the default pressure fades its
+    bristle tips in smoothly: with no glob of paint on the brush (a glob
+    moves the band lower), the paint between them goes from all of it at
+    0.5 to none below 0.42 (it dropped to half at once just below 0.5).
+    Outside that band, dabs are as they were;
+  - a dab's pattern of tips is kept by its width to the nearest pixel, a
+    width of exactly half a pixel more rounding up (it rounded to even);
+  - a knife going back over its own slab spreads it over more of each pixel
+    whether or not it lays more paint there.
+
 - The Bob Ross example paints its clouds the way he did. Titanium white is
   scrubbed straight onto the wet sky with little circles, along the top of
   each billow first and then down into the body; a clean, dry brush blends
@@ -326,6 +356,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same to the last bit.
 
 ### Fixed
+
+- A last-bit difference in a stroke's inputs or in the math library
+  (another machine) no longer switches a discrete outcome at the places
+  found, where a value fell exactly on the line it was decided by in exact
+  arithmetic and a hair either side of it after rounding:
+  - how many steps a path is cut into, and how many random numbers its
+    textures draw, when a length is a whole number of steps (80 px in steps
+    of 8), and how finely a Catmull-Rom or Bezier path is traced when a
+    segment is a whole even number of pixels long;
+  - whether a dab of two paints at the default pressure 0.5 printed the
+    gaps between its bristle tips, and which cell of a dab's pattern of
+    tips a pixel centred on its axis (at half-pixel positions) reads;
+  - which side of a brush turned by exactly 90 degrees was its left;
+  - whether a footprint's table reached its outermost point (about one in
+    ten, at some angles);
+  - which ridge takes the paint of a pixel centred on the stroke's axis (at
+    half-pixel positions, and at 45 degrees between whole-number points;
+    paint a narrow knife pressed out there went to neither);
+  - for a knife at whole-number positions, which pixels lie half under its
+    edge and whether paint it presses out lies past the end of its stroke;
+  - whether a knife at pressure 0.3 spreads its slab, as its bead laid 0 or
+    1e-31 of paint;
+  - whether paint a knife shoves onto its own kind joins the film over it;
+  - how a tool lifted off moves its paint (as one paint or pigment by
+    pigment, and among which pixels), as untouched pixels came out at a
+    factor of 1 or a hair from it, or a speck of dust at 0 or 1e-30.
+
+  Other such places may remain.
 
 - How wide the ridges a brush pushes out at its sides may be now grows with
   the brush at every width; it stopped growing at 7 px, so that a wide brush
