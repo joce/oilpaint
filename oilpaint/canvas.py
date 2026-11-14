@@ -867,17 +867,18 @@ GLOSS_SPAN = 2.0
 GLOSS_TAPS = 2
 #: Further than GLOSS_SPAN, a highlight is gathered along a crest over one
 #: step of the pixel staircase, 1 / sin of its slant from the rows or
-#: columns, up to this (pixels; GLOSS_SPAN_MAX^2 sin beyond it, back to
-#: nothing more along the rows and columns). A thin crest's own highlight
+#: columns, up to this (pixels; GLOSS_SPAN_MAX^2 sin nearer the rows or
+#: columns than asin(1 / GLOSS_SPAN_MAX), 3.6 degrees, down to nothing more
+#: along them), as far as the crest, followed both ways, is surely the same
+#: crest and runs on straight (see RUN_ON). A thin crest's own highlight
 #: swells and fades as it crosses the rows (a level crest of sigma 0.4 px
 #: shines 11 times as bright on a row as between two), so at a shallow
 #: slant its glint is a string of dashes a step apart, too far apart for
-#: GLOSS_SPAN to join. 16 joins them down to 3.6 degrees: on crests of
-#: sigma 0.4 to 2 px at 2, 5 and 11 degrees the beading (tests/test_render)
-#: is 0.033 on average and 0.114 at worst, against 0.077 and 0.20 without
-#: (12: 0.041, 0.153; 24: 0.026, 0.058, but reading 3 px off a crest that
-#: bends by RUN_ON over it); no pixel of domes, weave, dabs, stipple or
-#: spatter moves by a level; render time unchanged. See RUN_ON for where.
+#: GLOSS_SPAN to join. On ridges of paint of sigma 0.6 to 2 px at 5 and 11
+#: degrees the beading (tests/test_render) is 0.023 at worst, against 0.24
+#: without; at 2 degrees, beyond 16 px, 0.22 against 0.29 (sigma 0.6).
+#: (24: more at 1 to 3.6 degrees, but reading further off a crest that
+#: curves; 12: dashes from 4.8 degrees down.)
 GLOSS_SPAN_MAX = 16.0
 #: Where a highlight is gathered: on narrow crests, not on domes, round
 #: dabs or broad slopes. The share of GLOSS_SPAN rises (smoothstep) with
@@ -885,14 +886,14 @@ GLOSS_SPAN_MAX = 16.0
 #: first to the second value, and with the curvature across the crest |k1|
 #: (per pixel) from the third to the fourth.
 CREST_GATE = (0.5, 0.75, 0.04, 0.12)
-#: Only as far as the crest runs on: beyond GLOSS_SPAN, the gathering goes
-#: on only where, at both of its ends, a crest (CREST_GATE) runs within
-#: this many degrees of the same direction (from, to: none to all of the
-#: way). No longer gathering on a crest that ends, bends or curls round (a
-#: dab's rim), nor on knobbly impasto: a crest that bends by 30 degrees
-#: keeps its light by the bend within 0.5% (4 levels at most) of what
-#: GLOSS_SPAN alone gives, where (60, 24) carries 7% more round it, and 13%
-#: round a bend of 45; (12, 5) and (30, 12) differ from this by little.
+#: Only as far as the crest runs on: beyond GLOSS_SPAN, the crest is
+#: followed a pixel at a time, and gathered over only as far as, all the
+#: way, it is a crest (CREST_GATE) running within this many degrees of the
+#: direction read where it started (from, to: none to all of the way),
+#: where it was heading, as strongly curved, and straight. Not round a
+#: crossing, a junction, a knob, a bend, a dab's rim or an elongated drop:
+#: a crest bending by 30 degrees is not followed past the bend; (60, 24)
+#: follows it.
 RUN_ON = (20.0, 8.0)
 
 #: Share of the fine relief kept on gently modelled paint, and the local
