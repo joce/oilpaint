@@ -430,3 +430,19 @@ def test_pull_up_pools_paint_that_has_no_taker_within_reach():
     # (differences of single-precision paint: rounding of the larger)
     np.testing.assert_allclose(taken, given, rtol=1e-5)
     np.testing.assert_allclose(given / given[IV], top[0, 0] / top[0, 0, IV], rtol=1e-5)
+
+
+def test_factors_of_one_to_rounding_leave_their_pixels_alone():
+    # The callers scale their factors to keep the volume, which leaves the
+    # pixels nothing is to happen to at 1 or a hair from it. A hair from it,
+    # each of them gave or took 1e-16 of its paint, and which pixels took
+    # part decided whether the paint moved as one or pigment by pigment.
+    top = np.zeros((6, 8, PACKED), np.float32)
+    top[..., IV] = 1.0
+    for eps in (0.0, 2.0**-52, -(2.0**-53)):
+        fac = np.full((6, 8), 1.0 + eps)
+        fac[2:4, 2:4] = (1.4, 0.6)
+        box = eng._changing(fac)
+        assert tuple(box) == (2, 4, 2, 4), eps
+        loss, gain = eng._falls_and_rises(top, fac)
+        assert (loss > 0).sum() == 2 and (gain > 0).sum() == 2, eps

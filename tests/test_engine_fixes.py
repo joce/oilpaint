@@ -736,3 +736,36 @@ def test_a_long_knife_stroke_off_the_canvas_keeps_little_memory():
     tracemalloc.stop()
     assert _kernel_signatures() == compiled, "a kernel compiled in the measurement"
     assert peak < 12e6
+
+
+@pytest.mark.parametrize(
+    "x, floor, ceil",
+    [
+        (3.0, 3, 3),
+        (np.nextafter(3.0, 0.0), 3, 3),  # (a whole number, to rounding)
+        (np.nextafter(3.0, 9.0), 3, 3),
+        (3.0 - 4e-7, 3, 3),  # within the slack
+        (3.0 + 4e-7, 3, 3),
+        (3.0 - 2e-6, 2, 3),  # outside it
+        (3.0 + 2e-6, 3, 4),
+        (2.5, 2, 3),  # exact halves are no whole numbers
+        (-2.5, -3, -2),
+        (-2.0, -2, -2),
+        (np.nextafter(-2.0, 0.0), -2, -2),
+        (np.nextafter(-2.0, -9.0), -2, -2),
+        (-2.0 - 2e-6, -3, -2),
+        (-2.0 + 2e-6, -2, -1),
+        (0.0, 0, 0),
+        (-1e-9, 0, 0),
+        (1e-9, 0, 0),
+        (1e6 + 0.5, 1000000, 1000001),
+    ],
+)
+def test_counts_from_ratios_take_a_hair_off_a_whole_number_as_that_number(
+    x, floor, ceil
+):
+    from oilpaint._engine import WHOLE_SLACK, whole_ceil, whole_floor
+
+    assert WHOLE_SLACK == 1e-6
+    assert whole_floor(float(x)) == floor
+    assert whole_ceil(float(x)) == ceil

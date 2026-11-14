@@ -405,7 +405,9 @@ canvas.stroke(path, paint=paint, width=14)
   image to paint over (floats in 0..1, or whole numbers in 0..255). `texture`
   and `weave` are shortcuts for the surface's `relief` and `scale`.
 * `seed` seeds the surface and the strokes' textures: the same seed and the
-  same strokes paint the same canvas.
+  same strokes paint the same canvas (on another machine, to rounding: a
+  last-bit difference in its math library changes the paint in its last
+  bits, and no mark or pixel more).
 * `reverse=True` paints on the back of a clear support (`surfaces.GLASS`)
   and shows it through the front: a reverse glass painting (see **Reverse
   glass** below).
@@ -1010,6 +1012,10 @@ off towards white rather than clip.
 * Knives lie flat on the canvas (or, with a tiny `aspect`, on their edge);
   the tilt of the blade (spreading with the trailing edge down vs scraping
   with the leading edge) is folded into pressure.
+* A canvas painted on two machines comes out the same to rounding, not to
+  the bit: their math libraries round differently in the last place, and
+  the paint differs by that much (a pixel or a mark doesn't change), so
+  compare canvases from two machines with a tolerance.
 * Paint optics are derived from RGB colors, not measured pigment data. If you
   have measured spectra, `Paint.from_optics(K, S)` accepts them directly.
 * Speed: a few milliseconds for a small brush stroke, about a tenth of a

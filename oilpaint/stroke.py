@@ -557,13 +557,16 @@ def _stroke_textures(rng, bt: BrushType, smp: _Samples, arc) -> _Textures:
     # equally (the slab is thicker towards one side); the lips squeezed out
     # along a stroke swell and break
     period = max(0.4 * w_typ, 2.0)  # ripples about half a blade width apart
-    ripple = value_noise_1d(int(arc[-1] / period) + 4, 1.0, rng)
+    ripple = value_noise_1d(eng.whole_floor(arc[-1] / period) + 4, 1.0, rng)
     chatter = np.interp(arc / period, np.arange(len(ripple)), ripple) - 0.5
-    swell = value_noise_1d(int(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
+    swell = value_noise_1d(eng.whole_floor(arc[-1] / (2.0 * period)) + 4, 1.0, rng)
     lip = np.interp(arc / (2.0 * period), np.arange(len(swell)), swell)
     blade_tilt = float(np.clip(rng.normal(0.0, 0.08), -0.2, 0.2))
     # the bristle tips a dab prints (see _dab)
-    dab = _frozen(dab_pattern(bt, 0.5 * w_typ, rng)) if smp.is_dab else _NO_TEX2
+    # (its layout is kept by the width to the nearest px: one exactly between
+    # two goes up, not up or down as rounding left it)
+    w_dab = eng.whole_floor(w_typ + 0.5)
+    dab = _frozen(dab_pattern(bt, 0.5 * w_dab, rng)) if smp.is_dab else _NO_TEX2
     return _Textures(wobble, chatter, lip, blade_tilt, dab)
 
 
@@ -618,6 +621,22 @@ class _Segment(NamedTuple):
     Wd: float  # its width
     phi: float  # its long side from the cross direction (radians)
     side: float  # -1 for a brush turned past 90 degrees: its sides swapped
+
+
+def _sides(phi: float) -> tuple[float, float]:
+    """For a brush turned ``phi`` from the stroke's cross direction: whether
+    its sides are swapped (-1: turned more than 90 degrees either way, up to
+    and including -90; 1: up to and including +90), and the angle its
+    footprint is turned, folded into -90..90 degrees (a quarter turn exactly
+    as -90). Within ROUND_ANGLE of a quarter turn it is that quarter turn,
+    so that angle=90 (or 270, 450, ...) comes out the same whatever way
+    rounding left its radians; 90 and -90 are half a turn apart, so the
+    one's sides are the other's swapped."""
+    t = eng.ROUND_ANGLE
+    turned = phi % (2 * math.pi)
+    side = 1.0 if turned <= math.pi / 2 + t or turned > 1.5 * math.pi + t else -1.0
+    folded = (phi + math.pi / 2) % math.pi - math.pi / 2
+    return side, folded - math.pi if folded > math.pi / 2 - t else folded
 
 
 class _Window(NamedTuple):
@@ -995,9 +1014,7 @@ class _Run:
         # orientation of the brush's long side relative to the stroke's cross direction
         ang = 0.5 * (angles[i] + angles[i - 1])
         phi = ang if self.eff["follow_path"] else ang - math.atan2(tx, -ty)
-        # a brush turned past 90 degrees has its sides swapped
-        side = 1.0 if math.cos(phi) >= 0 else -1.0
-        phi = (phi + math.pi / 2) % math.pi - math.pi / 2
+        side, phi = _sides(phi)
         return _Segment(i, ax, ay, cx, cy, tx, ty, ds, p, r0, r1, r, 2.0 * r, phi, side)
 
     def _window(self, seg: _Segment) -> _Window:

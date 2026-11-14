@@ -24,3 +24,16 @@ def test_paths_resample_evenly():
         assert steps.std() / steps.mean() < 0.1
         assert np.allclose(np.linalg.norm(tan, axis=1), 1.0)
         assert u[0] == 0 and u[-1] == 1
+
+
+def test_a_length_a_whole_number_of_steps_long_is_cut_the_same_whatever_its_last_bit():
+    # 80 px in steps of 8: 10 steps in exact arithmetic, and the length a
+    # hair either side of 80 after rounding (the end moved by an ulp). The
+    # count (and every random number a stroke draws after it) used to
+    # follow that hair: 10 steps or 11.
+    for path in (CatmullRom, Polyline):
+        counts = {
+            len(path([(10.0, 20.0), (x1, 20.0)]).sample(8.0)[0])
+            for x1 in (90.0, np.nextafter(90.0, 100.0), np.nextafter(90.0, 0.0))
+        }
+        assert counts == {11}

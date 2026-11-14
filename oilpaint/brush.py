@@ -660,7 +660,7 @@ class Brush:
         k = float(eng.BLEND_RATE * blend * (0.2 + pressure) ** 2 * widths)
         for layer in self._layers():
             eng.diffuse(layer, k, self.ring)
-        for _ in range(int(np.ceil(widths))):
+        for _ in range(eng.whole_ceil(widths)):
             eng.swap_layers(
                 self.tip, self.reservoir, float(min(eng.TIP_SWAP * blend, 0.5))
             )

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._engine import whole_floor
+
 
 def _smooth(t):
     return t * t * (3.0 - 2.0 * t)
@@ -38,7 +40,7 @@ def fractal_noise_2d(h, w, cell, rng, octaves=4, gain=0.5) -> np.ndarray:
 
 
 def value_noise_1d(n: int, cell: float, rng: np.random.Generator) -> np.ndarray:
-    grid = rng.random(int(n / cell) + 3)
+    grid = rng.random(whole_floor(n / cell) + 3)
     x = np.arange(n) / cell
     xi = x.astype(int)
     f = _smooth(x - xi)

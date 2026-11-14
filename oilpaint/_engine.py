@@ -65,6 +65,19 @@ COLUMNS = 24
 
 # Two paints this alike (see alike) count as much the same paint.
 SAME_PAINT = 0.6
+# Paint this alike (see alike) to another is that paint, to rounding: the
+# same paint, in single precision on the canvas and double where it was
+# moved, comes out 1e-8 to 1e-6 apart. Paint holding a trace of another
+# comes out from there up, as faint as the trace, with no gap between: at
+# 1e-5 this is clear of rounding, and few traces lie near it. Paint shoved
+# onto a pixel that is the very paint of the layer below there (a knife
+# pushing a wet layer along over a thin film of another colour) is exactly
+# as alike to the top layer as the layer below is, and so no more: it does
+# not join the top layer, but goes on as other shoved paint does, on top,
+# the film joining the layer below (see _join_top_if_alike). Compared as
+# computed, the two likenesses tied, and rounding decided whether it joined
+# the film or covered it.
+SAME_TO_ROUNDING = 1e-5
 # A new film of paint this thick covers the wet paint under it about two-thirds
 # of the way: it buries that much of it (see deposit) ...
 COVERING_FILM = 0.15
@@ -194,12 +207,70 @@ MIN_FILM = 0.15
 # A dab's pattern of bristle tips spans this many brush half-widths each way
 # from the centre (see dab_cell; _dab.SPAN is the same, written out there).
 DAB_SPAN = 1.3
+# A dab tapped lightly prints only the bristle tips longer than a threshold
+# that falls as it is pressed harder (see _pressed_down), over a soft edge
+# this wide (in the pattern's 0..1 heights). The edge comes in as the
+# threshold rises from 0 (at the default pressure, 0.5, with no glob of
+# paint): there it would have halved the paint between the tips at once, so
+# that pressure 0.5 and the float just below it printed different dabs.
+TIP_SOFT = 0.12
 # A layer of a pixel holding no more paint than this holds none: what is
 # there is rounding dust (single-precision paint moved about leaves specks of
 # 1e-8 either side of zero), far below any film you could see (under 1e-5 of
 # MIN_FILM: as a film it would cover 7e-6 of the pixel). It covers nothing,
 # passes no coverage on, is not stirred, and is not a layer to merge with.
 EMPTY = 1e-6
+# How many steps a path is cut into, how many random numbers a texture
+# draws, how many cells a pattern has: such counts are worked out from
+# lengths and widths, and the ratio is often a whole number in exact
+# arithmetic (a stroke 80 px long in steps of 8 px; a ratio of two widths),
+# which rounding leaves a hair either side of it. Rounded up or down as it
+# fell, the count (and with it every random number drawn after it) hung on
+# the last bit of the input. A ratio within this much of a whole number
+# counts as that number (see whole_floor, whole_ceil): far above rounding
+# (over the bench scenes and the rounding tests such ratios come out within
+# 1e-13 of the whole number) and below any other ratio met there (the
+# nearest, 6e-6 from one).
+WHOLE_SLACK = 1e-6
+# Lengths (px) this short are rounding. A position within this of the start
+# or end of a stroke is at it, not past it (see splat_out); a pixel the edge
+# of a blade passes within this of its centre is half under it (see
+# blade_rest). At whole-number positions (a dab, a stroke from (10, 20) to
+# (90, 20)) these come out exactly on the line in exact arithmetic, and
+# within 1e-13 px of it after rounding; over the bench scenes and the
+# rounding tests no other value comes within 1e-7 px of it.
+ROUND_PX = 1e-9
+# A line across a footprint's outline that crosses one of its segments
+# within this share of the segment's end crosses it at that end (see
+# _geometry._chord_table_at). The outermost lines run through the outline's
+# outermost points, and lines through its other corners are common; such
+# crossings come out within 7e-10 of the end after rounding (a share of a
+# short segment), and no other within 1e-6.
+ROUND_SHARE = 1e-8
+# Angles (radians) this close to a quarter turn are that quarter turn, and
+# cosines this close to 0 are 0. A brush turned by exactly 90 degrees
+# (angle=90, 270, ...) has a cosine of 0 in exact arithmetic and a hair
+# either side of it after rounding, which decided which of its sides was
+# which: its loads across it and its hair mirrored or not, as the radians
+# of the angle happened to round (see stroke._sides). (Such cosines come out
+# within 1e-15 of 0; over the bench scenes no other came within 1e-3.)
+ROUND_ANGLE = 1e-9
+
+
+@njit(cache=True, error_model="numpy")
+def whole_floor(x: float) -> int:
+    """floor(x) for a count worked out from lengths: a ratio within
+    WHOLE_SLACK below a whole number counts as that number."""
+    return math.floor(x + WHOLE_SLACK)
+
+
+@njit(cache=True, error_model="numpy")
+def whole_ceil(x: float) -> int:
+    """ceil(x) for a count worked out from lengths: a ratio within
+    WHOLE_SLACK above a whole number counts as that number."""
+    return math.ceil(x - WHOLE_SLACK)
+
+
 # A deposit of less than this is a speck landing, not paint laid: it claims
 # nothing and buries nothing.
 SPECK = 1e-7
@@ -918,7 +989,7 @@ def _blur_across(out, sig):
     pixel grid on a slant would come out as a row of beads, one per pixel it
     steps over.)"""
     n_s, n_x = out.shape
-    rad = int(math.ceil(2.5 * sig))
+    rad = whole_ceil(2.5 * sig)
     if rad <= 0:
         return
     ker = np.empty(2 * rad + 1)
@@ -1241,7 +1312,10 @@ def _pressed_down(profile, st, K, p, lr, rel_h, hair, soft_pow):
     # mark (a glob of paint on it touches all over even then)
     tip_thr = 0.75 - 1.5 * p - 0.4 * min(st.hold.overload, 1.5)
     if tip_thr > 0:
-        profile *= smoothstep(tip_thr - 0.12, tip_thr + 0.12, hair)
+        # (its soft edge, TIP_SOFT wide, comes in as the threshold rises from
+        # 0: at 0 it would halve the gaps between the tips at once)
+        gaps = 1.0 - smoothstep(tip_thr - TIP_SOFT, tip_thr + TIP_SOFT, hair)
+        profile *= 1.0 - smoothstep(0.0, TIP_SOFT, tip_thr) * gaps
     return profile
 
 
@@ -1660,7 +1734,11 @@ def _join_top_if_alike(top, und, pk, Y, X):
     if not (top[Y, X, IV] > EMPTY and und[Y, X, IV] > EMPTY):
         return False
     near = alike_upto(top[Y, X], pk, SAME_PAINT)
-    if near < SAME_PAINT and near < alike(und[Y, X], top[Y, X]):
+    if (
+        near < SAME_PAINT
+        and near < alike(und[Y, X], top[Y, X])
+        and not alike_below(pk, und[Y, X], SAME_TO_ROUNDING)
+    ):
         for c in range(PACKED):
             top[Y, X, c] += np.float32(pk[c])
         return True
@@ -2052,21 +2130,28 @@ def lay_off(
             part = extra[b] * give[b]
             used[b] += part
             gone += part
-    if total > 0:
-        deposit(
-            cv,
-            pend,
-            sy0,
-            sx0,
-            dep,
-            d_px,
-            cover,
-            stroke_id,
-            moved,
-            by_film,
-            reach,
-            has_reach,
-        )
+    # (Also when it lays nothing. Passing over paint it laid earlier in the
+    # stroke, a tool spreads it over more of the pixel: deposit raises that
+    # pixel's cover by what the step passes over, whatever it adds there, as
+    # it does for the pixels a step adds nothing to beside those it adds
+    # paint to. That rise is the tool's work, not the paint's, so it doesn't
+    # wait for paint: made to wait for a step that laid any, a knife at
+    # pressure 0.3, where its bead starts to lay 1e-31, raised the cover of
+    # its slab or not as rounding fell.)
+    deposit(
+        cv,
+        pend,
+        sy0,
+        sx0,
+        dep,
+        d_px,
+        cover,
+        stroke_id,
+        moved,
+        by_film,
+        reach,
+        has_reach,
+    )
     if total > 0 or gone > 0:
         for b in range(COLUMNS):
             for c in range(PACKED):
@@ -2169,7 +2254,7 @@ def splat_out(d, lat, along, oy, ox, hh, ww, tx, ty, ds, s0, s_end, half, out):
                 for j in range(-4, 5):
                     fa = (5.0 - abs(j)) / 25.0
                     a = j / 2.0 * ds
-                    if s + a < 0.0 or s + a > s_end:
+                    if s + a < -ROUND_PX or s + a > s_end + ROUND_PX:
                         a = 0.0
                     fy = oy + y + sgn * o * tx + a * ty
                     fx = ox + x - sgn * o * ty + a * tx
@@ -3491,7 +3576,7 @@ def _meet(cv, st, K, pend):
     of the stroke's own paint): what the stroke met there, not what it left
     of it, stirred into it or pushed onto it. (Not yet recorded: below 0.)"""
     win = st.win
-    m = int(math.ceil(max(st.motion.ds, K.margin))) + 1
+    m = whole_ceil(max(st.motion.ds, K.margin)) + 1
     # (the window, so much bigger)
     _meet_box(
         cv,
@@ -5278,7 +5363,7 @@ def blade_rest(
             ub = (
                 F[F_AA, wy, wx]
                 * clip(F[F_H, wy, wx] - abs(F[F_REL, wy, wx]) + 0.5, 0.0, 1.0)
-                > 0.5
+                > 0.5 + ROUND_PX  # (half of it: its centre on the edge)
             )
             under[y, x] = ub
             any_under = any_under or ub
@@ -5538,7 +5623,7 @@ def flow_under_blade(
     # do so, so that paint dragged in from elsewhere lands on top of them
     merge_same(cv, sy0, sx0, own, 0.25)
     ax, ay = abs(tx), abs(ty)
-    n_sub = max(int(math.ceil(ds * (ax + ay))), 1)
+    n_sub = max(whole_ceil(ds * (ax + ay)), 1)
     step = ds / n_sub
     xdir, ydir = (1 if tx >= 0 else -1), (1 if ty >= 0 else -1)
     inside = np.empty((hh, ww))
@@ -5765,6 +5850,14 @@ PULL_PASSES = 4
 # factors, normalised in double precision, keep it to 2.4e-16 at worst (178
 # lifts of dabs and knives, one to three colours).
 PULL_KEEPS = 1e-12
+# A factor within this of 1 leaves its pixel alone. The callers scale their
+# factors so that they keep the volume, which leaves the pixels nothing is
+# to happen to (the stroke's own paint the tool wasn't over) at exactly 1
+# or a hair from it, as rounding fell: each of them then gave or took 1e-16
+# of its paint, and whether they all held the same paint (see _uniform)
+# decided how the rest moved. (Over the bench scenes and the rounding tests
+# those factors come out within 1.3e-14 of 1, and no other within 1.2e-7.)
+PULL_STILL = 1e-12
 
 
 @njit(cache=True, error_model="numpy")
@@ -5836,7 +5929,7 @@ def _changing(fac):
     y0, y1, x0, x1 = h, 0, w, 0
     for y in range(h):
         for x in range(w):
-            if fac[y, x] != 1.0:
+            if abs(fac[y, x] - 1.0) > PULL_STILL:
                 y0, y1 = min(y0, y), max(y1, y + 1)
                 x0, x1 = min(x0, x), max(x1, x + 1)
     return y0, y1, x0, x1
@@ -5854,9 +5947,9 @@ def _falls_and_rises(top, fac):
             v = np.float64(top[y, x, IV])
             f = fac[y, x]
             if v > 0.0:
-                if f < 1.0:
+                if f < 1.0 - PULL_STILL:
                     loss[y, x] = v * (1.0 - f)
-                elif f > 1.0:
+                elif f > 1.0 + PULL_STILL:
                     gain[y, x] = v * (f - 1.0)
     return loss, gain
 

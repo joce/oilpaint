@@ -848,6 +848,29 @@ def test_footprint_tables_do_not_depend_on_what_was_painted_before():
             np.testing.assert_array_equal(got, want)
 
 
+def test_footprint_tables_reach_the_outermost_points_of_the_outline():
+    # The outermost lines of a table run through the outline's outermost
+    # points (on both sides, but for an uneven blade). One of them reaches
+    # its point only to rounding, and it used to cross nothing there about
+    # one table in ten (centre 0, length 0, not the point: up to 0.94
+    # half-widths off).
+    from oilpaint import _geometry as geo
+
+    shapes = {(t.shape, round(float(t.aspect), 3)) for t in brushes.ALL.values()}
+    for shape, aspect in sorted(s for s in shapes if s[0] != "round"):
+        u, v = geo._outline(shape, aspect)
+        for k in range(-157, 158, 3):
+            phi = k / 100
+            lat = u * np.cos(phi) - v * np.sin(phi)
+            al = u * np.sin(phi) + v * np.cos(phi)
+            grid, c, h, _, _ = geo._chord_table_at(shape, aspect, phi)
+            for end, i in ((0, int(np.argmin(lat))), (-1, int(np.argmax(lat)))):
+                if abs(grid[end] - lat[i]) > 1e-9:
+                    continue  # (an uneven blade: the grid reaches past it)
+                lo, hi = c[end] - h[end], c[end] + h[end]
+                assert lo - 1e-6 <= al[i] <= hi + 1e-6, (shape, aspect, phi, end)
+
+
 # --------------------------------------------------------------------------
 # brush types and brushes
 

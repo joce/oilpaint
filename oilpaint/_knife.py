@@ -82,7 +82,7 @@ def _before_the_blade(canvas, rng, pts, pad, w_typ, arc) -> _BladeStart:
     # Paint on a blade isn't held in lanes like paint in bristles: its
     # colour bands wander a little from side to side along the stroke.
     period = max(0.5 * w_typ, 4.0)
-    n_s = int(arc[-1] / period) + 3
+    n_s = eng.whole_floor(arc[-1] / period) + 3
     bands = value_noise_2d(8 * n_s, 64, 8.0, rng)
     return _BladeStart(wet_y0, wet_x0, wet_before, bands, period)
 
@@ -277,7 +277,7 @@ def _blade_rest(run: _Run, s: _Step):
     # it pushes ahead), bending to follow them over a span set by its
     # stiffness: what lies under it at each position along it (whole px from
     # its end), averaged over ``span`` px either way.
-    span = int(min(max(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2), 10))
+    span = eng.whole_floor(min(max(0.1 * run.w_typ * (0.5 + run.stiff_blade), 2), 10))
     hi, b, cnt, tot_hi, tot_rest = eng.blade_bins(
         relief.floor,
         win.cy0,
@@ -784,7 +784,7 @@ def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
     it would change what later steps fill.)"""
     win = st.win
     H, W = run.canvas.height, run.canvas.width
-    m = int(math.ceil(_KNIFE_END_OUT + _KNIFE_END_PX + 2.0 * st.motion.ds)) + 1
+    m = eng.whole_ceil(_KNIFE_END_OUT + _KNIFE_END_PX + 2.0 * st.motion.ds) + 1
     y0, x0 = max(win.cy0 - m, 0), max(win.cx0 - m, 0)
     y1, x1 = min(win.cy0 + win.ch + m, H), min(win.cx0 + win.cw + m, W)
     wl, wr = eng.splat_out(

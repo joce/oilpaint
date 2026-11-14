@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy as np
 
+from ._engine import whole_ceil, whole_floor
+
 #: A value along a stroke: a number, a sequence, or a function of u in 0..1
 #: (called with the array of all u, or with one u at a time if that fails).
 Profile = (
@@ -66,7 +68,7 @@ class Path:
         if length < 1e-9:
             p = pts[:1]
             return p, np.array([[1.0, 0.0]]), np.zeros(1), knot[:1]
-        n = max(2, int(np.ceil(length / max(spacing, 1e-3))) + 1)
+        n = max(2, whole_ceil(length / max(spacing, 1e-3)) + 1)
         si = np.linspace(0.0, length, n)
         out = np.stack([np.interp(si, s, pts[:, 0]), np.interp(si, s, pts[:, 1])], -1)
         k = np.interp(si, s, knot)
@@ -158,9 +160,9 @@ class Bezier(Path):
                 + np.linalg.norm(p2 - p1)
                 + np.linalg.norm(p3 - p2)
             )
-            t = np.linspace(0.0, 1.0, max(8, int(approx / 2) + 1), endpoint=False)[
-                :, None
-            ]
+            t = np.linspace(
+                0.0, 1.0, max(8, whole_floor(approx / 2) + 1), endpoint=False
+            )[:, None]
             mt = 1 - t
             pts.append(
                 mt**3 * p0 + 3 * mt * mt * t * p1 + 3 * mt * t * t * p2 + t**3 * p3

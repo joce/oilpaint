@@ -96,3 +96,33 @@ def test_spatter_flies_the_way_it_is_flicked():
     assert np.average(ys) > 150 and abs(np.average(xs) - 150) < 25
     more = Canvas(400, 300, seed=14).spatter((60, 150), "#000000", amount=3, seed=1)
     assert more > 2 * n
+
+
+def _two_paint_dab(pressure):
+    c = Canvas(120, 120, seed=11)
+    c.stroke(
+        [(60, 60)],
+        [(P.CADMIUM_RED, 4), (P.TITANIUM_WHITE, 2, "left")],
+        brush=brushes.FILBERT_HOG,
+        pressure=pressure,
+        seed=3,
+    )
+    return c
+
+
+def test_a_dab_at_the_default_pressure_prints_as_one_pressed_a_hair_lighter():
+    # Below 0.5 (with no glob of paint) only the longer bristle tips print.
+    # That set in at once at 0.5: the gaps between the tips took half the
+    # paint at 0.5 minus an ulp, all of it at 0.5.
+    at, below = _two_paint_dab(0.5), _two_paint_dab(float(np.nextafter(0.5, 0.0)))
+    a, b = at.top.astype(float), below.top.astype(float)
+    assert np.abs(a - b).max() <= 1e-6 * np.abs(a).max()
+    np.testing.assert_array_equal(at.top_id, below.top_id)
+
+
+def test_tapped_more_lightly_a_dab_lays_less_paint_with_no_step():
+    ps = np.linspace(0.49, 0.51, 21)
+    laid = np.array([_two_paint_dab(float(p)).top[..., -2].sum() for p in ps])
+    assert (np.diff(laid) >= 0).all()
+    # (no step: no rise between neighbouring pressures much over the average)
+    assert np.diff(laid).max() < 4 * np.diff(laid).mean()
