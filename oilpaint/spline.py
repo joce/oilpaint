@@ -158,7 +158,7 @@ class Bezier(Path):
         P = self.points
         for i in range(self.n_knots - 1):
             p0, p1, p2, p3 = P[3 * i : 3 * i + 4]
-            approx = (
+            approx = float(
                 np.linalg.norm(p1 - p0)
                 + np.linalg.norm(p2 - p1)
                 + np.linalg.norm(p3 - p2)
