@@ -40,4 +40,5 @@ python tools/bench.py --compare DIR   # compare byte for byte with a kept state
 - A change meant to alter the picture is judged by measurements and amplified difference images, not by looking at two renders side by side.
 - Such a change also regenerates every image the README uses, with the final code: all of `examples/output/` (`examples/demo.py`, `examples/quickstart.py` and each painting script), not only the images expected to differ.
 - Paint must be conserved: what leaves the brush lands on the canvas or is accounted for off its edge. Tests check this.
+- A decision must not hang on the last bit of a computed value: counts worked out from ratios use `whole_floor`/`whole_ceil`, and comparisons use a tolerance placed away from where values cluster (`ROUND_PX`, `EMPTY`). `tests/test_rounding.py` nudges inputs by an ulp.
 - ruff caps function complexity at 13 everywhere except `_render.py`.
