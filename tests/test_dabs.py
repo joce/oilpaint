@@ -128,6 +128,15 @@ def test_tapped_more_lightly_a_dab_lays_less_paint_with_no_step():
     assert np.diff(laid).max() < 4 * np.diff(laid).mean()
 
 
+def test_below_the_band_where_the_tips_fade_in_a_dab_lays_what_it_laid_before():
+    # The gaps between the tips fade in as the pressure falls from 0.5 to 0.41;
+    # tapped more lightly than that, a dab is as it was with no fade at all.
+    # (The volumes were measured with the old, hard-edged formula.)
+    for p, laid in ((0.41, 114.58768062146737), (0.40, 111.15305007198049)):
+        c = _two_paint_dab(p)
+        assert c.thickness.astype(float).sum() == pytest.approx(laid, rel=1e-6)
+
+
 def test_a_dab_exactly_between_two_widths_picks_the_same_pattern_either_way():
     # A dab's pattern of bristle tips is kept by its width to the nearest px:
     # 10.5 px is exactly between two, and rounded down at 10.5 and up a hair

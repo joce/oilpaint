@@ -764,9 +764,8 @@ def test_a_long_knife_stroke_off_the_canvas_keeps_little_memory():
 def test_counts_from_ratios_take_a_hair_off_a_whole_number_as_that_number(
     x, floor, ceil
 ):
-    from oilpaint._engine import WHOLE_SLACK, whole_ceil, whole_floor
+    from oilpaint._engine import whole_ceil, whole_floor
 
-    assert WHOLE_SLACK == 1e-6
     assert whole_floor(float(x)) == floor
     assert whole_ceil(float(x)) == ceil
 

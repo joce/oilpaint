@@ -1012,11 +1012,12 @@ off towards white rather than clip.
   the tilt of the blade (spreading with the trailing edge down vs scraping
   with the leading edge) is folded into pressure.
 * Two machines' math libraries round differently in the last place. The
-  engine keeps this from switching the outcomes found to hang on it, so in
-  what was tested a pixel's paint differs by a few units in the last place
-  of its total (up to 0.4% of a thin layer lying under or over a thick
-  one); some such place may remain, where a mark's texture would change.
-  Compare canvases painted on two machines with a tolerance.
+  engine keeps this from switching the outcomes known to hang on it: in
+  what was tested a pixel's paint differs by at most some tens of units in
+  the last place of its total, which can be up to 0.4% of a thin layer
+  lying under or over a thick one. Other such outcomes may remain, where a
+  mark's texture would change. Compare canvases painted on two machines
+  with a tolerance.
 * Paint optics are derived from RGB colors, not measured pigment data. If you
   have measured spectra, `Paint.from_optics(K, S)` accepts them directly.
 * Speed: a few milliseconds for a small brush stroke, about a tenth of a

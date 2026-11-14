@@ -431,6 +431,22 @@ def test_a_knife_dab_at_a_whole_number_position_presses_out_the_same_paint():
         assert np.abs(a - b).max() <= 1e-5 * np.abs(a).max(), (kx, ky)
 
 
+def test_a_narrow_knife_on_a_half_pixel_axis_presses_paint_out_to_both_sides():
+    # Along y = 40.5 a row of pixels is centred on the stroke's axis. The paint
+    # a narrow knife pressed out there went to neither side: it stayed on the
+    # blade, which laid it back along the axis in a stripe.
+    c = Canvas(200, 80, seed=3)
+    knife = Brush(brushes.PALETTE_KNIFE.sized(10)).load(P.TITANIUM_WHITE, 20)
+    held = knife.volume
+    knife = c.stroke(
+        [(40, 40.5), (160, 40.5)], brush=knife, angle=90, pressure=0.5, seed=4
+    )
+    rows = c.thickness[:, 50:150].sum(axis=1)
+    assert rows[40] < 1.08 * max(rows[39], rows[41])  # (it was 1.2 times)
+    assert rows[34] > 5.0 and rows[46] > 5.0  # (they held 2.3 and 2.6)
+    assert c.thickness.sum() + knife.volume == pytest.approx(held, rel=1e-6)
+
+
 def test_a_knife_going_back_over_its_slab_covers_the_same_at_pressure_0_3():
     # Below 0.3 a knife starts to skim: its bead lays paint, 1e-31 of it a
     # hair below. Passing back over its own slab it lays nothing else; it

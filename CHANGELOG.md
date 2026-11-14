@@ -58,21 +58,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   knives at whole-number positions and pressure 0.3, and footprints at some
   angles. All example images are regenerated. In particular:
   - a brush's sides are swapped when it is turned from the stroke's cross
-    direction by more than 90 and at most 270 degrees; only a brush turned
-    exactly edge-on (90 or 270) can come out otherwise. With `follow_path=True`,
-    `angle=90`, 270, 450 and 630 draw as before, `-90` now draws as 270
-    and `-270` as 90 (they drew as 90 and as 270); with `follow_path=False`,
-    `angle=0` on a level stroke drawn left to right and `angle=90` on an
-    upright one drawn downwards (the brush's long side along the stroke)
-    now have their sides swapped: the paint loaded `across="left"` and the
-    hair on the other side;
+    direction by more than 90 and at most 270 degrees; exactly edge-on, it
+    keeps its sides at 90 and swaps them at 270. With `follow_path=True`,
+    `angle=90`, 270, 450 and 630 draw as before; `-90` now draws as 270 and
+    `-270` as 90 (they drew as 90 and as 270). With `follow_path=False`, a
+    brush whose long side lies along the stroke has its sides swapped where
+    they differed: `angle=0` on a level stroke drawn left to right, and
+    `angle=90`, `-90` and `-270` on an upright one drawn downwards (90 and
+    450 now agree, as do -90, 270 and 630);
   - a pixel centred on the stroke's axis sends half its paint to each side
-    ridge (it sent all of it to one);
+    ridge (it sent all of it to one; the paint a narrow knife pressed out
+    there went to neither side, and stayed on the blade);
   - a dab tapped a little more lightly than the default pressure fades its
-    bristle tips in: for a brush with no glob of paint on it (a glob moves
-    the band lower), the paint between them goes from all of it at 0.5 to
-    none below 0.42, smoothly, where it dropped to half at once just below
-    0.5; at 0.5 and above, and below 0.42, dabs are as they were;
+    bristle tips in smoothly: with no glob of paint on the brush (a glob
+    moves the band lower), the paint between them goes from all of it at
+    0.5 to none below 0.42 (it dropped to half at once just below 0.5).
+    Outside that band, dabs are as they were;
   - a dab's pattern of tips is kept by its width to the nearest pixel, a
     width of exactly half a pixel more rounding up (it rounded to even);
   - a knife going back over its own slab spreads it over more of each pixel
@@ -371,7 +372,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - whether a footprint's table reached its outermost point (about one in
     ten, at some angles);
   - which ridge takes the paint of a pixel centred on the stroke's axis (at
-    half-pixel positions, and at 45 degrees between whole-number points);
+    half-pixel positions, and at 45 degrees between whole-number points;
+    paint a narrow knife pressed out there went to neither);
   - for a knife at whole-number positions, which pixels lie half under its
     edge and whether paint it presses out lies past the end of its stroke;
   - whether a knife at pressure 0.3 spreads its slab, as its bead laid 0 or
