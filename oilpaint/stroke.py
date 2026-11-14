@@ -624,14 +624,13 @@ class _Segment(NamedTuple):
 
 
 def _sides(phi: float) -> tuple[float, float]:
-    """For a brush turned ``phi`` from the stroke's cross direction: whether
-    its sides are swapped (-1: turned more than 90 degrees either way, up to
-    and including -90; 1: up to and including +90), and the angle its
-    footprint is turned, folded into -90..90 degrees (a quarter turn exactly
-    as -90). Within ROUND_ANGLE of a quarter turn it is that quarter turn,
-    so that angle=90 (or 270, 450, ...) comes out the same whatever way
-    rounding left its radians; 90 and -90 are half a turn apart, so the
-    one's sides are the other's swapped."""
+    """For a brush turned ``phi`` from the stroke's cross direction: its
+    side (-1, its sides swapped, when it is turned by more than 90 and at
+    most 270 degrees, so that -90 counts as 270; else 1), and the angle its
+    footprint is turned, folded into -90..90 degrees (a quarter turn
+    exactly as -90). Within ROUND_ANGLE of a quarter turn it is that quarter
+    turn, so that a brush exactly edge-on comes out the same whatever way
+    rounding left its radians."""
     t = eng.ROUND_ANGLE
     turned = phi % (2 * math.pi)
     side = 1.0 if turned <= math.pi / 2 + t or turned > 1.5 * math.pi + t else -1.0

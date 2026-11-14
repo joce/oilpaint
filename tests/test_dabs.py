@@ -126,3 +126,25 @@ def test_tapped_more_lightly_a_dab_lays_less_paint_with_no_step():
     assert (np.diff(laid) >= 0).all()
     # (no step: no rise between neighbouring pressures much over the average)
     assert np.diff(laid).max() < 4 * np.diff(laid).mean()
+
+
+def test_a_dab_exactly_between_two_widths_picks_the_same_pattern_either_way():
+    # A dab's pattern of bristle tips is kept by its width to the nearest px:
+    # 10.5 px is exactly between two, and rounded down at 10.5 and up a hair
+    # above it (to even, as Python rounds). It goes up, whatever its last bit.
+    def dab(width):
+        c = Canvas(120, 120, seed=11)
+        c.stroke(
+            [(60, 60)],
+            P.CADMIUM_RED,
+            amount=6,
+            brush=brushes.ROUND_HOG,
+            width=width,
+            pressure=0.35,
+            seed=3,
+        )
+        return c.top.astype(float)
+
+    plain = dab(10.5)
+    for w in (np.nextafter(10.5, 11.0), np.nextafter(10.5, 10.0)):
+        assert np.abs(dab(float(w)) - plain).max() <= 1e-4 * np.abs(plain).max()

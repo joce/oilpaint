@@ -76,7 +76,9 @@ SAME_PAINT = 0.6
 # not join the top layer, but goes on as other shoved paint does, on top,
 # the film joining the layer below (see _join_top_if_alike). Compared as
 # computed, the two likenesses tied, and rounding decided whether it joined
-# the film or covered it.
+# the film or covered it. Decisions near this line can still go either way
+# with rounding: over the bench scenes 15 of 210 684 such decisions lay
+# within 10% of it, and 70 of 9676 over marks made to sit on such lines.
 SAME_TO_ROUNDING = 1e-5
 # A new film of paint this thick covers the wet paint under it about two-thirds
 # of the way: it buries that much of it (see deposit) ...
@@ -235,10 +237,13 @@ WHOLE_SLACK = 1e-6
 # Lengths (px) this short are rounding. A position within this of the start
 # or end of a stroke is at it, not past it (see splat_out); a pixel the edge
 # of a blade passes within this of its centre is half under it (see
-# blade_rest). At whole-number positions (a dab, a stroke from (10, 20) to
-# (90, 20)) these come out exactly on the line in exact arithmetic, and
+# blade_rest); a pixel centred within this of the stroke's axis is on it
+# (see right_share). At whole-number and half-pixel positions (a dab, a
+# stroke from (10, 20) to (90, 20), or at 45 degrees between whole-number
+# points) these come out exactly on the line in exact arithmetic, and
 # within 1e-13 px of it after rounding; over the bench scenes and the
-# rounding tests no other value comes within 1e-7 px of it.
+# rounding tests no other value came within 1e-7 px of the line at the
+# blade or the end of a stroke.
 ROUND_PX = 1e-9
 # A line across a footprint's outline that crosses one of its segments
 # within this share of the segment's end crosses it at that end (see
@@ -1181,9 +1186,13 @@ def radius_at(along, ds, r0, r1, r):
 def dab_cell(u, along, r, n2):
     """The cell (iy, ix) of a dab's tip pattern (``n2`` + 1 cells a side, over
     DAB_SPAN half-widths each way) at ``u`` across the bristles and ``along``
-    px (``r``: the brush's half-width)."""
-    ix = min(max(int((u + DAB_SPAN) / (2.0 * DAB_SPAN) * n2), 0), n2)
-    iy = min(max(int((along / r + DAB_SPAN) / (2.0 * DAB_SPAN) * n2), 0), n2)
+    px (``r``: the brush's half-width). (A pixel centred on the dab's axis
+    lies on the line between two cells when ``n2`` is even, and took the one
+    or the other as rounding fell: it takes the one past the line, as a
+    count does, see whole_floor.)"""
+    span = 2.0 * DAB_SPAN
+    ix = min(max(whole_floor((u + DAB_SPAN) / span * n2), 0), n2)
+    iy = min(max(whole_floor((along / r + DAB_SPAN) / span * n2), 0), n2)
     return iy, ix
 
 
@@ -2227,6 +2236,22 @@ def take_tips(tip, taps, d):
     return out
 
 
+@njit(cache=True, error_model="numpy", inline="always")
+def right_share(lat):
+    """The share of what a pixel ``lat`` px across a step sends to the side
+    of the step's right (the rest goes to its left): all of it right of the
+    stroke's axis, none left of it, and half each from a pixel centred on
+    the axis (within ROUND_PX of it: at half-pixel positions, and on a 45
+    degree stroke between whole-number points, the centres of a row of
+    pixels lie on it exactly, and rounding leaves them a hair either side;
+    all their paint went to one side or the other as it fell)."""
+    if lat > ROUND_PX:
+        return 1.0
+    if lat < -ROUND_PX:
+        return 0.0
+    return 0.5
+
+
 @njit(cache=True, error_model="numpy")
 def splat_out(d, lat, along, oy, ox, hh, ww, tx, ty, ds, s0, s_end, half, out):
     """Where paint pressed out at a blade's ends lands: ``d`` per pixel (a
@@ -2235,7 +2260,8 @@ def splat_out(d, lat, along, oy, ox, hh, ww, tx, ty, ds, s0, s_end, half, out):
     moves out to within ``out`` px beyond the end of the blade (``half`` px
     from its middle), smeared along the stroke over two steps each way (a
     triangle; not past the stroke's ends, ``s0 + along`` within 0..s_end).
-    Returns the weights on the left and the right (lat < 0, > 0), bilinear."""
+    Returns the weights on the left and the right (lat < 0, > 0; a pixel on
+    the axis half each, see right_share), bilinear."""
     wl = np.zeros((hh, ww))
     wr = np.zeros((hh, ww))
     h, w = d.shape
@@ -2244,34 +2270,46 @@ def splat_out(d, lat, along, oy, ox, hh, ww, tx, ty, ds, s0, s_end, half, out):
             v = d[y, x]
             if v <= 1e-9:
                 continue
-            sgn = 1.0 if lat[y, x] > 0 else -1.0
-            tgt = wr if lat[y, x] > 0 else wl
+            share = right_share(lat[y, x])
             inside = half - abs(lat[y, x])
             s = s0 + along[y, x]
-            for k in range(3):
-                fk = 0.3 if k == 0 else (0.45 if k == 1 else 0.25)
-                o = inside + out * (k + 0.5) / 3.0
-                for j in range(-4, 5):
-                    fa = (5.0 - abs(j)) / 25.0
-                    a = j / 2.0 * ds
-                    if s + a < -ROUND_PX or s + a > s_end + ROUND_PX:
-                        a = 0.0
-                    fy = oy + y + sgn * o * tx + a * ty
-                    fx = ox + x - sgn * o * ty + a * tx
-                    iy, ix = int(math.floor(fy)), int(math.floor(fx))
-                    ay, ax = fy - iy, fx - ix
-                    m = v * fk * fa
-                    for dy in range(2):
-                        wy = ay if dy else 1.0 - ay
-                        jy = iy + dy
-                        if jy < 0 or jy >= hh:
-                            continue
-                        for dx in range(2):
-                            wx = ax if dx else 1.0 - ax
-                            jx = ix + dx
-                            if 0 <= jx < ww:
-                                tgt[jy, jx] += m * wy * wx
+            for sgn, tgt, part in ((1.0, wr, share), (-1.0, wl, 1.0 - share)):
+                if part > 0.0:
+                    pos = (oy + y, ox + x, sgn, inside, s)
+                    _splat_side(tgt, v * part, pos, tx, ty, ds, s_end, out)
     return wl, wr
+
+
+@njit(cache=True, error_model="numpy", inline="always")
+def _splat_side(tgt, v, pos, tx, ty, ds, s_end, out):
+    """splat_out's paint ``v`` from one pixel (``pos``: its row and column
+    in ``tgt``, the side, how far inside the end of the blade it lies, and
+    how far along the stroke) into ``tgt``."""
+    py, px, sgn, inside, s = pos
+    hh, ww = tgt.shape
+    for k in range(3):
+        fk = 0.3 if k == 0 else (0.45 if k == 1 else 0.25)
+        o = inside + out * (k + 0.5) / 3.0
+        for j in range(-4, 5):
+            fa = (5.0 - abs(j)) / 25.0
+            a = j / 2.0 * ds
+            if s + a < -ROUND_PX or s + a > s_end + ROUND_PX:
+                a = 0.0
+            fy = py + sgn * o * tx + a * ty
+            fx = px - sgn * o * ty + a * tx
+            iy, ix = int(math.floor(fy)), int(math.floor(fx))
+            ay, ax = fy - iy, fx - ix
+            m = v * fk * fa
+            for dy in range(2):
+                wy = ay if dy else 1.0 - ay
+                jy = iy + dy
+                if jy < 0 or jy >= hh:
+                    continue
+                for dx in range(2):
+                    wx = ax if dx else 1.0 - ax
+                    jx = ix + dx
+                    if 0 <= jx < ww:
+                        tgt[jy, jx] += m * wy * wx
 
 
 @njit(cache=True, error_model="numpy")
@@ -2594,9 +2632,11 @@ def add_sides(ridges, moved, lat, scale):
     hh, ww = lat.shape
     for y in range(hh):
         for x in range(ww):
-            side = right if lat[y, x] > 0 else left
+            r = right_share(lat[y, x])
             for c in range(PACKED):
-                side[c] += scale * moved[y, x, c]
+                m = scale * moved[y, x, c]
+                right[c] += r * m
+                left[c] += (1.0 - r) * m
 
 
 @njit(cache=True, error_model="numpy", inline="always")
@@ -2785,11 +2825,13 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
             for y in range(e_lat.shape[0]):
                 for x in range(e_lat.shape[1]):
                     lat = e_lat[y, x]
-                    if (k == 0 and lat < 0) or (k == 1 and lat > 0):
-                        w_t[y, x], w_g[y, x] = _side_weight(
+                    r = right_share(lat)
+                    part = r if k == 1 else 1.0 - r
+                    if part > 0.0:
+                        t, g = _side_weight(
                             K,
                             st,
-                            lat,
+                            (lat, k == 1),
                             e_along[y, x],
                             e_r[y, x],
                             w,
@@ -2798,6 +2840,7 @@ def lay_ridges_off(cv, pend, br, K, st, ridges, grid, c_tab, h_tab, hair, lose_o
                             c_tab,
                             hair,
                         )
+                        w_t[y, x], w_g[y, x] = part * t, part * g
                     else:
                         w_t[y, x] = 0.0
                         w_g[y, x] = 0.0
@@ -2988,13 +3031,15 @@ def _outside_by(K, st, lat, ea, r, grid, c_tab, h_tab):
 
 
 @njit(cache=True, error_model="numpy", inline="always")
-def _side_weight(K, st, lat, along, r, w, ramp, inset, c_tab, hair):
-    """A ridge ``w`` px wide along a side of the step's footprint at a pixel
-    ``lat`` px across and ``along`` px along the step (``r``: the footprint's
-    half-width there), soft-ended over ``ramp`` px: (its share of the
-    ridge's paint there, how much of the pixel it covers)."""
+def _side_weight(K, st, at, along, r, w, ramp, inset, c_tab, hair):
+    """A ridge ``w`` px wide along a side of the step's footprint (``at``:
+    a pixel ``lat`` px across, and whether the ridge is on the right) at
+    ``along`` px along the step (``r``: the footprint's half-width there),
+    soft-ended over ``ramp`` px: (its share of the ridge's paint there, how
+    much of the pixel it covers)."""
+    lat, on_right = at
     nt = c_tab.shape[0]
-    ce = 0.0 if K.circle else (c_tab[nt - 1] if lat > 0 else c_tab[0]) * r
+    ce = 0.0 if K.circle else (c_tab[nt - 1] if on_right else c_tab[0]) * r
     rel_e = along - ce
     box = smoothstep(-st.motion.ds - ramp, -st.motion.ds + ramp, rel_e) * smoothstep(
         ramp, -ramp, rel_e
@@ -3742,10 +3787,11 @@ def _into_bead(ridges, moved, lat, s_step):
     for y in range(hh):
         for x in range(ww):
             s = s_step[y, x]
-            side = right if lat[y, x] > 0 else left
+            r = right_share(lat[y, x])
             for c in range(PACKED):
                 m = moved[y, x, c]
-                side[c] += s * m
+                right[c] += r * (s * m)
+                left[c] += (1.0 - r) * (s * m)
                 ring[c] += m - s * m
 
 
@@ -3852,10 +3898,11 @@ def _to_sides_or_ahead(cv, pend, st, K, ridges, moved, lat, s_side):
     for y in range(win.ch):
         for x in range(win.cw):
             sh = s_side[y, x]
-            side = right if lat[y, x] > 0 else left
+            r = right_share(lat[y, x])
             for c in range(PACKED):
                 m = moved[y, x, c]
-                side[c] += sh * m
+                right[c] += r * (sh * m)
+                left[c] += (1.0 - r) * (sh * m)
                 moved[y, x, c] = (1.0 - sh) * m
             ahead = ahead or sh < 1.0
     if ahead:
@@ -3891,10 +3938,12 @@ def _to_sides(ridges, moved, lat, to_side, more):
     hh, ww = lat.shape
     for y in range(hh):
         for x in range(ww):
-            side = right if lat[y, x] > 0 else left
+            r = right_share(lat[y, x])
             s = min(max(to_side + more[y, x], 0.0), 1.0)
             for c in range(PACKED):
-                side[c] += s * moved[y, x, c]
+                m = s * moved[y, x, c]
+                right[c] += r * m
+                left[c] += (1.0 - r) * m
                 moved[y, x, c] *= 1.0 - s
 
 
@@ -5888,8 +5937,10 @@ def pull_up(top, fac, sigma):
     component times the volume moved; every channel is kept to that and to
     single-precision rounding.
 
-    A pixel with no paint (volume 0) neither gives nor takes, whatever its
-    factor. If no pixel would rise, or none fall, nothing changes; if the
+    A pixel with no paint (EMPTY or less: a speck of dust, which a lift
+    left at 0 or a hair above as rounding fell, and which, giving or taking
+    its 1e-30, changed how the rest moved) neither gives nor takes, whatever
+    its factor. If no pixel would rise, or none fall, nothing changes; if the
     factors don't keep the volume, every channel is still kept, but those
     that rise take in what the others give, not what they asked for."""
     y0, y1, x0, x1 = _changing(fac)
@@ -5946,7 +5997,7 @@ def _falls_and_rises(top, fac):
         for x in range(w):
             v = np.float64(top[y, x, IV])
             f = fac[y, x]
-            if v > 0.0:
+            if v > EMPTY:
                 if f < 1.0 - PULL_STILL:
                     loss[y, x] = v * (1.0 - f)
                 elif f > 1.0 + PULL_STILL:

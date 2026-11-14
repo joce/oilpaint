@@ -803,8 +803,12 @@ def _press_out(run: _Run, st, taps, lat, along_px, d_end) -> None:
         max(st.hold.r * st.hold.lmax, 1e-6),
         _KNIFE_END_OUT,
     )
-    for side, w in ((-1.0, wl), (1.0, wr)):
-        src = np.where(np.sign(lat) == side, d_end, 0.0)
+    # (each side's share of each pixel's paint, as splat_out shares it: a
+    # pixel centred on the axis, which a blade narrower than its ends' bead
+    # presses out at too, half each; it went to neither)
+    right = np.where(lat > eng.ROUND_PX, 1.0, np.where(lat < -eng.ROUND_PX, 0.0, 0.5))
+    for share, w in ((1.0 - right, wl), (right, wr)):
+        src = share * d_end
         if not src.max() > 1e-9:
             continue
         pk = eng.take_tips(run.brush.tip, taps, src)

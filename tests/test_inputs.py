@@ -871,6 +871,28 @@ def test_footprint_tables_reach_the_outermost_points_of_the_outline():
                 assert lo - 1e-6 <= al[i] <= hi + 1e-6, (shape, aspect, phi, end)
 
 
+@pytest.mark.parametrize("short, reached", [(5e-10, True), (1e-6, False)])
+def test_a_footprint_table_reaches_a_point_short_of_its_last_line_only_by_rounding(
+    monkeypatch, short, reached
+):
+    # The last line of the table runs at the outline's widest; a corner of
+    # the outline short of it by rounding (crossings of a short segment come
+    # out up to 7e-10 of it past its end) is on it, one short of it by a
+    # millionth of the width is not.
+    from oilpaint import _geometry as geo
+
+    u = np.array([-1.0, 0.0, 1.0 - short, 0.0])
+    v = np.array([0.0, -0.5, 0.3, 0.5])
+    monkeypatch.setattr(geo, "_outline", lambda shape, aspect: (u, v))
+    geo._chord_table_at.cache_clear()
+    try:
+        _, c, h, _, _ = geo._chord_table_at("test", 1.0, 0.0)
+    finally:
+        geo._chord_table_at.cache_clear()
+    assert (abs(c[-1] - 0.3) < 1e-6 and h[-1] < 1e-6) == reached
+    assert reached or (c[-1] == 0.0 and h[-1] == 0.0)
+
+
 # --------------------------------------------------------------------------
 # brush types and brushes
 

@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-from ._engine import whole_ceil, whole_floor
+from ._engine import WHOLE_SLACK, whole_ceil, whole_floor
 
 #: A value along a stroke: a number, a sequence, or a function of u in 0..1
 #: (called with the array of all u, or with one u at a time if that fails).
@@ -105,7 +105,10 @@ class CatmullRom(Path):
         # all segments at once: segment i runs from P[i + 1] to P[i + 2]
         p0, p1, p2, p3 = P[:-3], P[1:-2], P[2:-1], P[3:]
         # samples per segment
-        m = np.maximum(8, (np.linalg.norm(p2 - p1, axis=1) / 2).astype(int) + 1)
+        # (a segment a whole even number of px long counts as that, whatever
+        # rounding left of it: see _engine.WHOLE_SLACK)
+        half = np.linalg.norm(p2 - p1, axis=1) / 2
+        m = np.maximum(8, np.floor(half + WHOLE_SLACK).astype(int) + 1)
         seg = np.repeat(np.arange(len(m)), m)
         # 0..1 within each
         t = (np.arange(m.sum()) - np.repeat(np.cumsum(m) - m, m)) * (1.0 / m[seg])

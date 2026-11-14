@@ -499,3 +499,15 @@ def test_a_knife_at_whole_number_positions_rests_on_the_same_pixels():
         a, b = plain.top.astype(float), nudged.top.astype(float)
         assert np.abs(a - b).max() <= 1e-5 * np.abs(a).max(), k
         np.testing.assert_array_equal(plain.top_id, nudged.top_id)
+
+
+def test_paint_shoved_with_a_trace_of_the_film_in_it_joins_the_film():
+    # Shoved paint holding a trace of the film (here a thousandth of it,
+    # 1.4e-4 apart from the paint below in likeness, well clear of rounding)
+    # is more like the film than the paint below is: it joins the film.
+    top = np.zeros((1, 1, PACKED), np.float32)
+    und = np.zeros((1, 1, PACKED), np.float32)
+    top[0, 0] = _pack(Paint.mix((P.YELLOW_OCHRE, 4), (P.BURNT_UMBER, 1)), 0.2)
+    und[0, 0] = _pack(P.YELLOW_OCHRE, 2.0)
+    pk = und[0, 0].astype(np.float64) * 0.37 + top[0, 0].astype(np.float64) * 1e-3
+    assert eng._join_top_if_alike(top.copy(), und, pk, 0, 0)

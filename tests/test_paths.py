@@ -37,3 +37,19 @@ def test_a_length_a_whole_number_of_steps_long_is_cut_the_same_whatever_its_last
             for x1 in (90.0, np.nextafter(90.0, 100.0), np.nextafter(90.0, 0.0))
         }
         assert counts == {11}
+
+
+def test_a_bezier_with_a_whole_even_control_polygon_is_cut_the_same_either_way():
+    # Its control polygon is 90 px long, half of it 45 in exact arithmetic
+    # and a hair either side of 45 after rounding (the end moved by an ulp):
+    # it was cut into 45 + 1 pieces or 44 + 1.
+    counts = {
+        len(Bezier([(0.0, 0.0), (30.0, 0.0), (60.0, 0.0), (x3, 0.0)]).sample(1.0)[0])
+        for x3 in (90.0, np.nextafter(90.0, 100.0), np.nextafter(90.0, 0.0))
+    }
+    assert len(counts) == 1
+    dense = {
+        len(Bezier([(0.0, 0.0), (30.0, 0.0), (60.0, 0.0), (x3, 0.0)])._dense()[0])
+        for x3 in (90.0, np.nextafter(90.0, 100.0), np.nextafter(90.0, 0.0))
+    }
+    assert dense == {47}  # (45 + 1 samples, and the end)

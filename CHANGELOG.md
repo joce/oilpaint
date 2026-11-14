@@ -52,20 +52,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Where rounding used to decide (see Fixed), the outcome is now the one
   exact arithmetic gives, so pictures with such marks differ in their
   texture from before, as a different throw of the dice: strokes whose
-  length is a whole number of steps, multi-paint dabs at the default
-  pressure, brushes turned by 90 degrees, knives at whole-number positions
-  and pressure 0.3, and footprints at some angles. All example images are
-  regenerated. In particular:
-  - a quarter turn is a quarter turn: `angle=90` (and 450, ...) draws as
-    it did here, but `-90` (and 270, 630, ...) is now always its mirror
-    image, the brush's left side (paint loaded `across="left"`, its hair)
-    on the other side; before, `-90` drew as `90` and 270 as its mirror,
-    as the radians happened to round;
-  - a dab tapped a little more lightly than the default pressure (0.42 to
-    0.5, with no glob of paint on it) fades its bristle tips in: the paint
-    between them goes from all of it at 0.5 to none below 0.42, smoothly,
-    where it dropped to half at once just below 0.5; at 0.5 and above, and
-    below 0.42, dabs are as they were;
+  length is a whole number of steps, curves with a segment a whole even
+  number of pixels long, strokes along a half-pixel or 45-degree axis,
+  multi-paint dabs at the default pressure, brushes turned by 90 degrees,
+  knives at whole-number positions and pressure 0.3, and footprints at some
+  angles. All example images are regenerated. In particular:
+  - a brush's sides are swapped when it is turned from the stroke's cross
+    direction by more than 90 and at most 270 degrees; only a brush turned
+    exactly edge-on (90 or 270) can come out otherwise. With `follow_path=True`,
+    `angle=90`, 270, 450 and 630 draw as before, `-90` now draws as 270
+    and `-270` as 90 (they drew as 90 and as 270); with `follow_path=False`,
+    `angle=0` on a level stroke drawn left to right and `angle=90` on an
+    upright one drawn downwards (the brush's long side along the stroke)
+    now have their sides swapped: the paint loaded `across="left"` and the
+    hair on the other side;
+  - a pixel centred on the stroke's axis sends half its paint to each side
+    ridge (it sent all of it to one);
+  - a dab tapped a little more lightly than the default pressure fades its
+    bristle tips in: for a brush with no glob of paint on it (a glob moves
+    the band lower), the paint between them goes from all of it at 0.5 to
+    none below 0.42, smoothly, where it dropped to half at once just below
+    0.5; at 0.5 and above, and below 0.42, dabs are as they were;
   - a dab's pattern of tips is kept by its width to the nearest pixel, a
     width of exactly half a pixel more rounding up (it rounded to even);
   - a knife going back over its own slab spreads it over more of each pixel
@@ -349,29 +356,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- The same strokes paint the same canvas on another machine, to rounding:
-  a last-bit difference in an input or in the math library (another CPU, a
-  numpy built otherwise) no longer changes what a stroke paints by more than
-  its last bits. It used to switch whole marks or pixels at their edges,
-  wherever a value the engine decided on fell exactly on the line it was
-  decided by in exact arithmetic and a hair either side of it after
-  rounding: a stroke whose length is a whole number of its steps (80 px in
-  steps of 8) was cut into one step more or fewer, and drew its textures
-  from other random numbers; a dab of two paints at the default pressure 0.5
-  printed the gaps between its bristle tips half or fully; a brush turned
-  by exactly 90 degrees (`angle=90`, 270, ...) had its sides, the paints
-  loaded across it and its hair, mirrored or not; about one footprint in
-  ten, at some angles, lost the chord through its outermost point; a knife
-  at whole-number positions found pixels half under its edge, or the end of
-  its stroke, on either side; a knife at pressure 0.3 spread its slab over
-  more of a pixel or not as its bead laid 0 or 1e-31 of paint; paint a knife
-  shoved along onto its own kind joined the film over it or covered it; and
-  a tool lifted off its paint moved it as one paint or pigment by pigment
-  as untouched pixels' factors came out 1 or a hair from it. Over the bench
-  scenes and a battery of single marks, with every input moved by an ulp or
-  every transcendental function's result by an ulp, no pixel now changes
-  but by rounding (the largest difference left, 3e-4 of a thin value, is a
-  knife's slab in a thin gap: continuous, not a switch).
+- A last-bit difference in a stroke's inputs or in the math library
+  (another machine) no longer switches a discrete outcome at the places
+  found, where a value fell exactly on the line it was decided by in exact
+  arithmetic and a hair either side of it after rounding:
+  - how many steps a path is cut into, and how many random numbers its
+    textures draw, when a length is a whole number of steps (80 px in steps
+    of 8), and how finely a Catmull-Rom or Bezier path is traced when a
+    segment is a whole even number of pixels long;
+  - whether a dab of two paints at the default pressure 0.5 printed the
+    gaps between its bristle tips, and which cell of a dab's pattern of
+    tips a pixel centred on its axis (at half-pixel positions) reads;
+  - which side of a brush turned by exactly 90 degrees was its left;
+  - whether a footprint's table reached its outermost point (about one in
+    ten, at some angles);
+  - which ridge takes the paint of a pixel centred on the stroke's axis (at
+    half-pixel positions, and at 45 degrees between whole-number points);
+  - for a knife at whole-number positions, which pixels lie half under its
+    edge and whether paint it presses out lies past the end of its stroke;
+  - whether a knife at pressure 0.3 spreads its slab, as its bead laid 0 or
+    1e-31 of paint;
+  - whether paint a knife shoves onto its own kind joins the film over it;
+  - how a tool lifted off moves its paint (as one paint or pigment by
+    pigment, and among which pixels), as untouched pixels came out at a
+    factor of 1 or a hair from it, or a speck of dust at 0 or 1e-30.
+
+  Other such places may remain.
 
 - How wide the ridges a brush pushes out at its sides may be now grows with
   the brush at every width; it stopped growing at 7 px, so that a wide brush

@@ -772,7 +772,8 @@ def test_a_ridge_s_cover_reaches_its_paint_by_the_footprint_s_width(w, angle):
 
     def cover(e):
         lat = half - inset + e
-        return eng._side_weight(K, st, lat, along, r, wd, ramp, inset, c_tab, run.tex2)[
+        at = (lat, True)  # (on the right)
+        return eng._side_weight(K, st, at, along, r, wd, ramp, inset, c_tab, run.tex2)[
             1
         ]
 

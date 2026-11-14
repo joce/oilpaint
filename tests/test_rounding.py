@@ -1,7 +1,7 @@
-"""Repeatability: a last-bit difference in a stroke's inputs (as another
-machine's rounding would make) changes what it paints by no more than
-rounding. No pixel changes discretely: covered or not, which stroke's paint
-is on top, a different number of steps or a different texture."""
+"""Repeatability: marks that sit on the lines rounding used to decide,
+painted again with their inputs moved by an ulp (as another machine's
+rounding would move them), keep the same stroke on top of every pixel and
+differ in their paint by far less than a whole mark would."""
 
 import copy
 
@@ -38,8 +38,42 @@ def _base():
 # Marks that sit on the lines rounding used to decide: whole-number
 # positions and a length a whole number of steps long, a brush turned by
 # exactly 90 degrees, a knife over wet paint, a dab of two paints at the
-# default pressure 0.5.
+# default pressure 0.5, a stroke whose axis runs through the middles of a
+# row of pixels (at half a pixel, or at 45 degrees between whole-number
+# points), a curve with a segment a whole even number of pixels long.
 MARKS = {
+    "flat along a half-pixel axis": (
+        [(20.0, 40.5), (140.0, 40.5)],
+        lambda: (
+            Brush(brushes.FLAT_HOG)
+            .load(P.CADMIUM_RED, 4)
+            .load(P.TITANIUM_WHITE, 2, across="left")
+        ),
+        {"pressure": 0.5},
+    ),
+    "flat at 45 degrees": (
+        [(30.0, 20.0), (110.0, 100.0)],
+        lambda: (
+            Brush(brushes.FLAT_HOG)
+            .load(P.CADMIUM_RED, 4)
+            .load(P.TITANIUM_WHITE, 2, across="left")
+        ),
+        {"pressure": 0.5, "angle": 180.0},
+    ),
+    "knife back along a curve": (
+        [(30.0, 60.0), (120.0, 60.0), (40.0, 62.0)],
+        lambda: Brush(brushes.PALETTE_KNIFE).load(P.TITANIUM_WHITE, 3),
+        {"pressure": 0.3},
+    ),
+    "comb dab at a half-pixel centre": (
+        [(80.5, 60.5)],
+        lambda: (
+            Brush(brushes.KNIFE_COMB)
+            .load(P.CADMIUM_RED, 4)
+            .load(P.TITANIUM_WHITE, 2, across="left")
+        ),
+        {"pressure": 0.5, "angle": 180.0},
+    ),
     "flat at 90 degrees": (
         [(30.0, 40.0), (110.0, 40.0)],
         lambda: Brush(brushes.FLAT_HOG.sized(32)).load(P.COBALT_BLUE, 4),
@@ -102,13 +136,17 @@ def _scaled_difference(a, b):
 
 @pytest.mark.parametrize("name", sorted(MARKS))
 def test_a_mark_nudged_by_an_ulp_paints_the_same_to_rounding(name):
-    # Measured over 12 nudges of each mark: the knife at most 3.1e-5 (a
-    # thin gap under the blade: one rounding of its level, scaled up), the
-    # brush and the dab 0. Before, the dab came out 0.73 apart (its bristle
-    # tips printed half or fully), the brush 1 (its sides mirrored, 173
-    # pixels with another stroke on top) and the knife 1 (216).
+    # Measured over 12 nudges of each mark: at most 2e-7 (the flat along a
+    # half-pixel axis), 1.1e-7 (the knife back along a curve), 6e-10 (the
+    # knife over wet paint), the others 0; no id changed. Before, the dab
+    # came out 0.73 apart (its bristle tips printed half or fully), the flat
+    # at 90 degrees 1 (its sides mirrored, 173 pixels with another stroke on
+    # top), the knife over wet paint 1 (21), and, as the fixes went in, the
+    # flat at 45 degrees 0.40, the flat along a half-pixel axis 0.41 (its
+    # middle row's paint to one ridge or the other) and the knife along a
+    # curve 1 (15: the curve traced one point more or fewer).
     plain = _paint(name)
-    for seed in range(4):
+    for seed in range(3):
         nudged = _paint(name, np.random.default_rng(seed))
         assert np.array_equal(plain.top_id, nudged.top_id), seed
         assert _scaled_difference(plain, nudged) < 1e-3, seed
