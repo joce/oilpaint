@@ -512,6 +512,15 @@ def _near_row(src, r, out):
         out[x] = 1 if last >= x - r else 0
 
 
+@njit(cache=True, error_model="numpy", nogil=True)
+def _tally(row, count, sign):
+    """``count`` += ``sign`` times ``row`` (one row of whether an own
+    highlight lies near), column by column: a running count of the rows
+    with one, as rows come within reach of the row being lit and leave."""
+    for x in range(count.shape[0]):
+        count[x] += sign * row[x]
+
+
 #: Weights of the 5 x 5 pixels whose curvature tells a crest (_crest).
 BINOMIAL = (1 / 16, 4 / 16, 6 / 16, 4 / 16, 1 / 16)
 #: A gathering shorter than this (pixels) is no gathering: the pixel keeps
@@ -553,9 +562,33 @@ def _crest(sig, R, H, W, x, y, gate):
 
     Not within EDGE pixels of the canvas's border, where the stencils run
     off the canvas (clamped, they read a slope as a curvature) and the
-    gathering would. And a crest only about one pixel wide at a shallow
-    slant reads too little anisotropy (sigma 0.4 at 22.5 degrees: 0.44) and
-    is not gathered: it still beads."""
+    gathering would.
+
+    The heights a canvas is lit by are smoothed [1, 2, 1] each way
+    (Canvas.surface_height), so a crest is never much under a pixel wide
+    there: a ridge 1 px high of Gaussian sigma 0.4 px or wider, so
+    smoothed, reads as a crest at any slant (anisotropy 0.69 or more,
+    share 0.8 or more on its lit pixels). Two kinds still dash at a
+    shallow slant (beading, the glint summed across the crest, standard
+    deviation over mean along it, as in tests/test_render.py):
+
+    * Narrower, a line of paint a pixel wide, whose height swells and fades
+      along it as it crosses the rows: that reads as curvature along it
+      too. At sigma 0.3 the gate is shut at 11 degrees from the rows or
+      columns (anisotropy 0.41) and half open at 2 and 5 (share 0.5 to
+      0.7): beading 0.62, 0.71, 0.39 (0.06 or less from 22.5 degrees). A
+      longer view (the curvature averaged further along the crest, or over
+      9 x 9 pixels) opens it, but opens the canvas weave, dabs, stipple and
+      spatter as well.
+    * Lower: the curvature part of the gate opens only half way on a crest
+      under about 0.3 px high once smoothed (a ridge of paint of sigma 0.4
+      and 1.7 units: share 0.4; sigma 0.6 and 2.5 units: 0.55), and the
+      gathering reaches as far less (beading 0.6 to 1.1 at sigma 0.4, 0.15
+      to 0.21 at 0.6, at 2 to 11 degrees).
+
+    Heights not smoothed so (set directly, as tests do) of a crest under
+    about 0.5 px are worse: sigma 0.4 at 22.5 degrees reads anisotropy
+    0.43 and is not gathered."""
     if x < EDGE or y < EDGE or x >= W - EDGE or y >= H - EDGE:
         return 1.0, 0.0, 0.0
     a0, a1, k0, k1 = gate
@@ -588,6 +621,57 @@ def _crest(sig, R, H, W, x, y, gate):
 
 
 @njit(cache=True, error_model="numpy", nogil=True)
+def _runs_on(sig, R, H, W, x, y, tx, ty, span, gate, run_on):
+    """0..1: how far the crest through pixel (x, y), direction (tx, ty),
+    runs on, a crest in the same direction, ``span`` pixels away both ways:
+    at each end (the nearest pixel), _crest's share there times a
+    smoothstep of how near its direction is to (tx, ty) (``run_on``: the
+    squared cosine of the angle between them from, to); the less of the two
+    ends. 0 where the crest ends, bends, or curls round (a dab's rim)
+    within the span, and near the border (_crest)."""
+    least = 1.0
+    for e in (-1.0, 1.0):
+        xe = min(max(int(math.floor(x + e * span * tx + 0.5)), 0), W - 1)
+        ye = min(max(int(math.floor(y + e * span * ty + 0.5)), 0), H - 1)
+        ux, uy, se = _crest(sig, R, H, W, xe, ye, gate)
+        c = tx * ux + ty * uy
+        least = min(least, se * _smoothstep(run_on[0], run_on[1], c * c))
+    return least
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _step(tx, ty, span_top):
+    """The step of the pixel staircase along a crest in direction (tx, ty)
+    (pixels): 1 / sin of its slant from the rows or the columns, up to
+    ``span_top``; beyond it (slants nearer the rows or columns than
+    1 / span_top radians), where the staircase drifts so slowly along the
+    crest that it hardly beads, falling back smoothly as span_top^2 times
+    that sine, to 0 for a crest along the rows or columns."""
+    st = min(abs(tx), abs(ty))
+    if st * span_top >= 1.0:
+        return 1.0 / st
+    return span_top * span_top * st
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
+def _reach(sig, R, H, W, x, y, tx, ty, share, span, span_top, gate, run_on):
+    """How far each way along a crest (direction (tx, ty), _crest's
+    ``share``) the highlight of pixel (x, y) is gathered: ``span`` times
+    the share; and where one step of the staircase along the crest (_step)
+    is longer, on towards it, as far as the crest runs on (_runs_on), so
+    that the gathering averages every phase of the staircase."""
+    reach = span * share
+    step = _step(tx, ty, span_top)
+    if step > span and share > 0.0:
+        reach += (
+            (step - span)
+            * share
+            * _runs_on(sig, R, H, W, x, y, tx, ty, step, gate, run_on)
+        )
+    return reach
+
+
+@njit(cache=True, error_model="numpy", nogil=True)
 def _tap(lob, R, H, W, fx, fy, tx, ty):
     """The own highlight (``lob``, row number masked with ``R``) at the point (fx, fy)
     of a line along a crest (direction (tx, ty)): interpolated along the
@@ -613,7 +697,8 @@ def _gather(lob, R, H, W, x, y, tx, ty, reach, taps):
     highlights (_tap) at ``taps`` points each side along (tx, ty) up to
     ``reach`` pixels away, tent-weighted, so that a glint on a crest that
     runs slantwise across the pixels is a line rather than beads at each
-    step. The centre point is the pixel itself."""
+    step (a tent as long each way as the step averages every phase of
+    it). The centre point is the pixel itself."""
     total = 0.0
     weights = 0.0
     for k in range(-taps, taps + 1):
@@ -657,7 +742,9 @@ def shade(
     dry1,
     gloss_span,
     gloss_taps,
+    gloss_span_max,
     crest_gate,
+    run_on,
     out,
 ):
     """Light the height field ``h`` (pixels) and the linear colour ``lin``
@@ -675,15 +762,23 @@ def shade(
 
     Each pixel's own mirror image of the lamp (_mirror) is gathered along a
     narrow crest (_crest, ``crest_gate``) over ``gloss_span`` pixels each
-    way (_gather, ``gloss_taps`` points each side); then the pixel's own
-    film (``cover``), the share of the lamp it sees and its mattness apply.
-    Rows are worked out a few ahead of the one being lit and kept in
-    buffers of a few rows (float64, and uint8 for whether an own highlight
-    lies near): no map the size of the canvas. Exact: with ``gloss_span``
-    0 or the gate shut, the highlight is each pixel's own; flat paint, paint
-    gently modelled (beyond the cut-off), ``gloss`` 0 and pixels with no own
-    highlight within ``ceil(gloss_span) + 1`` pixels are as they would be
-    without gathering."""
+    way, and at a shallow slant on over one step of the pixel staircase, up
+    to ``gloss_span_max``, as far as the crest runs on (_reach, _runs_on,
+    ``run_on``), with ``gloss_taps`` points each side over ``gloss_span``
+    and as many more, a pixel or less apart, beyond it (_gather); then the
+    pixel's own film (``cover``), the share of the lamp it sees and its
+    mattness apply. Rows are worked out a few ahead of the one being lit
+    and kept in buffers of a few rows (float64, and uint8 for whether an
+    own highlight lies near, with a running count per column of the rows
+    within reach that have one): no map the size of the canvas. Exact: with
+    ``gloss_span`` 0 or the gate shut, the highlight is each pixel's own;
+    with ``gloss_span_max`` no more than ``gloss_span``, or on a crest
+    whose staircase step is no longer (along the rows or columns, or 30
+    degrees or more from them, for ``gloss_span`` 2), it is gathered over
+    ``gloss_span`` alone; flat paint, paint gently modelled (beyond the
+    cut-off), ``gloss`` 0 and pixels with no own highlight within
+    ``ceil(max(gloss_span, gloss_span_max)) + 1`` pixels are as they would
+    be without gathering."""
     H, W = h.shape
     # the half vector between the lamp and the viewer (straight in front)
     hx, hy, hz = lx3, ly3, lz3 + 1.0
@@ -708,10 +803,13 @@ def shade(
     has_matte = matte.shape[0] > 0
     has_gloss = gloss_wet > 0.0 or gloss_dry > 0.0
     gather = has_gloss and gloss_span > NO_REACH and gloss_taps > 0
+    # the furthest a highlight is gathered
+    span_top = max(gloss_span, gloss_span_max)
     # rows ahead of the one being lit that the gathering reads (a tap up to
-    # the span away, and the next pixel interpolated with it), and the rows
-    # kept: as many behind
-    lag = int(math.ceil(gloss_span)) + 1 if gather else 0
+    # span_top away and the next pixel interpolated with it; _runs_on's
+    # _crest, 2 rows round a point up to span_top away, rounded to the
+    # nearest row), and the rows kept: as many behind
+    lag = int(math.ceil(span_top)) + 3 if gather else 0
     # rows are kept in buffers of a power of two rows, R + 1, indexed by the
     # row number masked with R
     R = 1
@@ -723,7 +821,12 @@ def shade(
     sig = np.zeros((3, W))  # H H^T of each pixel's curvature, this row
     row_sig = np.zeros((R + 1, 3, W))  # the same blurred along the rows
     near = np.zeros((R + 1, W), np.uint8)  # an own highlight within lag in the row
+    # how many of the rows within lag of the one being lit have one (a
+    # running count: what is gathered reads only within that lag-square)
+    nearby = np.zeros(W, np.int64)
     for yy in range(H + lag):
+        if gather and yy > 2 * lag:  # a row leaves the lag-square
+            _tally(near[(yy - 2 * lag - 1) & R], nearby, -1)
         if yy < H:
             y = yy
             r = y & R
@@ -774,6 +877,7 @@ def shade(
                     recv[r, x] = f
             if gather:
                 _near_row(lob[r], lag, near[r])
+                _tally(near[r], nearby, 1)
                 _blur_row(sig, row_sig[r])
         y = yy - lag
         if y < 0:
@@ -784,18 +888,20 @@ def shade(
             f = recv[r, x]
             if f > 0.0:
                 own = lob[r, x]
-                if gather:
-                    # any own highlight within reach (a lag-square)?
-                    found = False
-                    for j in range(max(y - lag, 0), min(y + lag, H - 1) + 1):
-                        if near[j & R, x]:
-                            found = True
-                            break
-                    if found:
-                        tx, ty, share = _crest(row_sig, R, H, W, x, y, crest_gate)
-                        reach = gloss_span * share
-                        if reach > NO_REACH:
-                            own = _gather(lob, R, H, W, x, y, tx, ty, reach, gloss_taps)
+                # any own highlight within reach (a lag-square)?
+                if gather and nearby[x] > 0:
+                    tx, ty, share = _crest(row_sig, R, H, W, x, y, crest_gate)
+                    reach = _reach(
+                        row_sig, R, H, W, x, y, tx, ty, share,
+                        gloss_span, span_top, crest_gate, run_on,
+                    )  # fmt: skip
+                    if reach > NO_REACH:
+                        # taps no further apart than over gloss_span
+                        taps = max(
+                            gloss_taps,
+                            int(math.ceil(reach * gloss_taps / gloss_span)),
+                        )
+                        own = _gather(lob, R, H, W, x, y, tx, ty, reach, taps)
                 spec = f * own
 
             # colour: the lights roll off to white rather than clip

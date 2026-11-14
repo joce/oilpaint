@@ -49,6 +49,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Glints along ridges, furrows and lips that run at a shallow angle to the
+  rows or columns of pixels are lines where they were dashes. A crest a
+  pixel or two wide shines several times as bright where it runs along a
+  row of pixels as where it runs between two, so at a shallow slant its
+  glint swelled and faded a staircase step apart (11 px at 5 degrees),
+  further than the highlight was gathered along it (2 px). It is now
+  gathered over that step, up to 16 px (`GLOSS_SPAN_MAX`), where the crest
+  runs on straight both ways (`RUN_ON`). How much the glint, summed across
+  a ridge 1 px high, swells and fades along it (standard deviation over
+  mean), at 2, 5 and 11 degrees: 0.20, 0.18, 0.11 before and 0.11, 0.05,
+  0.02 now for a ridge of sigma 0.4 px; 0.06, 0.05, 0.03 and 0.04, 0.01,
+  0.01 for sigma 1. Crests along the rows or columns, or more than 30
+  degrees from them, light exactly as before; domes, round dabs, stipple
+  and the canvas weave within a level (and spatter but for a pixel or two
+  of a drop's edge); rendering takes no longer. Still dashing: a line of paint about a pixel wide (sigma 0.3:
+  0.62, 0.71, 0.39) and low crests, under about 0.3 px high, which are
+  gathered less far.
+
 - The Bob Ross example paints its clouds the way he did. Titanium white is
   scrubbed straight onto the wet sky with little circles, along the top of
   each billow first and then down into the body; a clean, dry brush blends

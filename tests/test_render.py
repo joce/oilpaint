@@ -1,5 +1,6 @@
 """Rendering: the colour of the paint, and the light on its relief."""
 
+from itertools import starmap
 from typing import Any
 
 import numpy as np
@@ -780,6 +781,412 @@ def test_the_highlight_is_its_own_averaged_along_the_crest(monkeypatch):
     sel = inner & facing
     assert own_spec.max() > 0.05 and (want != own_spec)[sel].mean() > 0.05
     assert np.abs(unroll(got) - want)[sel].max() < 1e-5 * own_spec.max()
+
+
+# --------------------------------------------------------------------------
+# crests at a shallow slant: gathered over a whole step of the staircase
+
+
+def _lamp(angle):
+    """The default lamp (1 to the side, 1.1 up) turned to face across a
+    crest running at ``angle`` degrees."""
+    a = np.radians(angle)
+    light = np.array([np.sin(a), -np.cos(a), 1.1])
+    return light / np.linalg.norm(light)
+
+
+def _mirrors(angle):
+    """A slant, its mirror image about the diagonal and both in sign."""
+    return (angle, 90.0 - angle, -angle, angle - 90.0)
+
+
+def _across(n, angle):
+    """Distance (px) across a line through the middle of an n x n canvas at
+    ``angle`` degrees (a little off the pixel centres), and its direction."""
+    a = np.radians(angle)
+    tx, ty = np.cos(a), np.sin(a)
+    yy, xx = np.mgrid[0:n, 0:n] - n / 2 + 0.5
+    return -xx * ty + yy * tx + 0.137, (tx, ty)
+
+
+def _painted_ridge(sigma, angle, n=96):
+    """A ridge of wet paint, Gaussian ``sigma`` px across, at ``angle``
+    degrees: lit through Canvas.surface_height, as painted paint is."""
+    from oilpaint.canvas import HEIGHT_PX
+
+    across, direction = _across(n, angle)
+    top = max(1.0, 1.5 * sigma) / HEIGHT_PX
+    volume = 4.0 + top * np.exp(-0.5 * (across / sigma) ** 2)
+    c = Canvas(n, n, surface=surfaces.GLASS.with_(transparent=False))
+    return _layer(c, Paint("#3060a0"), volume.astype(np.float32)), direction
+
+
+def _on_glass(h):
+    """Wet paint on a smooth support, lit by the height field ``h`` (px)."""
+    c = _layer(
+        Canvas(h.shape[1], h.shape[0], surface=surfaces.GLASS.with_(transparent=False)),
+        Paint("#3060a0"),
+        4.0,
+    )
+    hh = np.ascontiguousarray(h, dtype=np.float32)
+    c.surface_height = lambda relief=1.0: hh  # type: ignore[method-assign]
+    return c
+
+
+def _beading(S, direction):
+    """How the glint (``S``, levels) along a straight crest through the
+    middle of the canvas, in ``direction``, swells and fades along it: P(s)
+    is ``S`` summed across the crest (bilinear, every 1/8 px over 4 px each
+    way) at every 1/4 px s along it over the middle half of the canvas, and
+    the beading is the standard deviation of P over its mean (0 for an even
+    line; an evenly lit line drawn anti-aliased reads at most 0.013)."""
+    n = S.shape[0]
+    tx, ty = direction
+    s = np.arange(-n / 4, n / 4, 0.25)[:, None]
+    u = np.arange(-4.0, 4.001, 0.125)[None, :]
+    P = _bilinear(S, n / 2 - 0.5 + s * tx - u * ty, n / 2 - 0.5 + s * ty + u * tx)
+    P = P.sum(1) * 0.125
+    assert P.mean() > 0.5  # there is a glint
+    return P.std() / P.mean()
+
+
+def test_a_glint_along_a_shallow_crest_is_a_line_not_dashes():
+    # A crest a pixel or two wide shines several times as bright where it
+    # runs along a row of pixels as where it runs between two; at a shallow
+    # slant it crosses the rows a long step apart, and gathered over
+    # GLOSS_SPAN alone its glint is a string of dashes. Worst of the four
+    # mirror images, against what each pixel's highlight gathered over
+    # GLOSS_SPAN alone gives (at 2, 5, 11 degrees): sigma 0.4: 1.09, 0.89,
+    # 0.72; 0.6: 0.29, 0.24, 0.19; 1.0: 0.072, 0.056, 0.026; 2.0: 0.068,
+    # 0.057, 0.025. (A ridge of paint of sigma 0.4 is low once the canvas
+    # has smoothed it, so the gate opens only half way: it still dashes.)
+    bounds = {
+        0.4: (1.08, 0.83, 0.66),
+        0.6: (0.24, 0.21, 0.17),
+        1.0: (0.065, 0.045, 0.03),
+        2.0: (0.06, 0.03, 0.02),
+    }
+    for sigma, row in bounds.items():
+        for angle, bound in zip((2.0, 5.0, 11.0), row, strict=True):
+            worst = 0.0
+            for a in _mirrors(angle):
+                c, direction = _painted_ridge(sigma, a)
+                worst = max(worst, _beading(_highlight(c, _lamp(a)), direction))
+            assert worst <= bound, (sigma, angle, worst)
+
+
+def _long_reach_off(m):
+    from oilpaint import canvas as cm
+
+    m.setattr(cm, "GLOSS_SPAN_MAX", cm.GLOSS_SPAN)
+
+
+def test_level_and_steep_crests_are_gathered_over_gloss_span_alone(monkeypatch):
+    # along the rows or columns, or more than 30 degrees from both, a step
+    # of the staircase is no longer than GLOSS_SPAN: exactly as before
+    for angle in (0, 35, 45, 55, 90):
+        c, light, _ = _furrowed_ridge(angle, 1, furrows=0.0)
+        got = c.render(light=tuple(light))
+        with monkeypatch.context() as m:
+            _long_reach_off(m)
+            assert np.array_equal(c.render(light=tuple(light)), got), angle
+    # (at a shallow slant, gathered further)
+    c, light, _ = _furrowed_ridge(5, 1, furrows=0.0)
+    got = c.render(light=tuple(light))
+    with monkeypatch.context() as m:
+        _long_reach_off(m)
+        assert np.abs(c.render(light=tuple(light)) - got).max() > 2 / 255
+
+
+def _crest_maps(h, gate):
+    """_crest written out plainly, at every pixel: the share and the
+    direction (tx, ty) of a crest (share 0 within 4 px of the border)."""
+    H, W = h.shape
+    yy, xx = np.mgrid[0:H, 0:W]
+    h = h.astype(np.float64)
+
+    def at(dy, dx):
+        return h[np.clip(yy + dy, 0, H - 1), np.clip(xx + dx, 0, W - 1)]
+
+    hxy = 0.25 * (at(1, 1) - at(1, -1) - at(-1, 1) + at(-1, -1))
+    wxx = 0.25 * (at(0, 2) - 2.0 * h + at(0, -2))
+    wyy = 0.25 * (at(2, 0) - 2.0 * h + at(-2, 0))
+    k = np.array([1, 4, 6, 4, 1]) / 16
+
+    def blur(a):
+        rows = np.zeros_like(a)
+        for i in range(5):
+            rows += k[i] * a[:, np.clip(np.arange(W) + i - 2, 0, W - 1)]
+        out = np.zeros_like(a)
+        for i in range(5):
+            out += k[i] * rows[np.clip(np.arange(H) + i - 2, 0, H - 1)]
+        return out
+
+    sxx, sxy = blur(wxx**2 + hxy**2), blur(hxy * (wxx + wyy))
+    syy = blur(wyy**2 + hxy**2)
+    d = np.sqrt((sxx - syy) ** 2 + 4 * sxy**2)
+    l1 = 0.5 * (sxx + syy + d)
+    c1, c2 = np.sqrt(l1), np.sqrt(np.maximum(0.5 * (sxx + syy - d), 0))
+    aniso = (c1 - c2) / np.where(c1 > 0, c1 + c2, 1)
+    share = _smooth(gate[0], gate[1], aniso) * _smooth(gate[2], gate[3], c1)
+    tx = np.where(sxx >= syy, -sxy, -(l1 - sxx))
+    ty = np.where(sxx >= syy, l1 - syy, sxy)
+    norm = np.hypot(tx, ty)
+    inside = (yy >= 4) & (yy < H - 4) & (xx >= 4) & (xx < W - 4)
+    share = np.where(inside & (c1 > 0) & (norm > 0), share, 0.0)
+    norm = np.where(norm > 0, norm, 1.0)
+    return share, tx / norm, ty / norm
+
+
+def _smooth(e0, e1, v):
+    u = np.clip((np.asarray(v) - e0) / (e1 - e0), 0, 1)
+    return u * u * (3 - 2 * u)
+
+
+def _reach_by_hand(h, span, span_max, gate, run_on_deg):
+    """The reach of every pixel as shade defines it: span times _crest's
+    share, and where one step of the staircase (1 / sin of the slant from
+    the rows or columns, up to span_max, span_max^2 sin beyond) is longer,
+    on towards it, times the share and the least, over the two ends a step
+    away, of the share there times how near its direction is (RUN_ON);
+    with the directions."""
+    share, tx, ty = _crest_maps(h, gate)
+    H, W = h.shape
+    top = max(span, span_max)
+    st = np.minimum(np.abs(tx), np.abs(ty))
+    step = np.where(st * top >= 1.0, 1.0 / np.maximum(st, 1e-300), top * top * st)
+    c0, c1 = (np.cos(np.radians(a)) ** 2 for a in run_on_deg)
+    runs = np.ones_like(share)
+    yy, xx = np.mgrid[0:H, 0:W]
+    for e in (-1.0, 1.0):
+        xe = np.clip(np.floor(xx + e * step * tx + 0.5), 0, W - 1).astype(int)
+        ye = np.clip(np.floor(yy + e * step * ty + 0.5), 0, H - 1).astype(int)
+        c = tx * tx[ye, xe] + ty * ty[ye, xe]
+        runs = np.minimum(runs, share[ye, xe] * _smooth(c0, c1, c * c))
+    longer = (step > span) & (share > 0)
+    extra = np.where(longer, (step - span) * share * runs, 0.0)
+    return span * share + extra, tx, ty
+
+
+def _gather_by_hand(own, reach, tx, ty, span, taps0):
+    """Each pixel's own highlight averaged along (tx, ty) over ``reach``,
+    tent-weighted, at taps a pixel or less apart (no fewer than ``taps0``
+    each side, as over ``span``), read along the nearest row (column)."""
+    H, W = own.shape
+    out = own.copy()
+    for y, x in zip(*np.nonzero(reach > 1e-3), strict=True):
+        r, ux, uy = reach[y, x], tx[y, x], ty[y, x]
+        taps = max(taps0, int(np.ceil(r * taps0 / span)))
+        total = weights = 0.0
+        for k in range(-taps, taps + 1):
+            w = 1.0 - abs(k) / (taps + 1.0)
+            fx = min(max(x + r * k / taps * ux, 0.0), W - 1.0)
+            fy = min(max(y + r * k / taps * uy, 0.0), H - 1.0)
+            if abs(ux) >= abs(uy):
+                j, i = min(int(fy + 0.5), H - 1), int(fx)
+                a = fx - i
+                v = (1 - a) * own[j, i] + a * own[j, min(i + 1, W - 1)]
+            else:
+                i, j = min(int(fx + 0.5), W - 1), int(fy)
+                a = fy - j
+                v = (1 - a) * own[j, i] + a * own[min(j + 1, H - 1), i]
+            total += w * v
+            weights += w
+        out[y, x] = total / weights
+    return out
+
+
+def test_at_a_shallow_slant_the_highlight_is_its_own_averaged_over_a_step(
+    monkeypatch,
+):
+    # the kernel against the definition, where the reach grows past
+    # GLOSS_SPAN: furrowed crests at 5 and 11 degrees under a high lamp
+    from oilpaint import _render
+    from oilpaint import canvas as cm
+
+    def unroll(v):  # the roll-off towards white, undone (black paint)
+        v = v[..., 0].astype(np.float64)
+        return v / np.sqrt(1 - v * v)
+
+    for angle, seed in ((5, 2), (11, 1), (-79, 3)):
+        c, _, _ = _furrowed_ridge(angle, seed, n=96)
+        a = np.radians(angle)
+        light = np.array([0.3 * np.sin(a), -0.3 * np.cos(a), 1.0])
+        light /= np.linalg.norm(light)
+        h = c.surface_height()
+        vis = np.empty_like(h)
+        lx, ly, lz = (float(v) for v in light)
+        _render.shadows(h, lx, ly, lz, cm.LIGHT_SIZE, cm.SHADOW_REACH, vis)
+        assert vis.min() == 1.0
+        got, own = _own_and_gathered(c, light, monkeypatch)
+        own_spec = unroll(own)
+        reach, tx, ty = _reach_by_hand(
+            h, cm.GLOSS_SPAN, cm.GLOSS_SPAN_MAX, cm.CREST_GATE, cm.RUN_ON
+        )
+        want = _gather_by_hand(own_spec, reach, tx, ty, cm.GLOSS_SPAN, cm.GLOSS_TAPS)
+        gy, gx = np.gradient(h.astype(np.float64))
+        sel = light[2] - gx * light[0] - gy * light[1] > 0
+        sel[:2] = sel[-2:] = False
+        sel[:, :2] = sel[:, -2:] = False
+        far = sel & (reach > 1.5 * cm.GLOSS_SPAN)
+        assert far.sum() > 100, angle  # gathered well past GLOSS_SPAN
+        assert (want != own_spec)[far].mean() > 0.3
+        err = np.abs(unroll(got) - want)[sel].max()
+        assert err < 1e-5 * own_spec.max(), (angle, err)
+
+
+def _row_sig(h):
+    """The rows of H H^T that shade keeps for _crest, for a whole canvas:
+    (rows, R) with every row at its own number (R + 1 >= the height)."""
+    from oilpaint import _render
+
+    H, W = h.shape
+    R = 1
+    while R + 1 < H:
+        R = 2 * R + 1
+    yy, xx = np.mgrid[0:H, 0:W]
+    h = h.astype(np.float64)
+
+    def at(dy, dx):
+        return h[np.clip(yy + dy, 0, H - 1), np.clip(xx + dx, 0, W - 1)]
+
+    hxy = 0.25 * (at(1, 1) - at(1, -1) - at(-1, 1) + at(-1, -1))
+    wxx = 0.25 * (at(0, 2) - 2.0 * h + at(0, -2))
+    wyy = 0.25 * (at(2, 0) - 2.0 * h + at(-2, 0))
+    raw = np.stack([wxx**2 + hxy**2, hxy * (wxx + wyy), wyy**2 + hxy**2], 1)
+    rows = np.zeros((R + 1, 3, W))
+    for y in range(H):
+        _render._blur_row(np.ascontiguousarray(raw[y]), rows[y])
+    return rows, R
+
+
+def _extra_reach(h, x, y):
+    """How much further than GLOSS_SPAN times its share the highlight of
+    pixel (x, y) is gathered (_reach), as a share of the full step's
+    extra, and that full extra (px)."""
+    from oilpaint import _render
+    from oilpaint import canvas as cm
+
+    rows, R = _row_sig(h)
+    H, W = h.shape
+    gate = tuple(float(v) for v in cm.CREST_GATE)
+    run_on = tuple(float(np.cos(np.radians(a)) ** 2) for a in cm.RUN_ON)
+    tx, ty, share = _render._crest(rows, R, H, W, x, y, gate)
+    reach = _render._reach(
+        rows, R, H, W, x, y, tx, ty, share,
+        cm.GLOSS_SPAN, cm.GLOSS_SPAN_MAX, gate, run_on,
+    )  # fmt: skip
+    full = (_render._step(tx, ty, cm.GLOSS_SPAN_MAX) - cm.GLOSS_SPAN) * share
+    return (reach - cm.GLOSS_SPAN * share) / full, full
+
+
+def test_the_long_reach_stops_where_the_crest_ends_bends_or_curls_round():
+    from oilpaint._filters import _smooth121
+
+    n = 160
+    yy, xx = np.mgrid[0:n, 0:n].astype(float)
+    cx, cy = 80.0, 80.137
+
+    def crest(d):  # a ridge of paint 1 px across along the distance d
+        return _smooth121((2.0 * np.exp(-0.5 * d**2)).astype(np.float32))
+
+    def ray(angle):  # distance to a half-line from the middle at angle
+        a = np.radians(angle)
+        tx, ty = np.cos(a), np.sin(a)
+        s = np.maximum((xx - cx) * tx + (yy - cy) * ty, 0.0)
+        return np.hypot(xx - cx - s * tx, yy - cy - s * ty)
+
+    a = np.radians(5.0)
+    back = (int(round(cx - 4 * np.cos(a))), int(round(cy - 4 * np.sin(a))))
+    # a straight crest at 5 degrees: gathered over the whole step
+    share, full = _extra_reach(crest(np.minimum(ray(5), ray(185))), *back)
+    assert full > 5 and share > 0.9, (full, share)
+    # one that ends 4 px on, or bends there by 30 degrees: no further
+    for d in (ray(185), np.minimum(ray(185), ray(35)), np.minimum(ray(185), ray(-25))):
+        share, full = _extra_reach(crest(d), *back)
+        assert full > 5 and share < 0.02, (full, share)
+    # the rim of a round dab (radius 10), where it runs at 5 degrees
+    rim = crest(np.hypot(xx - cx, yy - cy - 10.0) - 10.0)
+    x, y = int(round(cx + 10 * np.sin(a))), int(round(cy + 10 - 10 * np.cos(a)))
+    share, full = _extra_reach(rim, x, y)
+    assert full > 4 and share < 0.02, share
+
+
+def test_round_paint_and_the_weave_keep_their_glints_with_the_long_reach(
+    monkeypatch,
+):
+    # within a level of what gathering over GLOSS_SPAN alone gives
+    def same(c, light):
+        got = c.render(light=light)
+        with monkeypatch.context() as m:
+            _long_reach_off(m)
+            short = c.render(light=light)
+        return np.abs(got - short).max() * 255
+
+    lights = ((-0.6, -0.8, 1.1), RAKING, (0.0, -1.0, 0.6))
+    canvases = list(starmap(_dome, ((0.8, 2.0), (1.5, 4.0), (4.0, 6.0))))
+    canvases.append(_on_glass(3.0 * Canvas(120, 120, seed=3).surface_height()))
+    dabs = Canvas(300, 200, seed=4)
+    for i in range(12):
+        x, y = 30 + (i % 6) * 45, 50 + (i // 6) * 90
+        dabs.stroke(
+            [(x, y), (x + 1.5, y + 1.0)],
+            P.CADMIUM_RED,
+            amount=40,
+            pressure=0.8,
+            brush=brushes.ROUND_HOG.sized(14 + i),
+            seed=i,
+        )
+    rng = np.random.default_rng(9)
+    stipple = Canvas(200, 150, seed=5)
+    pts = np.column_stack([rng.uniform(20, 180, 40), rng.uniform(20, 130, 40)])
+    stipple.stipple(pts, P.SAP_GREEN, amount=30, width=20, pressure=0.4)
+    spatter = Canvas(200, 150, seed=6)
+    spatter.spatter((20, 75), P.TITANIUM_WHITE, amount=1.0, reach=100, size=4.0, seed=1)
+    for c in canvases + [dabs, stipple, spatter]:
+        for light in lights:
+            assert same(c, light) <= 1.0, (c.width, light)
+
+
+def test_no_seam_where_the_reach_grows_along_a_bending_crest(monkeypatch):
+    # a crest along a gentle arc (radius 400 px) whose slant runs from 0 to
+    # 16 degrees: its glint, summed across it, along it (P), drifts as the
+    # lamp sees it at another angle, but steps nowhere, and dashes no more
+    # than gathered over GLOSS_SPAN alone in any 3 degrees of it
+    from oilpaint._filters import _smooth121
+
+    n, radius = 200, 400.0
+    yy, xx = np.mgrid[0:n, 0:n].astype(float)
+    cx, cy = 20.0, 60.0 + radius
+    d = radius - np.hypot(xx - cx, yy - cy) + 0.137
+    c = _on_glass(_smooth121((np.exp(-0.5 * (d / 0.6) ** 2)).astype(np.float32)))
+    phis = np.arange(0.0, 0.29, 0.25 / radius)[:, None]
+    u = np.arange(-4.0, 4.001, 0.125)[None, :]
+    nx, ny = np.sin(phis), -np.cos(phis)
+    px, py = cx + radius * nx, cy + radius * ny
+
+    def along():
+        S = _highlight(c, _lamp(8.0))
+        return _bilinear(S, px + u * nx, py + u * ny).sum(1) * 0.125
+
+    got = along()
+    with monkeypatch.context() as m:
+        _long_reach_off(m)
+        short = along()
+    slant = np.degrees(phis[:, 0])
+
+    def steps(p):  # the largest step of P averaged over 12 px
+        q = np.convolve(p, np.ones(48) / 48, "valid")
+        return np.abs(np.diff(q)).max() / q.mean()
+
+    def dashes(p, a):  # P's ripple about its drift, over 3 degrees from a
+        p = p[(slant >= a) & (slant < a + 3)]
+        x = np.arange(len(p))
+        return (p - np.polyval(np.polyfit(x, p, 2), x)).std() / p.mean()
+
+    assert steps(got) <= steps(short)
+    for a in (1, 4, 7, 10, 13):
+        assert dashes(got, a) <= dashes(short, a) + 0.005, a
 
 
 # --------------------------------------------------------------------------

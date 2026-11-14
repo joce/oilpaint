@@ -981,9 +981,10 @@ paint behind them, sharp at their foot and softer further away; grooves,
 hollows and the foot of thick paint get less light from the room; and the oil
 mirrors the lamp in sharp highlights on the slopes that face it, brighter and
 sharper while the paint is wet. On a narrow crest, furrow or lip the
-highlight is gathered a little way along it, so a glint on a slanting crest
-is a line, not a string of beads at the steps of the pixels. Highlights roll
-off towards white rather than clip.
+highlight is gathered a little way along it, and at a shallow slant over a
+whole step of the pixel staircase where the crest runs on, so a glint on a
+slanting crest is a line, not a string of beads or dashes at the steps of the
+pixels. Highlights roll off towards white rather than clip.
 
 ## Limitations
 
