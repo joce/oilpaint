@@ -613,7 +613,22 @@ def _gather(lob, R, H, W, x, y, tx, ty, reach, taps):
     highlights (_tap) at ``taps`` points each side along (tx, ty) up to
     ``reach`` pixels away, tent-weighted, so that a glint on a crest that
     runs slantwise across the pixels is a line rather than beads at each
-    step. The centre point is the pixel itself."""
+    step. The centre point is the pixel itself.
+
+    Not at shallow slants: a thin crest's own highlight depends on where it
+    falls within the pixels, which repeats along it every step of the pixel
+    staircase, 1 / sin of its slant from the rows or columns, longer than
+    GLOSS_SPAN below 30 degrees. A thin, smooth, straight crest under about
+    20 degrees therefore glints in dashes: under a lamp facing across it 48
+    degrees up, the glint summed across a ridge of paint varies along it by
+    0.2 to 1.1 (standard deviation over mean) for sigma 0.6 to 0.4 px at 2
+    to 11 degrees, and by under 0.1 from sigma 1. _crest also reads a thin
+    crest's direction a few degrees nearer the diagonal than it runs (sigma
+    0.6: by 2, 3 and 6 degrees at 3, 5 and 11, and 10 at 20), small over
+    GLOSS_SPAN but not over a step. A version that followed the crest over
+    a whole step removed the dashes, but made rendering 15 to 65% slower
+    (bench painting, impasto picture) for at most a few hundred changed
+    pixels in a real picture, and was not kept."""
     total = 0.0
     weights = 0.0
     for k in range(-taps, taps + 1):
