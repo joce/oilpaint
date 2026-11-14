@@ -615,24 +615,20 @@ def _gather(lob, R, H, W, x, y, tx, ty, reach, taps):
     runs slantwise across the pixels is a line rather than beads at each
     step. The centre point is the pixel itself.
 
-    Not at shallow slants. A thin crest's own highlight depends on where it
-    lies within the pixels, which changes along it with a period of one
-    step of the pixel staircase, 1 / sin of its slant from the rows or
-    columns: longer than the reach (GLOSS_SPAN each way) below about 20
-    degrees. So a thin, smooth, straight crest from about 2 to 20 degrees
-    still glints in dashes a step apart: for a ridge of paint of sigma
-    0.6 px, lit through Canvas.surface_height under a lamp facing across
-    it, the glint summed across the crest varies along it by 0.29, 0.24,
-    0.19 and 0.09 (standard deviation over mean) at 2, 5, 11 and 20
-    degrees; under a raking lamp by 1.14, 0.78, 0.39 and 0.12. And
-    _crest reads the direction of a crest thinner than about a pixel
-    nearer the diagonal than it runs (set directly, sigma 0.6: by 1.7, 2.9
-    and 6.3 degrees at 3, 5 and 11; sigma 2: by 1.1 at 11), harmless over
-    GLOSS_SPAN but not over a longer reach. Following the crest over a
-    whole step removes the dashes on smooth crests, but was measured to
-    make rendering 15 to 65% slower while changing at most a few hundred
-    pixels of a real picture by more than 8 levels: its crests are rough
-    enough that the dashes rarely show."""
+    Not at shallow slants: a thin crest's own highlight depends on where it
+    falls within the pixels, which repeats along it every step of the pixel
+    staircase, 1 / sin of its slant from the rows or columns, longer than
+    GLOSS_SPAN below 30 degrees. A thin, smooth, straight crest under about
+    20 degrees therefore glints in dashes: under a lamp facing across it 48
+    degrees up, the glint summed across a ridge of paint varies along it by
+    0.2 to 1.1 (standard deviation over mean) for sigma 0.6 to 0.4 px at 2
+    to 11 degrees, and by under 0.1 from sigma 1. _crest also reads a thin
+    crest's direction a few degrees nearer the diagonal than it runs (sigma
+    0.6: by 2, 3 and 6 degrees at 3, 5 and 11, and 10 at 20), small over
+    GLOSS_SPAN but not over a step. A version that followed the crest over
+    a whole step removed the dashes, but made rendering 15 to 65% slower
+    (bench painting, impasto picture) for at most a few hundred changed
+    pixels in a real picture, and was not kept."""
     total = 0.0
     weights = 0.0
     for k in range(-taps, taps + 1):

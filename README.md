@@ -981,17 +981,18 @@ paint behind them, sharp at their foot and softer further away; grooves,
 hollows and the foot of thick paint get less light from the room; and the oil
 mirrors the lamp in sharp highlights on the slopes that face it, brighter and
 sharper while the paint is wet. On a narrow crest, furrow or lip the
-highlight is gathered a little way along it, so a glint on a crest slanting
-more than about 20 degrees from the rows or columns is a line, not a string
-of beads at the steps of the pixels. Highlights roll off towards white
-rather than clip.
+highlight is gathered a little way along it, so a glint along a crest is a
+line rather than a string of beads at the steps of the pixels, unless the
+crest is thin and runs at a shallow slant (see Limitations). Highlights roll
+off towards white rather than clip.
 
 ## Limitations
 
-* A thin, smooth, straight crest running at a shallow slant to the rows or
-  columns of pixels (from about 2 to 20 degrees) glints in dashes, one per
-  step of the pixel staircase, most of all under a raking lamp. The crests
-  brushes and knives leave are rough enough that this rarely shows.
+* A thin, smooth, straight crest at a shallow slant to the rows or columns
+  of pixels (under about 20 degrees; below 2 as slow swells) glints in
+  dashes, one per step of the pixel staircase, worst on the thinnest
+  crests. On brush and knife marks it is mostly lost in their roughness,
+  but the lip of a heavy stroke lit from across can show it.
 * No bristle-level simulation or drying over time (`dry()` is
   all-or-nothing). Absorbency acts immediately rather than as the paint
   dries, and wet paint settles right after each stroke rather than over
