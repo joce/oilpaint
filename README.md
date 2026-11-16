@@ -1035,10 +1035,11 @@ uv sync --group dev   # the tools, and the package installed from the checkout
 uv run tox            # every Python version (formatting, lint, types and tests),
                       # the spelling, and the built wheel installed on its own
 uv run tox -e check   # formatting, lint, types and tests, once, on the current Python
-uv run pytest         # just the tests
+uv run pytest         # just the tests (-n auto: on every core)
 make coverage         # test coverage, with an HTML report in htmlcov/
 make spell            # spelling (cspell; needs Node.js, installs the npm packages if needed)
-make pre-push         # tox, the coverage, and the spelling of the files you changed
+make pre-push         # formatting, lint and types, and the tests under coverage,
+                      # once, and the spelling of the files you changed
 ```
 
 Formatting is black and ruff format (88 columns), lint is ruff (with a cap
