@@ -1,5 +1,15 @@
 # oilpaint
 
+> **oilpaint has moved.** Since 19 November 2026 it is `murex.huile`, a part of
+> [murex](https://github.com/joce/murex), which holds every medium in one
+> package so that they can one day meet on one canvas or sheet. Its code,
+> with all of its history, is there under `murex/huile/`, and its open issue
+> is in murex's tracker. `from oilpaint import Canvas` is now
+> `from murex.huile import Canvas`. `pip install oilpaint` still installs
+> release 0.1.0, which is the last under this name: what came after it ships
+> in murex. This repository is no longer updated: what follows is oilpaint as
+> it was on that day.
+
 [![CI](https://github.com/joce/oilpaint/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/joce/oilpaint/actions/workflows/ci.yml)
 [![Coverage](https://codecov.io/gh/joce/oilpaint/graph/badge.svg)](https://codecov.io/gh/joce/oilpaint)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
